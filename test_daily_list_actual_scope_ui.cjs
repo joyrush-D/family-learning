@@ -49,6 +49,7 @@ const BORROWED=['Unit','第3至10','第3–10','10个','今晚','范围'],NOTE='
   // The main card without any original/detail block: the 503 original does say 跟读, that detail is not this item's requirement.
   const main=id=>row(id).evaluate(r=>{const c=r.cloneNode(true);c.querySelectorAll('details,blockquote,[data-original],.original,.origin').forEach(n=>n.remove());return c.textContent});
   await p.goto(server.url);await ready();
+  {const t=await p.locator('#content').innerText();assert(!/明早交|以后交/.test(t),width+' no invented morning or handback words');assert(/以后安排/.test(t),width+' future items are 以后安排')}
   for(const [anchor,keep,subject,day] of ITEMS){
    const id=task(anchor).id,text=await row(id).innerText();assert(await row(id).isVisible(),anchor+' is listed');
    for(const word of keep)assert(text.includes(word),`${width} ${anchor} keeps ${word}: ${text}`);
@@ -59,10 +60,17 @@ const BORROWED=['Unit','第3至10','第3–10','10个','今晚','范围'],NOTE='
   const card=await main(dictation.id);for(const word of BORROWED)assert(!card.includes(word),`${width} the dictation card borrows ${word}: ${card}`);
   assert.equal(await p.locator('[data-query-target^="task:"]').filter({hasText:'海边小记'}).count(),0,'the reference reading is no task');
   assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),width+' no horizontal overflow');await proof(p,`actual-scope-list-${tag}-${width}`);
-  const entry=()=>row(read.id).locator(`[data-task="${read.id}"]`).first();
+  // The date-role wording must remain truthful in the selected detail too, not just the list summary.
+  await p.locator(`[data-grove-open="${task('练习册第12页').id}"]`).first().click();
+  await until(async()=>await p.locator('#groveDetail').isVisible(),'tomorrow own detail');
+  assert(!/明早交|以后交/.test(await p.locator('#groveDetail').innerText()),width+' detail does not invent a morning or handback');
+  if(width===360){await p.locator('[data-grove-back]').first().click();await until(async()=>await p.locator('.grove[data-view=list]').isVisible(),'back from tomorrow detail')}
+  // The list+detail home: a row opens its own detail (phone: full screen with Back); the feedback entry lives in that detail.
+  const entry=()=>p.locator(`#groveDetail [data-task="${read.id}"]`).first();
+  const open=async()=>{if(!(await entry().isVisible()))await p.locator(`[data-grove-open="${read.id}"]`).first().click();await until(async()=>await entry().isVisible(),'its own detail')};
   if(width===360){
    // From the read-aloud's own entry: 1 refused before any write (503), 2 saved but the reply lost, 3 the same request replays.
-   await entry().click();await until(async()=>(await p.locator('#taskTitle').innerText()).includes(read.title),'its own dialog');
+   await open();await entry().click();await until(async()=>(await p.locator('#taskTitle').innerText()).includes(read.title),'its own dialog');
    await p.locator('#taskForm [name=note]').fill(NOTE);const keys=[];let attempts=0;
    await p.route('**/api/task/feedback',async route=>{attempts++;keys.push(route.request().postDataJSON().request_key);
     if(attempts===1)return route.fulfill({status:503,json:{error:'虚构服务暂不可写'}});
@@ -80,12 +88,14 @@ const BORROWED=['Unit','第3至10','第3–10','10个','今晚','范围'],NOTE='
   // Refresh, then open, close and reopen: the same original read-aloud task with its one saved feedback.
   await p.reload();await ready();
   for(let n=0;n<2;n++){
-   assert.equal((await entry().innerText()).trim(),'查看/补充反馈');await entry().click();
+   // The selected detail itself shows the saved feedback; its entry then opens the same original task with that history.
+   await open();await until(async()=>(await p.locator('#groveDetail').innerText()).includes(NOTE),'saved feedback shown in its own detail');await entry().click();
    await until(async()=>(await p.locator('#taskFeedbackHistory').innerText()).includes(NOTE),'saved feedback reopens');
    assert.equal(await p.locator('#taskForm').evaluate(f=>f.elements.id.value),read.id,'the same original task');
    await p.keyboard.press('Escape');await until(async()=>!(await p.locator('#taskDialog').evaluate(d=>d.open)),'dialog closed');
   }
   assert.equal((await records(read.id)).length,1,'reopening adds nothing');await proof(p,`actual-scope-feedback-${tag}-${width}`);
+  if(await p.locator('[data-grove-back]').first().isVisible()){await p.locator('[data-grove-back]').first().click();await until(async()=>await p.locator('.grove[data-view=list]').count()>0,'back to the list')}
   await p.locator(`[data-child-filter="${b.id}"]`).first().click();
   await until(async()=>{for(const id of ids)if(await p.locator(`[data-query-target="task:${id}"]`).count())return false;return true},'the other child sees none');
   assert(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),width+' other child: no horizontal overflow');

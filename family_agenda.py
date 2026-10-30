@@ -1068,3 +1068,159 @@ def snapshot(app,start,end):
         day=(first+dt.timedelta(days=offset)).isoformat()
         agenda.extend(dict(item,day=day) for item in items if visible_on(item,day))
     return dict(agenda=agenda,study=study,inbox=items+plans)
+
+
+# One child's one day, read once on the server for every client (the web home and the Mac workbench): the same selection,
+# order and subject filing the home list used, now computed here instead of in each client. Read only: it never collects,
+# calls a model or writes, and every date, subject and role it shows is the enriched metadata above, never re-read from words.
+SUBJECT_GENERAL, SUBJECT_UNKNOWN = '综合事务', '科目待定'
+DUE_LABELS = {'event': '活动日期', 'handback': '老师要求交回', 'inspection': '老师检查', 'arranged': '安排日'}
+CORRECTION_KINDS = ('订正', '复测', '独立复测')
+# How a row relates to the viewed day, from its saved dates only: 今天 (done/planned/due that day), 已过期限, 以后 (a later
+# date), 之前安排 (an earlier plan still open) and 日期未写明 (no exact date; never guessed, never counted as today).
+DAY_ROLES = {'today': '今天', 'overdue': '已过期限', 'later': '以后', 'earlier': '之前安排', 'unknown': '日期未写明'}
+
+
+def exact_day(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value) or value.startswith('0000'): return ''
+    try: return value if dt.date.fromisoformat(value).isoformat() == value else ''
+    except ValueError: return ''
+
+
+def subject_key(agenda):
+    a = agenda or {}
+    if a.get('subject_state') == 'known' and a.get('subjects'): return ' · '.join(a['subjects'])
+    return SUBJECT_GENERAL if a.get('subject_state') == 'general' else SUBJECT_UNKNOWN
+
+
+def subject_filed(rows, key_of):
+    """Subject is the first grouping of every tracking list: insertion order, 综合事务 then 科目待定 last, rows never merged."""
+    groups = {}
+    for row in rows: groups.setdefault(str(key_of(row) or '').strip() or SUBJECT_UNKNOWN, []).append(row)
+    rank = lambda key: 2 if key == SUBJECT_UNKNOWN else 1 if key == SUBJECT_GENERAL else 0
+    return sorted(groups.items(), key=lambda pair: rank(pair[0]))
+
+
+def _day_rank(item, day):
+    a = item.get('agenda') or {}
+    due, planned, published = exact_day(a.get('due_on')), exact_day(a.get('scheduled_on')), exact_day(a.get('published_on'))
+    if day in (due, planned) or exact_day(a.get('complete_on')) == day: return 0, day
+    if due and due < day: return 1, due
+    if due: return 2, due
+    if planned and planned < day: return 3, planned
+    return (4, a.get('published_at') or published) if published else (5, '')
+
+
+def _day_order(a, b, day):
+    (ar, ad), (br, bd) = _day_rank(a, day), _day_rank(b, day)
+    if ar != br: return ar - br
+    return (ad > bd) - (ad < bd) if ar == 2 else (bd > ad) - (bd < ad)
+
+
+def day_facts(agenda, day, today, school):
+    """The dates as saved, each with its own role; an unknown date says so and is never guessed."""
+    a = agenda or {}; facts = []; published = a.get('published_at') or ''
+    if published or a.get('published_on') or school:
+        facts.append(dict(role='published', label='发布', value=published[:16].replace('T', ' ') if published else a.get('published_on') or '待核对',
+                          known=bool(published or a.get('published_on'))))
+    complete = exact_day(a.get('complete_on'))
+    if complete and (complete != a.get('due_on') or a.get('due_kind') == 'handback'):
+        facts.append(dict(role='complete', label='完成', value=complete, known=True, today=complete == today))
+    due = exact_day(a.get('due_on'))
+    if due:
+        kind = a.get('due_kind') or 'deadline'
+        state = ('passed' if kind in ('event', 'inspection', 'arranged') else 'overdue') if due < day else \
+            'next_morning' if kind in ('deadline', 'handback') and due == (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() else ''
+        facts.append(dict(role='due', kind=kind, label=DUE_LABELS.get(kind, '截止'), value=due, known=True, state=state))
+    else:
+        facts.append(dict(role='due', label='截止' if school else '交回', value='日期未写明，不猜', known=False))
+    if exact_day(a.get('scheduled_on')): facts.append(dict(role='scheduled', label='计划', value=a['scheduled_on'], known=True))
+    return facts
+
+
+def day_role(agenda, day):
+    a = agenda or {}
+    dates = [exact_day(a.get(k)) for k in ('due_on', 'scheduled_on', 'complete_on')]
+    if day in dates: return 'today'
+    due = exact_day(a.get('due_on'))
+    if due and due < day: return 'overdue'
+    if any(d and d > day for d in dates): return 'later'
+    return 'earlier' if any(dates) else 'unknown'
+
+
+def publications(agenda):
+    """Who published it, as saved on the item (source name, sender, message ref); nothing is re-read or shortened by guess."""
+    return [dict(ref=str(p.get('ref') or ''), source_name=str(p.get('source_name') or ''), sender=str(p.get('sender') or ''))
+            for p in (agenda or {}).get('publications') or [] if isinstance(p, dict)]
+
+
+def _record_row(r):
+    note = str(r.get('note') or '')
+    return dict(id=r['id'], day=r.get('day', ''), created=r.get('created', ''), title=r.get('title', ''), subject=r.get('subject', ''),
+                note=note[:600], note_truncated=len(note) > 600, attachments=list(r.get('attachments') or []),
+                followup_kind=r.get('followup_kind', ''), related_record_id=r.get('related_record_id'))
+
+
+def day_view(inbox, tasks, records, child, day, today, wrong_source):
+    """The list and each row's own facts for one child and day; closed rows that day stay findable in their own list."""
+    by_task = {t['id']: t for t in tasks}
+    mine = [x for x in inbox if child['id'] in (x.get('child_ids') or [])]
+
+    def review_due(x):
+        task = by_task.get(x.get('task_id')) if x.get('kind') == 'task' else None
+        focus = (task or {}).get('focus') or {}
+        return bool(task) and not x.get('closed') and focus.get('mode') != 'next' and bool(exact_day(focus.get('review_on'))) and focus['review_on'] <= day
+
+    def shown(x):
+        a = x.get('agenda') or {}
+        if x.get('closed') or x.get('kind') == 'event' or a.get('box') == 'wish': return False
+        if a.get('published_on') and a['published_on'] > day: return False
+        return not a.get('scheduled_on') or a['scheduled_on'] <= day or bool(a.get('due_on')) or review_due(x)
+
+    open_rows = sorted([x for x in mine if shown(x)], key=functools.cmp_to_key(lambda a, b: _day_order(a, b, day)))
+    closed_rows = [x for x in mine if x.get('closed') and x.get('kind') in ('task', 'study') and (x.get('agenda') or {}).get('box') != 'wish' and visible_on(x, day)]
+    own = [r for r in records if r.get('child') == child['name']]
+    feedback = {}
+    for r in own:
+        source = str(r.get('source') or '')
+        task_id = source[3:] if source.startswith('事项:') else r.get('linked_task_id') if source != wrong_source else ''
+        if task_id: feedback.setdefault(task_id, []).append(r)
+    wrong = [r for r in own if r.get('source') == wrong_source]
+    followups = {}
+    for r in own:
+        if r.get('followup_kind') in CORRECTION_KINDS and r.get('related_record_id') is not None: followups.setdefault(r['related_record_id'], []).append(r)
+
+    def wrong_row(r):
+        later = sorted(followups.get(r['id'], []), key=lambda f: (f.get('created') or '', f['id']))
+        row = _record_row(r); row['followups'] = [_record_row(f) for f in later]
+        row['state'] = {'订正': '已订正', '复测': '已复测', '独立复测': '已复测'}[later[-1]['followup_kind']] if later else '待订正'
+        return row
+
+    def row(x):
+        task = by_task.get(x.get('task_id')) if x.get('task_id') else None
+        a = x.get('agenda') or {}; school = x.get('kind') == 'school' or bool((task or {}).get('school_origin'))
+        oral = bool(task) and task.get('source') in family_study.CAPTURE_SOURCES
+        lines = (task.get('action_lines') or [l.strip() for l in str(task.get('action') or '').splitlines() if l.strip()]) if task else \
+            [l.strip() for l in str(x.get('body') or '').splitlines() if l.strip()][:12] if x.get('kind') == 'school' else []
+        saved = sorted(feedback.get(x.get('task_id') or '', []), key=lambda r: (r.get('created') or '', r['id']))
+        notes = [wrong_row(r) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
+        pubs = publications(a)
+        return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=x.get('title', ''), subject=subject_key(a),
+                    category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
+                    status=x.get('status', ''), closed=bool(x.get('closed')), pending_review=x.get('kind') == 'school',
+                    origin='school' if school else 'oral' if oral else 'family',
+                    origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
+                    lines=lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
+                    today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on')),
+                    when=day_role(a, day), publications=pubs, published_at=str(a.get('published_at') or ''),
+                    publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),
+                    # The task's own saved progress exactly as /api/state reads it (task_progress): feedback, linked wrong
+                    # records, current-basis clues, independent new attempts and history; clues are not mastery.
+                    progress=(task or {}).get('progress') or None,
+                    records=[_record_row(r) for r in saved if r.get('source') != wrong_source], wrong=notes)
+
+    rows = [row(x) for x in open_rows]
+    return dict(groups=[dict(subject=key, items=list(items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
+                closed=[dict(subject=key, items=list(items)) for key, items in subject_filed([row(x) for x in closed_rows], lambda r: r['subject'])],
+                wrong=[dict(subject=key, items=list(items)) for key, items in subject_filed([wrong_row(r) for r in wrong], lambda r: SUBJECT_GENERAL if str(r.get('subject') or '').strip() == '综合' else str(r.get('subject') or '').strip())],
+                counts=dict(open=len(rows), closed=len(closed_rows), **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))

@@ -94,7 +94,7 @@ TASK_CLOSED = ('已完成', *TASK_DISMISSED, '已归档')
 TASK_STATUSES = ('待跟进', '进行中', '已完成', *TASK_DISMISSED)
 BUNDLE = ('app.js', 'reading.js', 'calendar.js', 'child-access.js', 'learning.js', 'study.js', 'homework-input.js', 'settings.js', 'guided.js', 'teachers.js', 'goals.js', 'wrong-review.js', 'topic-diagnosis.js')
 STATIC = {'/': 'index.html', **{'/'+name: name for name in (
-    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'wrong-review.css', 'growth-world.js',
+    *BUNDLE, 'startup.js', 'ui.css', 'learning.css', 'study.css', 'homework-input.css', 'teachers.css', 'wrong-review.css', 'workbench.css', 'growth-world.js',
     'vendor/three.module.min.js', 'vendor/three.core.min.js', 'vendor/wrong-notebook/image-crop.js')}}
 
 
@@ -411,9 +411,71 @@ def snapshot():
     except (OSError,sqlite3.Error,ValueError,TypeError):
         agent=dict(enabled=False,state='error',last_error='成长助手状态暂时无法读取，已有记录仍可使用。',items=[],sources=[])
     printing=printer_config();printing['jobs']=print_store().list_jobs()
-    return dict(asr=dict(configured=bool(os.environ.get('FAMILY_ASR_URL'))),llm=dict(configured=settings_store().model_state()['configured']),children=children, tasks=ts, records=records, sync=sync, sync_error=sync_error, attachments=attachments, uploads=uploads, care=care,
+    # The home list of each child reads the same server projection as the Mac workbench; a failure leaves the page's own reading.
+    today_view={}
+    if isinstance(today_calendar.get('inbox'),list):
+        try: today_view={p['id']:family_agenda.day_view(today_calendar['inbox'],ts,records,p,today,today,family_wrong_review.SOURCE) for p in children}
+        except (KeyError,TypeError,ValueError,AttributeError): today_view={}
+    return dict(today_view=today_view,asr=dict(configured=bool(os.environ.get('FAMILY_ASR_URL'))),llm=dict(configured=settings_store().model_state()['configured']),children=children, tasks=ts, records=records, sync=sync, sync_error=sync_error, attachments=attachments, uploads=uploads, care=care,
                 growth=read('学习与成长.md'), sources=read('消息来源.md'), token=TOKEN, record_categories=CATEGORIES,
                 rewards=family_growth.summarize(children,records,ts,today),reading=family_reading.Store(connect,lambda:children,lambda:ts).snapshot(),printing=printing,today=today,today_calendar=today_calendar,agent=agent)
+
+def day_view(child_id,day):
+    """GET /api/day: one child's one day for any client, read only (no collection, model call or write). Any exact date is
+    navigable, as the calendar's history is: each request still reads just that one day."""
+    today=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
+    day=day or today
+    if not family_agenda.exact_day(day):
+        raise TaskError('请选择一个有效日期',400,'day_invalid')
+    with connect() as c:
+        c.execute('BEGIN')
+        children=profiles(c);ts=tasks(c)
+        records=[dict(r) for r in c.execute('SELECT * FROM records ORDER BY day DESC,id DESC')]
+    for r in records: r['attachments']=json.loads(r['attachments'])
+    child=next((p for p in children if p['id']==child_id),None) if child_id else (children[0] if children else None)
+    if child_id and child is None: raise TaskError('这个孩子的档案不存在，请刷新后重新选择',404,'child_missing')
+    listed=[dict(id=p['id'],name=p['name']) for p in children]
+    if child is None: return dict(today=today,day=day,child_id='',children=listed,token=TOKEN,groups=[],closed=[],wrong=[],counts=dict(open=0,closed=0))
+    snap=calendar_snapshot(day,day)
+    view=family_agenda.day_view(snap['inbox'],ts,records,child,day,today,family_wrong_review.SOURCE)
+    return dict(today=today,day=day,child_id=child['id'],child_name=child['name'],children=listed,token=TOKEN,source_error=snap.get('source_error',''),**view)
+
+MATERIAL_ROLES={'school':'学校消息原件','reported_homework':'孩子报来的作业','same_task':'这项作业里上传的','saved_answer':'已保存的作答','record':'家庭记录附件'}
+MATERIAL_SAVED=dict(state='saved',label='原件已保存',summary='',unclear=[],explanation='')
+
+def homework_material_state(view,ident):
+    """One file's existing reading state from its message's saved interpretation (family_media.draft_view); a file without one
+    is a saved original that was not read automatically. The summary is the saved note of that same file, never a new reading."""
+    if not isinstance(view,dict): return dict(MATERIAL_SAVED)
+    state,explanation=view.get('state'),str(view.get('explanation') or '')
+    if state=='ready':
+        draft=view.get('draft') if isinstance(view.get('draft'),dict) else {}
+        if 'originals' in draft:
+            entry=next((o for o in draft.get('originals') or [] if isinstance(o,dict) and o.get('upload_id')==ident),None)
+        else: entry=draft if ident in (view.get('upload_ids') or []) else None
+        if entry is None: return dict(MATERIAL_SAVED)
+        unclear=[str(u).strip() for u in entry.get('uncertainties') or [] if str(u).strip()][:3]
+        summary=str(entry.get('note') or entry.get('title') or '').strip()
+        return dict(state='partial' if unclear else 'ready',label='已整理，有看不清的地方' if unclear else '已整理',
+                    summary=summary[:240],summary_truncated=len(summary)>240,unclear=unclear,explanation=explanation,updated=str(view.get('updated') or ''))
+    if state=='unavailable': return dict(MATERIAL_SAVED,state='unread',label='尚未读清',explanation=explanation)
+    if state=='error': return dict(MATERIAL_SAVED,state='error',label='整理没有成功',explanation=explanation)
+    if state=='pending': return dict(MATERIAL_SAVED,state='pending',label='等待后台整理',explanation=explanation)
+    return dict(MATERIAL_SAVED)
+
+def homework_material_states(c,context):
+    """Read only: no model, job or collector is started; an unreadable interpretation leaves the file as a saved original."""
+    states={}
+    if not context.get('school'): return states
+    try:
+        import family_media
+        store=agent_store(read_only=True)
+    except Exception: return states
+    for source,message,ids in context['school']:
+        try: view=family_media.draft_view(store,c,source,message)
+        except Exception: view=None
+        for ident in ids: states[ident]=homework_material_state(view,ident)
+    return states
 
 def connect_read_only():
     """The database file as it is, opened read-only: no table is created or migrated; an absent file or table is the caller's error, never a new file."""
@@ -2299,6 +2361,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/child-access': return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),'state',{}))
             if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=calendar_store().saved_timetables()))
             if path=='/api/state': return self.reply(200,snapshot())
+            if path=='/api/day':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)-{'child_id','day'} or any(len(v)!=1 or len(v[0])>100 for v in query.values()):
+                    return self.reply(400,{'error':'请只选择一个孩子和一天','code':'day_query_invalid'})
+                try: return self.reply(200,day_view(query.get('child_id',[''])[0],query.get('day',[''])[0]))
+                except TaskError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
             if path=='/api/agent/fragment/plan': return self.reply(200,agent_store().collector_plan(fragment=True))
             if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
@@ -2361,9 +2429,11 @@ class Handler(BaseHTTPRequestHandler):
                     with connect_read_only() as c:
                         c.execute('BEGIN')
                         context=homework_material_context(c,query['task_id'][0]);basis=homework_print_basis(c,context['task'])
+                        states=homework_material_states(c,context)
                 except sqlite3.OperationalError:
                     return self.reply(503,dict(error='作业资料暂时无法读取；本次读取未更改任何资料',code='storage_unavailable'))
-                files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'])
+                files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'],
+                            role_label=MATERIAL_ROLES.get(value['origin'],'原件（用途未注明）'),**states.get(ident,MATERIAL_SAVED))
                        for ident,value in context['allowed'].items() if value['origin']!='review_result']
                 return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},files=files,school_error=context['school_error'],print_basis=basis,task_title=context['task']['title']))
             if path=='/api/print/homework/sources':

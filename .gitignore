@@ -66,6 +66,9 @@
 !/test_calendar.py
 !/test_calendar_ics.py
 !/calendar.js
+!/workbench.css
+!/test_native_workspace.py
+!/test_native_workspace.cjs
 !/test_calendar_ui.js
 
 !/startup.js
@@ -364,6 +367,8 @@
 !/packaging/macos/Sources/DesktopPolicy.swift
 !/packaging/macos/Sources/SelfTest.swift
 !/packaging/macos/Sources/main.swift
+!/packaging/macos/Sources/WorkspaceAPI.swift
+!/packaging/macos/Sources/Workspace.swift
 !/test_mac_desktop.cjs
 
 # Fictional baoyu-design UI redesign artifacts only.

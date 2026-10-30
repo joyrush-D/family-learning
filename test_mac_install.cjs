@@ -99,7 +99,8 @@ const ITEM = "const d=document.querySelector('#homeworkInputDialog');const item=
 const CHILD = '虚构小林', GOAL = '朗读第三课两遍，家长听后签字', FILE_NAME = '虚构-口头作业照片.png';
 const T = w => '虚构安装后作业 ' + w, T_NEW = '虚构更新前新增作业';
 const STATE = title => `const st=await (await fetch('/api/state',{cache:'no-store'})).json();const task=st.tasks.find(t=>t.title===${q(title)});if(!task)return {ok:false,reason:'homework not in api/state',titles:st.tasks.map(t=>t.title)};`;
-const openTask = title => `${STATE(title)}const b=[...document.querySelectorAll('[data-task="'+task.id+'"]')].find(x=>x.offsetParent);if(!b)return {ok:false,reason:'no visible [data-task]',id:task.id};b.click();return {ok:true,id:task.id};`;
+// Select the actual list row first; the feedback entry now belongs to its own detail (phone: list -> detail).
+const openTask = title => `${STATE(title)}const back=document.querySelector('[data-grove-back]');if(back?.offsetParent){back.click();await new Promise(r=>setTimeout(r,100));}const row=[...document.querySelectorAll('[data-grove-open="'+task.id+'"]')].find(x=>x.offsetParent);if(row){row.click();await new Promise(r=>setTimeout(r,100));}const b=[...document.querySelectorAll('#groveDetail [data-task="'+task.id+'"], [data-task="'+task.id+'"]')].find(x=>x.offsetParent);if(!b)return {ok:false,reason:'no visible own detail feedback entry',id:task.id};b.click();return {ok:true,id:task.id};`;
 const childSteps = () => [
   {name: 'child_setup', width: 1440, timeout: 25,
    js: `${SET}let f=document.querySelector('form[data-settings-form="child"]');if(!f||!f.offsetParent){const b=[...document.querySelectorAll('[data-page="settings"]')].find(x=>x.offsetParent);if(b)b.click();await new Promise(r=>setTimeout(r,800));f=document.querySelector('form[data-settings-form="child"]');}

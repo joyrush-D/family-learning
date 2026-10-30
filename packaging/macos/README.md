@@ -1,6 +1,6 @@
 # 一起成长.app（内部候选）
 
-AppKit + WKWebView 薄壳：业务界面和数据仍由现有 `app.py` 与网页负责，网页不获得任何原生桥接。完整包另带 Python 运行环境与当前提交的程序，新家庭可以在 App 里点击安装后台，不需要终端、Homebrew 或开发用 Python。用户最新要求的SwiftUI原生主工作台另行实现；本包的WKWebView界面只用于打包、数据保护与后台生命周期内部验收，不作为最终Mac界面交付。未做Developer ID签名和公证（只有本机ad-hoc签名）；干净Mac首次打开与正式分发仍待验证。
+主工作台使用SwiftUI：原生工具栏、单孩子切换、按科目列表与事项详情，以及口头补录、文字/照片反馈、错题和订正短表单。AppKit负责应用生命周期，WKWebView仅用于同源登录、原件与打印等次级流程，不是主清单容器；网页没有通用原生桥接。复用现有`app.py`、唯一主库及原保存守卫。完整包带固定Python运行环境与当前提交的程序，新家庭可在App内安装后台，不需要终端、Homebrew或开发用Python；已有家庭只连接原服务，不另开写入者。内测仅本机ad-hoc签名；Developer ID、公证、干净Mac首次打开与正式分发仍待验证。
 
 - 构建：`packaging/macos/build.sh [输出目录]`，只用系统 `swiftc`、AppKit/WebKit。同时给 `FAMILY_MAC_MATERIALS`（官方 CPython 压缩包、`runtime-notices/`、`MATERIAL-MANIFEST.json`）和 `FAMILY_MAC_WHEELS`（`runtime.lock.json` 所列 wheel）时打完整包，否则只构建连接入口。`FAMILY_MAC_BUILD_NUMBER` 是构建号（默认 1，更新只接受更大的构建号）。构建不联网：CPython 3.11.18 arm64（python-build-standalone 20261026）与 pydantic 2.14.1、pydantic_core 2.50.1、annotated-types 0.8.0、typing_extensions 4.16.0、typing-inspection 0.4.4 的官方 PyPI wheel 都按 `runtime.lock.json` 的来源与 sha256 核对，hash 不符即停止；上游许可证随包放在 `Contents/Resources/licenses/`。程序只取 git HEAD 已提交的公开文件（不含测试与构建源码），逐文件 hash 写进 `Contents/Resources/BUILD.json`。默认输出 `packaging/macos/build/`（Git 忽略）。
 - 首次使用：先按原表单连接已有后台（默认 `http://127.0.0.1:8765`，确认是一起成长网页才保存并打开原清单）。只有没有桌面连接设置时才做只读检查：这台 Mac 没有本入口的安装或资料目录、没有本服务名或任何运行家庭程序/指向家庭资料的登录服务、端口空闲，才显示“在这台 Mac 上安装后台”。已有设置、已知服务（含离线）或端口被占用时只说明原因和原纠正入口，不复制主库、不改端口、不另起服务。
@@ -10,4 +10,5 @@ AppKit + WKWebView 薄壳：业务界面和数据仍由现有 `app.py` 与网页
 - 外链白名单、证书错误不忽略、同源导航、下载/选文件/麦克风、草稿与关窗/退出确认、单实例与有界重试保持原入口规则；家长屏幕不显示路径、命令或进程号，技术细节只写进桌面入口自己的 Support 目录。
 - 来源：生命周期设计参考了 margrop/wrong-notebook 03153ef7 的 `packaging/desktop/main.js`（MIT，wttwins 2025、margrop 2026），没有复制代码，也不使用其 Electron/Node 服务管理。
 - 测试模式：`--smoke-test` 只用于虚构 demo，必须另给 `FAMILY_DESKTOP_SUPPORT_DIR`（不能是默认目录）和受信虚构 `FAMILY_DESKTOP_TEST_ORIGIN`，否则以退出码 2 拒绝。安装/更新/卸载在测试模式下还必须给 `FAMILY_DESKTOP_TEST_PROFILE`（本用户 Library 以外的虚构目录）：服务名改为 `test.yiqichengzhang.*`、服务设置放在该目录、端口取测试 origin，未给就不提供安装。测试时 WebKit 数据不落盘、不保存窗口位置；选文件改回测试声明的虚构文件，麦克风一律拒绝，网页确认框选“取消”，后台确认自动选执行。
-- 验收：`node test_mac_desktop.cjs`（连接入口，虚构 demo）；`FAMILY_MAC_APP_V1=… FAMILY_MAC_APP_V2=… node test_mac_install.cjs`（构建号 1、2 的完整包：首次安装→同一作业保存重开→关闭/强杀 GUI 后台不变→第二客户端同库→重复安装/端口冲突/离线已知服务零新写入者→有新资料的更新失败只退回代码→正常更新→模拟退出登录再登录→卸载保资料）；`python -m unittest test_mac_backend`。真实手机、QQ/微信登录、实际麦克风授权、真实重启与签名公证不在这些检查内。
+- 原生验收：`node test_native_workspace.cjs`，仅虚构独立后台与账号，覆盖单孩子清单、原生表单、401后保草稿手动重试、同事项错题/订正、最终数据库读回和退出保护。
+- 兼容与安装验收：`node test_mac_desktop.cjs`（连接入口，虚构 demo）；`FAMILY_MAC_APP_V1=… FAMILY_MAC_APP_V2=… node test_mac_install.cjs`（构建号 1、2 的完整包：首次安装→同一作业保存重开→关闭/强杀 GUI 后台不变→第二客户端同库→重复安装/端口冲突/离线已知服务零新写入者→有新资料的更新失败只退回代码→正常更新→模拟退出登录再登录→卸载保资料）；`python -m unittest test_mac_backend`。真实手机、QQ/微信登录、实际麦克风授权、真实重启与签名公证不在这些检查内。

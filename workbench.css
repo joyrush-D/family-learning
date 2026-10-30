@@ -1,0 +1,154 @@
+/* 一起成长 · 米色纸面 / 嫩绿 / 木牌 / 珊瑚：在现有页面结构上统一配色与触感（原生工作台同一套 tokens）。只改外观，不改业务。 */
+:root{color-scheme:light;--ink:#3B3326;--ink-2:#665A48;--muted:#665A48;--green:#1F4A1C;--leaf-300:#A8D978;--leaf-100:#E4F2D2;--leaf-800:#1F4A1C;
+ --paper:#FBF6EA;--card:#FFFDF7;--desk:#EAE0CA;--line:#E0D3B8;--panel:#FFFDF7;--wood-100:#F1E2CC;--wood-700:#6B4520;--coral-100:#FDE6DD;--coral-700:#A13F2A;
+ --purple:#6B4520;--gold:#6B4520;--round:ui-rounded,"Yuanti SC","PingFang SC",-apple-system,sans-serif}
+body{background:var(--paper);color:var(--ink)}
+h1,h2,h3,.brand,button,summary,nav button{font-family:var(--round)}
+a{color:var(--leaf-800)}
+button{background:var(--card);color:var(--ink);border:1px solid var(--line);border-bottom-width:3px;border-radius:12px;min-height:44px}
+button:hover{background:var(--wood-100);border-color:#CDB893}
+button:active{transform:translateY(2px);border-bottom-width:1px}
+.primary,button.primary{background:var(--leaf-300);color:var(--leaf-800);border-color:#86BE57;border-bottom-color:#5E9A3A}
+.primary:hover,button.primary:hover{background:#B8E28C;color:var(--leaf-800)}
+button:focus-visible,a:focus-visible,summary:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #5E9A3A;outline-offset:2px}
+input,select,textarea{background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:10px}
+aside{background:var(--desk);border-right:1px solid var(--line);backdrop-filter:none}
+.leaf{color:var(--leaf-800);border-color:#86BE57;box-shadow:none;background:var(--leaf-100)}
+nav button{background:transparent;border-color:transparent;color:var(--ink-2)}
+nav button.active{background:var(--card);border-color:var(--line);color:var(--leaf-800)}
+.sidefoot:before{background:var(--leaf-300)}
+.card,.task,section.card,dialog,details.top-tools>div,.calendar-entry{background:var(--card);color:var(--ink);border-color:var(--line)}
+dialog{border:1px solid var(--line);border-radius:18px;box-shadow:0 18px 48px #3b332633}
+dialog::backdrop{background:#3b332655}
+.muted,.small.muted,.eyebrow{color:var(--ink-2)}
+.error{color:var(--coral-700)}
+.note,.today-source-gap{background:var(--coral-100);color:var(--coral-700);border-color:#F2C2B1}
+.chip,.review-badge{background:var(--wood-100);color:var(--wood-700);border-color:transparent}
+.review-badge{background:var(--coral-100);color:var(--coral-700)}
+/* 当天清单：科目是木牌，状态与日期是行内标记；只有明早交/逾期用珊瑚色。 */
+.subject-group{background:var(--card);border:1px solid var(--line);border-radius:18px}
+.subject-group .task-group-heading h2{display:inline-flex;align-items:center;gap:8px;background:var(--wood-100);color:var(--wood-700);border-radius:10px;padding:4px 12px;font-size:18px}
+.subject-group .task-group-heading h2:before{content:'';width:7px;height:7px;border-radius:50%;background:#6B452055}
+.subject-today{background:var(--leaf-100);color:var(--leaf-800);border-radius:999px;padding:0 8px;margin-left:6px;font-size:13px}
+.subject-item{border-top:1px dashed var(--line)}
+.subject-item:first-of-type{border-top:0}
+.subject-item-kind{color:var(--ink-2)}
+.agenda-dates span{display:inline-block;background:var(--wood-100);color:var(--wood-700);border-radius:999px;padding:0 9px;margin:2px 6px 2px 0;font-size:13px}
+.agenda-dates span[data-complete-on]{background:var(--leaf-100);color:var(--leaf-800)}
+.subject-filed-heading{display:inline-block;background:var(--wood-100);color:var(--wood-700);border-radius:10px;padding:2px 10px}
+.task-linked{outline:3px solid #86BE57;outline-offset:4px;border-radius:12px}
+@media (prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important;scroll-behavior:auto!important}}
+/* ---- 当天清单（.grove）：左边紧凑清单，右边所选事项；手机单列，详情占满并可返回。科目木牌、行内日期标记，只有明早交/逾期用珊瑚色。 */
+.grove{display:grid;grid-template-columns:minmax(320px,420px) minmax(0,1fr);gap:20px;align-items:start}
+.grove-list{min-width:0}
+.grove-list-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin:0 0 6px}
+.grove-list-head h1{margin:0;font-size:26px}
+.grove-summary{margin:4px 0 0;color:var(--ink-2);font-size:15px}
+.grove .today-controls{margin:6px 0 10px}
+.grove-subject{background:transparent;border:0;padding:0;margin:14px 0 0;box-shadow:none}
+.grove-tag{display:inline-flex;align-items:center;gap:8px;margin:0 0 8px;padding:4px 12px;border-radius:10px;background:var(--wood-100);color:var(--wood-700);font-size:16px;font-family:var(--round);box-shadow:inset 0 -2px 0 #6B452022}
+.grove-tag:before{content:'';width:7px;height:7px;border-radius:50%;background:#6B452055}
+.grove-tag span{font-size:14px;font-weight:600;opacity:.85}
+.grove-rows{display:flex;flex-direction:column;gap:8px}
+.grove-row{position:relative;display:flex;gap:10px;align-items:flex-start;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 12px}
+.grove-row.is-selected{border-color:#86BE57;background:#F6FBEF;box-shadow:0 0 0 2px #86BE5733}
+.grove-row.is-done .grove-title{color:var(--ink-2)}
+.grove-check,.grove-mark{flex:0 0 auto;display:grid;place-items:center;width:44px;height:44px;margin:-4px -4px 0 -6px}
+.grove-check input{width:24px;height:24px;accent-color:#5E9A3A}
+.grove-mark{font-weight:700;color:var(--coral-700);font-size:18px}
+.grove-open{flex:1;min-width:0;display:flex;flex-direction:column;align-items:stretch;gap:5px;text-align:left;background:transparent;border:0;border-radius:10px;padding:2px 0;min-height:44px;color:var(--ink);font-family:inherit;cursor:pointer;box-shadow:none}
+.grove-open:hover{background:transparent}
+.grove-open:active{transform:none}
+.grove-title{font-family:var(--round);font-weight:700;font-size:17px;line-height:1.35}
+.grove-lines{color:var(--ink-2);font-size:15px;line-height:1.45;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.grove-lines em{font-style:normal;color:var(--coral-700)}
+.grove-chips{display:flex;flex-wrap:wrap;gap:6px}
+.grove-chip{display:inline-flex;align-items:center;min-height:26px;padding:0 10px;border-radius:999px;background:var(--wood-100);color:var(--wood-700);font-size:14px;font-weight:600;line-height:1}
+.grove-chip.is-coral{background:var(--coral-100);color:var(--coral-700)}
+.grove-chip.is-leaf{background:var(--leaf-100);color:var(--leaf-800)}
+.grove-chip.is-soft{background:transparent;color:var(--ink-2);box-shadow:inset 0 0 0 1px var(--line)}
+.grove-meta{font-size:14px;color:var(--ink-2)}
+.grove-empty-list,.grove-empty{color:var(--ink-2);padding:18px;border:1px dashed var(--line);border-radius:16px;background:var(--card)}
+.grove-closed,.grove-plans{margin-top:14px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:6px 12px}
+.grove-closed>summary,.grove-plans>summary{min-height:44px;display:flex;align-items:center;font-family:var(--round);font-weight:600;cursor:pointer}
+.grove-detail{position:sticky;top:12px;min-width:0;background:var(--paper);border:1px solid var(--line);border-radius:20px;padding:20px 22px;max-height:calc(100vh - 24px);overflow:auto}
+.grove-detail:focus{outline:none}
+.grove-detail:focus-visible{outline:3px solid #5E9A3A;outline-offset:2px}
+.grove-back{display:none}
+.grove-head{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+.grove-source{color:var(--ink-2);font-size:15px}
+.grove-originals{display:inline-flex;flex-wrap:wrap;gap:6px}
+.grove-h{font-size:24px;margin:10px 0 8px;line-height:1.3}
+.grove-when{margin:0 0 10px;padding:8px 12px;border-radius:12px;background:var(--card);border:1px dashed var(--line);color:var(--ink-2)}
+.grove-card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 16px;margin:12px 0}
+.grove-card h3{margin:0 0 8px;font-size:17px;font-family:var(--round)}
+.grove-standards{margin:0;padding-left:20px;line-height:1.6}
+.grove-standards li::marker{color:#86BE57}
+.grove-unclear{color:var(--coral-700);border:1px dashed #E7A58F;border-radius:10px;padding:6px 10px;margin:6px 0}
+.grove-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:12px 0}
+.grove-fact{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:10px 12px;display:flex;flex-direction:column;gap:2px}
+.grove-fact span{font-size:14px;color:var(--ink-2)}
+.grove-fact strong{font-size:16px}
+.grove-fact em{font-style:normal;font-weight:700;color:var(--coral-700)}
+.grove-fact.is-coral strong{color:var(--coral-700)}
+.grove-material{border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:8px 0;background:var(--paper)}
+.grove-material.is-ready{box-shadow:inset 0 0 0 3px var(--card),inset 0 0 0 4px #CFE6B8}
+.grove-material.is-unread,.grove-material.is-error{border-style:dashed;border-color:#E7A58F}
+.grove-material-head{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0}
+.grove-material p{margin:4px 0}
+.grove-material-summary{line-height:1.5}
+.grove-link{display:inline-flex;align-items:center;min-height:44px}
+.grove-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:10px}
+.grove-print{margin:0 0 4px}
+.grove-print p{flex-basis:100%;margin:0}
+.grove-history{list-style:none;margin:6px 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.grove-history li{background:var(--paper);border-radius:12px;padding:8px 10px}
+.grove-history p{margin:4px 0 0}
+.grove-more{margin-top:10px}
+.grove-more>summary{min-height:44px;display:flex;align-items:center;color:var(--ink-2);cursor:pointer}
+@media (max-width:899px){
+ .grove{display:block}
+ .grove[data-view="detail"] .grove-list{display:none}
+ .grove[data-view="list"] .grove-detail{display:none}
+ .grove-detail{position:static;max-height:none;border:0;border-radius:0;padding:0 0 24px;background:transparent}
+ .grove-back{display:block;position:sticky;top:0;z-index:2;background:var(--paper);padding:6px 0;margin:0 0 6px;border-bottom:1px solid var(--line)}
+ .grove-back button{min-height:44px}
+ .grove-list-head{flex-wrap:wrap}
+ .grove-list-head h1{font-size:24px}
+ .grove-facts{grid-template-columns:1fr}
+ html{scroll-padding-top:60px}
+}
+/* 选中的孩子与导航：前景与背景成对给出，悬停与键盘焦点不降低可读性；手机底栏改为浅色纸面。 */
+.calendar-kids button[aria-pressed="true"],.calendar-kids button[aria-pressed="true"]:hover,.calendar-kids button[aria-pressed="true"]:focus-visible{background:var(--leaf-800);border-color:var(--leaf-800);border-bottom-color:#12300F;color:#FFFDF7}
+.calendar-kids button[aria-pressed="false"]{color:var(--ink)}
+[data-homework-new]{white-space:nowrap;flex-shrink:0}
+.grove-nowrap{white-space:nowrap}
+@media (max-width:899px){
+ aside nav,nav[aria-label="主导航"]{background:rgba(255,253,247,.97)!important;border-top:1px solid var(--line);box-shadow:0 -4px 16px #3B33261A}
+ nav[aria-label="主导航"] button{color:var(--ink-2)}
+ nav[aria-label="主导航"] button:hover{background:var(--wood-100);color:var(--ink)}
+ nav[aria-label="主导航"] button.active{background:var(--leaf-100);border-color:#86BE57;color:var(--leaf-800)}
+}
+/* 旧深色主题留在对话框里的深底面板与输入框（深字压深底，几乎看不见）：同一选择器、同样优先级，换成纸面配色 tokens。由 ui.css 等旧样式里深色背景的规则逐条对应。 */
+.toolbar select,.toolbar input{background:var(--card);color:var(--ink);border-color:var(--line)}
+dialog{background:var(--card);color:var(--ink);border-color:var(--line)}
+label input,label select,label textarea{background:var(--card);color:var(--ink);border-color:var(--line)}
+.capture{background:var(--paper);color:var(--ink);border-color:var(--line)}
+.print-choice{background:var(--paper);color:var(--ink);border-color:var(--line)}
+@media(max-width:850px){.actions{background:var(--paper);color:var(--ink);border-color:var(--line)}}
+.tasktools>button:not(.primary){background:var(--card);color:var(--ink);border-color:var(--line)}
+.tasktools>button:not(.primary):hover{background:var(--wood-100);color:var(--ink);border-color:var(--line)}
+#calendarOccurrenceForm .actions,#calendarForm .actions{background:var(--paper);color:var(--ink);border-color:var(--line)}
+.task-feedback-entry{background:var(--paper);color:var(--ink);border-color:var(--line)}
+.task-actions .tasktools>button:not(.primary):hover{background:var(--wood-100);color:var(--ink);border-color:var(--line)}
+.homework-review-next{background:var(--paper);color:var(--ink);border-color:var(--line)}
+#recordDialog .actions{background:var(--paper);color:var(--ink);border-color:var(--line)}
+.topic-diagnosis input:not([type=radio]){background:var(--card);color:var(--ink);border-color:var(--line)}
+.topic-diagnosis .topic-question{background:var(--paper);color:var(--ink);border-color:var(--line)}
+#agentForm[data-school-changing] .dialog-actions{background:var(--paper);color:var(--ink);border-color:var(--line)}
+#homeworkInputDialog{background:var(--card);color:var(--ink);border-color:var(--line)}
+.learning-reference{background:var(--paper);color:var(--ink);border-color:var(--line)}
+/* 选文件的标签（拍照 / 拍摄视频 / 照片或文件）：旧样式只给深蓝底、没给字色，深字压深底；配成薄荷底 + 深绿字，悬停与键盘焦点同样成对。尺寸与透明 input 覆盖不变。 */
+.filebutton{background:var(--leaf-100);color:var(--leaf-800);border-color:#86BE57;border-bottom:3px solid #5E9A3A;font-family:var(--round);font-weight:600}
+.filebutton:hover{background:var(--leaf-300);color:var(--leaf-800)}
+.filebutton:focus-within{outline:3px solid #5E9A3A;outline-offset:2px}
