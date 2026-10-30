@@ -59,9 +59,16 @@ final class WorkspaceStore: ObservableObject {
     init(client: WorkspaceClient) { self.client = client }
 
     var hasUnsavedInput: Bool { sheet != nil && sheetDirty }
-    var childName: String { view?.child_name ?? "" }
-    var groups: [ItemGroup] { mode == .done ? (view?.closed ?? []) : (view?.groups ?? []) }
-    var allItems: [DayItem] { (view?.groups ?? []).flatMap(\.items) + (view?.closed ?? []).flatMap(\.items) }
+    /// 正在显示、可以操作的这一天：只有读回的正是所选孩子、所选日期才算。切换后还没读到或读失败时为 nil——
+    /// 上一个孩子/上一天的读取结果只留作缓存（已知孩子仍可切回、重试），不在新选中的孩子/日期下显示、选中、计数或写入。
+    var current: DayView? {
+        guard let v = view, childID.isEmpty || v.child_id == childID, day.isEmpty || v.day == day else { return nil }
+        return v
+    }
+    var childName: String { current?.child_name ?? "" }
+    var groups: [ItemGroup] { mode == .done ? (current?.closed ?? []) : (current?.groups ?? []) }
+    var wrongGroups: [WrongGroup] { current?.wrong ?? [] }
+    var allItems: [DayItem] { (current?.groups ?? []).flatMap(\.items) + (current?.closed ?? []).flatMap(\.items) }
     var selected: DayItem? { allItems.first { $0.id == selection } }
 
     func load(keepSelection: Bool = true) async {
@@ -112,9 +119,17 @@ final class WorkspaceStore: ObservableObject {
 
     func childAt(_ index: Int) { if let list = view?.children, list.indices.contains(index) { change(child: list[index].id) } }
 
+    /// 顶栏日期：所选的那一天（读失败时也不显示上一天）；“今天”用后台给出的今天。
+    var dayTitle: String { day.isEmpty ? (loading ? "正在读取…" : "") : WorkspaceStore.spoken(day) }
+    var daySub: String {
+        guard !day.isEmpty, let today = view?.today else { return "" }
+        if day == today { return "今天" }
+        return (day < today ? "以前的一天" : "以后的一天") + " · 今天是 \(WorkspaceStore.spoken(today))"
+    }
+
     /// 当天清单的说明：今天要做的、以后安排的、日期未写明的分开数，不把以后安排的算成今天的作业。
     var summary: String {
-        guard let v = view else { return loading ? "正在读取…" : "" }
+        guard let v = current else { return loading ? "正在读取…" : "" }
         switch mode {
         case .done: return "已办 \(v.counts["closed"] ?? 0) 项"
         case .wrong:
@@ -225,11 +240,11 @@ struct HeaderBar: View {
             Button { store.shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 32, height: 32).contentShape(Rectangle()) }
                 .buttonStyle(.plain).accessibilityLabel("前一天").help("前一天 ⌘[").probe("day-prev")
             VStack(spacing: 1) {
-                Text(store.view.map { WorkspaceStore.spoken($0.day) } ?? (store.loading ? "正在读取…" : "")).font(Palette.rounded.weight(.bold)).foregroundStyle(Palette.ink)
-                Text(daySub).font(.caption).foregroundStyle(Palette.ink2)
+                Text(store.dayTitle).font(Palette.rounded.weight(.bold)).foregroundStyle(Palette.ink)
+                Text(store.daySub).font(.caption).foregroundStyle(Palette.ink2)
             }
             .frame(minWidth: 150).accessibilityElement(children: .combine)
-            .probe("day-title", text: (store.view?.day ?? "") + " " + daySub)
+            .probe("day-title", text: store.day + " " + store.daySub)
             Button { store.shift(1) } label: { Image(systemName: "chevron.right").frame(width: 32, height: 32).contentShape(Rectangle()) }
                 .buttonStyle(.plain).accessibilityLabel("后一天").help("后一天 ⌘]").probe("day-next")
             Button("回到今天") { store.change(day: store.view?.today ?? "") }
@@ -237,18 +252,12 @@ struct HeaderBar: View {
             Spacer(minLength: 8)
             Button { store.sheetDirty = false; store.sheet = .oral } label: { Label("补录口头作业", systemImage: "plus") }
                 .buttonStyle(.borderedProminent).tint(Palette.leaf).foregroundStyle(Palette.leafInk)
-                .disabled(store.view == nil).help("补录孩子口头转述的作业 ⌘N").probe("oral-new")
+                .disabled(store.current == nil).help("补录孩子口头转述的作业 ⌘N").probe("oral-new")
             Button { store.openWebTools("", "") } label: { Label("网页版工具", systemImage: "square.grid.2x2") }
                 .help("日历、学校消息、打印、设置等其他功能 ⌘E").probe("web-tools")
         }
         .padding(.horizontal, 16).padding(.vertical, 8)
         .background(Palette.desk.opacity(0.55))
-    }
-
-    var daySub: String {
-        guard let v = store.view else { return "" }
-        if v.day == v.today { return "今天" }
-        return v.day < v.today ? "以前的一天 · 今天是 \(WorkspaceStore.spoken(v.today))" : "以后的一天 · 今天是 \(WorkspaceStore.spoken(v.today))"
     }
 }
 
@@ -309,7 +318,7 @@ struct SubjectList: View {
                     Button("重试") { Task { await store.load() } }.probe("load-retry")
                 }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Palette.coral)
             }
-            if let text = store.view?.source_error, !text.isEmpty {
+            if let text = store.current?.source_error, !text.isEmpty {
                 Text(text).font(.callout).foregroundStyle(Palette.coralInk).padding(10)
             }
             if store.mode == .wrong { WrongList(store: store) } else { itemList }
@@ -318,7 +327,7 @@ struct SubjectList: View {
     }
 
     func label(_ mode: ListMode) -> String {
-        guard let v = store.view else { return mode.rawValue }
+        guard let v = store.current else { return mode.rawValue }
         switch mode {
         case .today: return "当天 \(v.counts["open"] ?? 0)"
         case .done: return "已办 \(v.counts["closed"] ?? 0)"
@@ -336,7 +345,7 @@ struct SubjectList: View {
                         .probe("subject-" + group.subject)
                 }
             }
-            if store.groups.isEmpty && store.view != nil {
+            if store.groups.isEmpty && store.current != nil {
                 Text(store.mode == .done ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
                     .foregroundStyle(Palette.ink2).probe("list-empty")
             }
@@ -381,7 +390,7 @@ struct WrongList: View {
     @ObservedObject var store: WorkspaceStore
     var body: some View {
         List {
-            ForEach(store.view?.wrong ?? [], id: \.subject) { group in
+            ForEach(store.wrongGroups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { r in
                         HStack(alignment: .top) {
@@ -399,7 +408,7 @@ struct WrongList: View {
                     }
                 } header: { WoodTag(text: group.subject) }
             }
-            if (store.view?.wrong ?? []).isEmpty { Text("还没有记下的错题。").foregroundStyle(Palette.ink2) }
+            if store.wrongGroups.isEmpty && store.current != nil { Text("还没有记下的错题。").foregroundStyle(Palette.ink2) }
         }
         .listStyle(.sidebar).scrollContentBackground(.hidden).probe("wrong-list")
     }
@@ -416,7 +425,8 @@ struct Inspector: View {
             else {
                 VStack(spacing: 10) {
                     Image(systemName: "leaf").font(.largeTitle).foregroundStyle(Palette.leafInk)
-                    Text(store.view == nil ? (store.loginRequired ? "登录后显示清单。" : "正在读取清单…") : "从左边选一项，查看要做什么、资料和反馈。").foregroundStyle(Palette.ink2)
+                    Text(store.current != nil ? "从左边选一项，查看要做什么、资料和反馈。" : store.loginRequired ? "登录后显示清单。"
+                         : store.loading || store.error.isEmpty ? "正在读取清单…" : "还没读到所选孩子这一天的清单，可在左边重试。").foregroundStyle(Palette.ink2)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
             }
         }
@@ -625,7 +635,7 @@ struct SheetFrame<Fields: View>: View {
                 Spacer()
                 Button("取消") { close() }.keyboardShortcut(.cancelAction).disabled(save.busy).probe("sheet-cancel")
                 Button(save.busy ? "正在保存…" : save.unknown || !save.message.isEmpty && !save.conflict ? "用同一次提交重试" : saveTitle) { onSave() }
-                    .keyboardShortcut(.defaultAction).disabled(save.busy || !canSave).probe("sheet-save")
+                    .keyboardShortcut(.defaultAction).disabled(save.busy || !canSave || store.current == nil).probe("sheet-save")
             }
         }
         .padding(20).frame(minWidth: 460, idealWidth: 520).background(Palette.paper)

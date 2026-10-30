@@ -69,6 +69,8 @@
 !/workbench.css
 !/test_native_workspace.py
 !/test_native_workspace.cjs
+!/test_native_context.py
+!/test_native_context.swift
 !/test_native_topic_journey.py
 !/test_calendar_ui.js
 
@@ -386,3 +388,5 @@
 !/designs/family-grove/assets/
 /designs/family-grove/assets/*
 !/designs/family-grove/assets/original-sprout.png
+
+!/test_native_context_ui.cjs

@@ -526,7 +526,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         if item.action == #selector(uninstallBackend) { return !backendBusy && ["update_available", "current"].contains(backendState) }
         if item.action == #selector(menuWorkbench) { return surface == "web" && config.policy != nil && webView?.isHidden == false }
         if [#selector(menuPrintOriginal), #selector(menuPrintReference)].contains(item.action) { return nativeVisible && workspace?.sheet == nil && workspace?.selected?.task_id.isEmpty == false }
-        if [#selector(menuOral), #selector(menuPrev), #selector(menuNext), #selector(menuToday), #selector(menuChild1), #selector(menuChild2), #selector(menuReload), #selector(menuWebTools)].contains(item.action) {
+        // 补录只记在已读到的所选孩子这一天；切换孩子、前后一天、重读在读失败时照常可用（已知孩子可切回、可重试）。
+        if item.action == #selector(menuOral) { return nativeVisible && workspace?.sheet == nil && workspace?.current != nil }
+        if [#selector(menuPrev), #selector(menuNext), #selector(menuToday), #selector(menuChild1), #selector(menuChild2), #selector(menuReload), #selector(menuWebTools)].contains(item.action) {
             return nativeVisible && workspace?.sheet == nil && workspace?.view != nil
         }
         return true
