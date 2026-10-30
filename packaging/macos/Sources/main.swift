@@ -190,6 +190,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     // 主界面是原生工作台；网页只在家长打开“网页版工具”、原件或照片检查时载入。测试默认沿用原网页验收，声明 native 才验原生工作台。
     var surface = smoke ? (environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native" ? "native" : "web") : "native"
     var workspace: WorkspaceStore?
+    var workspaceHost: NSHostingController<WorkspaceView>?
     var container: NSView?
     var nativeRan = false
     var attempts = 0
@@ -1006,10 +1007,18 @@ extension AppDelegate {
         surface = "native"
         TestTargets.enabled = smoke && environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native"
         let frame = window.frame
-        let host = NSHostingController(rootView: WorkspaceView(store: store))
-        host.sizingOptions = []
-        window.contentViewController = host
-        window.setFrame(frame, display: true)
+        if let shown = window.contentViewController as? NSHostingController<WorkspaceView> {
+            // 工作台已显示在这个窗口里（例如重新读取）：只把视图换成这份清单，不替换窗口内容控制器——替换后真实点击清单行不再选中。
+            shown.rootView = WorkspaceView(store: store)
+        } else {
+            // 从网页版或状态页回来：装回同一个工作台控制器（只换成这份清单），不另建新控制器。
+            let host = workspaceHost ?? NSHostingController(rootView: WorkspaceView(store: store))
+            host.rootView = WorkspaceView(store: store)
+            host.sizingOptions = []
+            workspaceHost = host
+            window.contentViewController = host
+            window.setFrame(frame, display: true)
+        }
         window.toolbarStyle = .unified
         window.appearance = NSAppearance(named: .aqua)  // 工作台配色只设计了浅色
         window.subtitle = ""
@@ -1237,7 +1246,8 @@ extension AppDelegate {
         var activated = false
         if !w.isKeyWindow { NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil); await sleep(0.5); activated = true }
         let local = w.convertFromScreen(NSRect(origin: center, size: .zero)).origin
-        let hit = w.contentView?.hitTest(w.contentView?.convert(local, from: nil) ?? local)
+        // NSView.hitTest 接收的是父视图坐标：内容视图的父视图（窗口框架视图）与窗口坐标一致。
+        let hit = w.contentView?.hitTest(w.contentView?.superview?.convert(local, from: nil) ?? local)
         // 测试定位：新版 SwiftUI 会由表格本身接收行内点击。核真实行坐标和随后读回的选中项，不能仅凭命中视图类型拒绝它。
         // 空白处、科目标题、另一窗口仍拒绝；下面只投递鼠标事件，不直接设置选择。
         let atRow = rowTable.map { $0.row(at: $0.convert(local, from: nil)) } ?? -1
