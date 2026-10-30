@@ -38,6 +38,34 @@ class CollectError(Exception):
     """Only fixed diagnostic codes, never command output or credentials."""
 
 
+# Fixed codes family_qq_napcat.py prints as its whole stdout, {"status":"error","error":CODE}, with exit 1.
+# Anything else from a failed command stays cli_read_failed; stderr is never read.
+QQ_PRODUCER_ERRORS = frozenset({'private_config_required', 'invalid_config', 'onebot_config_invalid', 'bridge_invalid',
+                                'qq_source_unavailable', 'qq_endpoint_refused', 'qq_endpoint_disconnected',
+                                'qq_endpoint_auth_rejected'})
+MAX_PRODUCER_ERROR = 256
+
+
+class ProducerError(CollectError):
+    """A failed command's own fixed code; only the QQ reader may use it, every other caller sees cli_read_failed."""
+    def __init__(self, code):
+        super().__init__('cli_read_failed')
+        self.code = code
+
+
+def producer_error(result):
+    if result.returncode != 1 or len(result.stdout) > MAX_PRODUCER_ERROR:
+        return None
+    try:
+        value = json.loads(result.stdout)
+    except ValueError:
+        return None
+    if type(value) is dict and set(value) == {'status', 'error'} and value['status'] == 'error' \
+            and type(value['error']) is str and value['error'] in QQ_PRODUCER_ERRORS:
+        return value['error']
+    return None
+
+
 class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         raise CollectError('redirect_rejected')
@@ -345,7 +373,10 @@ def qq_history(config, source, read_cli, deadline, bootstrap=False):
     checked(initial or numeric(cursor, False), 'qq_continuity_unverified')
 
     def read(arguments):
-        envelope = read_cli([sys.executable, config['qq_cli'], *arguments], timeout=remaining(deadline))
+        try:
+            envelope = read_cli([sys.executable, config['qq_cli'], *arguments], timeout=remaining(deadline))
+        except ProducerError as error:
+            raise CollectError(error.code) from None  # one read, no retry; the same fixed code the QQ reader printed
         remaining(deadline)
         return envelope
 
@@ -380,7 +411,9 @@ def qq_history(config, source, read_cli, deadline, bootstrap=False):
 def cli_json(args, env=None, timeout=45):
     try:
         result = subprocess.run(args, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout, check=False)
-        checked(result.returncode == 0, 'cli_read_failed')
+        if result.returncode != 0:
+            code = producer_error(result)
+            raise ProducerError(code) if code else CollectError('cli_read_failed')
         checked(len(result.stdout) <= MAX_RESPONSE, 'cli_response_too_large')
         return json.loads(result.stdout)
     except subprocess.TimeoutExpired:

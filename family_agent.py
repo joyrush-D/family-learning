@@ -1240,6 +1240,20 @@ def next_collection_at(last_attempt):
     return due
 
 
+# Fixed reasons for the QQ reader's own fixed codes (family_collect.QQ_PRODUCER_ERRORS), only on a QQ source.
+# Each states only what that code proves: none means a QQ login lapsed or a scan is needed.
+_QQ_READ_REASONS = {
+    'private_config_required': '本机QQ读取配置文件不可用',
+    'invalid_config': '本机QQ读取配置未通过核对',
+    'bridge_invalid': '本机QQ读取配置未通过核对',
+    'onebot_config_invalid': '本机QQ接口配置未通过核对',
+    'qq_source_unavailable': '本机QQ接口已响应，但未确认配置的账号与班级群',
+    'qq_endpoint_refused': '本机QQ接口未接受连接',
+    'qq_endpoint_disconnected': '本机QQ接口连接中断，未返回结果',
+    'qq_endpoint_auth_rejected': '本机QQ接口拒绝了本次访问授权',
+}
+
+
 def _collection_check(row):
     try:
         value = json.loads(row['check_request']) if row else {}
@@ -1495,7 +1509,7 @@ class Store:
                     'cli_read_failed': '本机读取工具未能完成读取',
                     'cli_response_invalid': '读取结果格式无法核对',
                     'qq_continuity_unverified': 'QQ消息与上次读取位置尚未衔接',
-                }.get(error, '本次消息读取未通过核对')
+                }.get(error) or (_QQ_READ_REASONS.get(error) if source['platform'] == 'qq' else None) or '本次消息读取未通过核对'
                 c.execute('UPDATE agent_sources SET last_attempt=?,error=?,receipt=? WHERE id=?',
                           (checked, reason + '；本次未同步新消息，上次成功记录保留。', receipt, source['id']))
             else:

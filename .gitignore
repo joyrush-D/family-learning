@@ -270,6 +270,8 @@
 !/test_image_original_date_scope.py
 !/test_image_original_date_scope.json
 !/test_image_original_date_scope_ui.cjs
+!/test_source_failure_contract.py
+!/test_source_failure_contract_ui.cjs
 !/test_daily_list_progress_ui.cjs
 
 !/family_preview.py
