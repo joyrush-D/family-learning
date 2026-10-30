@@ -1,5 +1,5 @@
-// 一起成长桌面入口（内部候选）：AppKit + WKWebView 薄壳，只打开家长已配置的本机原服务。
-// 不启动、停止或改动任何后台服务与配置；关窗/退出只影响本窗口。网页不获得任何原生桥接。
+// 一起成长桌面入口（内部候选）：AppKit + WKWebView 薄壳，打开本机原服务；关窗/退出只影响本窗口。
+// 只有全新 Mac 上家长明确点击“安装后台”，或本入口安装的后台要更新/卸载时，才经包内运行时执行 backend.py；网页不获得任何原生桥接。
 import AppKit
 import WebKit
 
@@ -100,8 +100,65 @@ func probe(_ origin: ServiceOrigin, _ done: @escaping @MainActor (ProbeResult) -
     }.resume()
 }
 
+// 后台安装/更新/卸载：只在家长明确点击后运行包内 backend.py，结果是一行 JSON，给家长看的文字由它提供（不含路径或命令）。
+// 测试模式只把测试声明的虚构目录和端口交给它；正常使用从不带测试参数。技术细节只写进本入口自己的 Support 目录。
+struct BackendReply {
+    let ok: Bool
+    let state: String
+    let message: String
+    let origin: String
+    let raw: [String: Any]
+}
+
+let testProfile: String? = smoke ? environment["FAMILY_DESKTOP_TEST_PROFILE"].flatMap { $0.isEmpty ? nil : $0 } : nil
+
+func backendAvailable() -> Bool {
+    guard let res = Bundle.main.resourceURL else { return false }
+    return FileManager.default.isExecutableFile(atPath: res.appendingPathComponent("runtime/bin/python3.11").path)
+        && FileManager.default.fileExists(atPath: res.appendingPathComponent("app/packaging/macos/backend.py").path)
+        && (!smoke || (testProfile != nil && testOrigin != nil))
+}
+
+func runBackend(_ command: String, fault: String? = nil, _ done: @escaping @MainActor (BackendReply) -> Void) {
+    let failed = BackendReply(ok: false, state: "unavailable", message: "后台操作没有完成，未改动家庭资料；请稍后再试。", origin: "", raw: [:])
+    guard backendAvailable(), let res = Bundle.main.resourceURL else { DispatchQueue.main.async { done(failed) }; return }
+    var arguments = ["-I", "-B", res.appendingPathComponent("app/packaging/macos/backend.py").path, command,
+                     "--resources", res.path, "--support", supportDirectory().path]
+    if smoke, let profile = testProfile, let origin = testOrigin {
+        arguments += ["--test-profile", profile, "--port", String(origin.port)]
+        if let fault { arguments += ["--test-fault", fault] }
+    }
+    let process = Process()
+    process.executableURL = res.appendingPathComponent("runtime/bin/python3.11")
+    process.arguments = arguments
+    process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "HOME": NSHomeDirectory(), "LANG": "en_US.UTF-8", "TMPDIR": NSTemporaryDirectory()]
+    process.standardInput = FileHandle.nullDevice
+    let output = Pipe()
+    process.standardOutput = output
+    try? preparePrivateSupport()
+    let logPath = supportDirectory().appendingPathComponent("backend.log").path
+    let size = (try? FileManager.default.attributesOfItem(atPath: logPath)[.size] as? Int) ?? nil
+    if size == nil || size! > 1_000_000 { FileManager.default.createFile(atPath: logPath, contents: nil, attributes: [.posixPermissions: 0o600]) }
+    if let log = FileHandle(forWritingAtPath: logPath) { log.seekToEndOfFile(); process.standardError = log } else { process.standardError = FileHandle.nullDevice }
+    DispatchQueue.global(qos: .userInitiated).async {
+        var reply = failed
+        do {
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            let line = String(decoding: data, as: UTF8.self).split(separator: "\n").last.map(String.init) ?? ""
+            if let object = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any], let message = object["message"] as? String {
+                reply = BackendReply(ok: object["ok"] as? Bool == true, state: object["state"] as? String ?? "", message: message,
+                                     origin: object["origin"] as? String ?? "", raw: object)
+            }
+        } catch {}
+        let final = reply
+        DispatchQueue.main.async { done(final) }
+    }
+}
+
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSMenuItemValidation {
     var config = DesktopConfig.load()
     var window: NSWindow?
     var webView: WKWebView?
@@ -115,6 +172,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var setupMessage = NSTextField(wrappingLabelWithString: "")
     var setupButton = NSButton(title: "连接并打开", target: nil, action: nil)
     var setupBusy = false
+    // 全新 Mac 上的“安装后台”：只在只读检查确认没有已有设置、安装、已知服务且端口空闲时显示。
+    var installNote = NSTextField(wrappingLabelWithString: "")
+    var installButton = NSButton(title: "在这台 Mac 上安装后台", target: nil, action: nil)
+    var backendBusy = false
+    var backendState = ""
+    var backendReplies: [[String: Any]] = []
+    var faultPending: String? = smoke ? environment["FAMILY_DESKTOP_TEST_UPDATE_FAULT"].flatMap { $0.isEmpty ? nil : $0 } : nil
+    var installScripted = smoke && environment["FAMILY_DESKTOP_TEST_INSTALL"] == "1"
     var popups: [NSWindow] = []
     var attempts = 0
     var mainLoads = 0
@@ -163,6 +228,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         NSApp.mainMenu = menu()
         showWindow()
         NSApp.activate(ignoringOtherApps: true)
+        refreshBackendStatus()
+    }
+
+    // 已连接过后台时只读查看：本入口安装的后台有新版本，菜单里才提供“更新后台”；从不自动更新。
+    func refreshBackendStatus() {
+        guard backendAvailable(), FileManager.default.fileExists(atPath: DesktopConfig.path.path) else { return }
+        runBackend("status") { reply in
+            self.backendState = reply.state
+            if testProfile != nil { emit(["state": "backend_status", "result": reply.state]) }
+            if reply.state == "update_available" { self.window?.subtitle = "可以更新后台：菜单“一起成长”→“更新后台到这个版本…”" }
+        }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -173,6 +249,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     // 退出（含 Cmd+Q）先按页面原有 beforeunload 判断；有未保存内容时默认继续编辑。后台服务不受影响。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if backendBusy && !quitApproved {
+            if !smoke {
+                let alert = NSAlert(); alert.messageText = "后台正在安装或更新"
+                alert.informativeText = "请等它完成后再退出，大约一两分钟。"; alert.addButton(withTitle: "好"); alert.runModal()
+            }
+            return .terminateCancel
+        }
         guard !quitApproved, let web = webView else { return .terminateNow }
         unsaved(web) { dirty in
             let reply = !dirty || self.confirmDiscard("退出")
@@ -244,7 +327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         container.addSubview(statusView)
         let title = NSTextField(labelWithString: "连接本机一起成长服务")
         title.font = .boldSystemFont(ofSize: 17)
-        let hint = NSTextField(wrappingLabelWithString: "填写这台 Mac 上一起成长后台的网页地址，或直接使用下面的默认地址。桌面入口不会启动、停止或更改后台。")
+        let hint = NSTextField(wrappingLabelWithString: "填写这台 Mac 上一起成长后台的网页地址，或直接使用下面的默认地址。桌面入口不会启动、停止或更改已有后台。")
         hint.preferredMaxLayoutWidth = 300
         setupMessage.preferredMaxLayoutWidth = 300
         setupMessage.textColor = .secondaryLabelColor
@@ -260,7 +343,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         setupView.alignment = .leading
         setupView.spacing = 10
         setupView.translatesAutoresizingMaskIntoConstraints = false
-        setupView.setViews([title, hint, setupField, setupButton, setupMessage], in: .top)
+        installNote.preferredMaxLayoutWidth = 300
+        installButton.target = self
+        installButton.action = #selector(installBackend)
+        installNote.isHidden = true
+        installButton.isHidden = true
+        setupView.setViews([title, hint, setupField, setupButton, setupMessage, installNote, installButton], in: .top)
         setupView.isHidden = true
         container.addSubview(setupView)
         NSLayoutConstraint.activate([
@@ -314,7 +402,107 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         window?.makeFirstResponder(setupField)
         emit(["state": "setup_shown", "typed": typed, "message": message])
         if smoke { setupShots += 1; let name = "setup-\(setupShots)"; Task { await self.snapshot(name) } }
+        offerInstall()
         nextScriptedSetup()
+    }
+
+    // 没有已保存的连接设置时才做只读检查；确认全新才显示“安装后台”，已有后台或端口被占只说明原因。
+    func offerInstall(_ prefix: String = "") {
+        installNote.isHidden = true
+        installButton.isHidden = true
+        guard !backendBusy, backendAvailable(), !FileManager.default.fileExists(atPath: DesktopConfig.path.path) else {
+            if installScripted { installScripted = false; finishSmoke() }
+            return
+        }
+        runBackend("check") { reply in
+            if testProfile != nil { emit(["state": "backend_check", "result": reply.state, "message": reply.message]) }
+            guard !self.setupView.isHidden, !self.backendBusy else { return }
+            self.installNote.stringValue = (prefix.isEmpty ? "" : prefix + "\n") + reply.message
+            self.installNote.isHidden = reply.state == "unavailable"
+            self.installButton.isHidden = reply.state != "fresh"
+            self.installButton.isEnabled = true
+            guard self.installScripted else { return }
+            self.installScripted = false
+            if reply.state == "fresh" {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.installButton.performClick(nil) }
+            } else {
+                Task { await self.snapshot("install-not-offered") }
+                self.finishSmoke()
+            }
+        }
+    }
+
+    @objc func installBackend() {
+        guard !backendBusy, !installButton.isHidden else { return }
+        backendBusy = true
+        installButton.isEnabled = false; setupButton.isEnabled = false; setupField.isEnabled = false
+        installNote.stringValue = "正在安装后台，通常一两分钟；资料只保存在这台 Mac 上，装好后直接打开清单。"
+        emit(["state": "backend_install_started"])
+        Task { await self.snapshot("install-running") }
+        runBackend("install") { reply in
+            self.backendBusy = false
+            self.backendReplies.append(reply.raw)
+            emit(["state": "backend_install", "ok": reply.ok, "result": reply.state, "message": reply.message])
+            self.setupButton.isEnabled = true; self.setupField.isEnabled = true
+            guard reply.ok, let origin = ServiceOrigin.parse(reply.origin) else {
+                Task { await self.snapshot("install-failed") }
+                self.offerInstall(reply.message)
+                return self.nextScriptedSetup()
+            }
+            self.backendState = "current"
+            self.setupField.stringValue = origin.string
+            self.submitSetup()  // 与“连接并打开”同一确认：确为一起成长网页后才保存地址并打开原清单
+        }
+    }
+
+    func confirmBackend(_ title: String, _ detail: String, _ action: String) -> Bool {
+        if smoke { testEvents.append(["backend_confirm": title]); return true }
+        let alert = NSAlert(); alert.messageText = title; alert.informativeText = detail
+        alert.addButton(withTitle: action); alert.addButton(withTitle: "取消")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    @objc func updateBackend() { backendChange("update") }
+    @objc func uninstallBackend() { backendChange("uninstall") }
+
+    // 更新/卸载先按页面原有未保存判断（默认继续编辑），再请家长确认；只处理本入口安装且记录可核对的后台。
+    func backendChange(_ command: String) {
+        let update = command == "update"
+        guard !backendBusy, update ? backendState == "update_available" : ["update_available", "current"].contains(backendState) else { return }
+        let go = {
+            guard self.confirmBackend(update ? "更新后台到这个版本？" : "卸载后台？",
+                                      update ? "更新前会先做完整备份并核对；更新时网页暂停一两分钟。没有完成会自动恢复原版本，资料都保留。"
+                                             : "会停止后台并删除程序文件；家庭资料和备份全部保留在这台 Mac 上，不会删除。",
+                                      update ? "更新" : "卸载") else { return }
+            self.backendBusy = true
+            self.status(update ? "正在更新后台，请稍候；完成后自动重新打开。" : "正在卸载后台…", retry: false)
+            let fault = update ? self.faultPending : nil
+            if update { self.faultPending = nil }
+            runBackend(command, fault: fault) { reply in
+                self.backendBusy = false
+                self.backendReplies.append(reply.raw)
+                emit(["state": "backend_" + command, "ok": reply.ok, "result": reply.state, "message": reply.message])
+                self.window?.subtitle = reply.message
+                if update || !reply.ok {
+                    if reply.ok { self.backendState = "current" }
+                    self.attempts = 0
+                    self.connect()
+                } else {
+                    self.backendState = reply.state
+                    self.status(reply.message, retry: false)
+                }
+                if !smoke { let alert = NSAlert(); alert.messageText = reply.message; alert.addButton(withTitle: "好"); alert.runModal() }
+            }
+        }
+        if let web = webView, !web.isHidden {
+            unsaved(web) { dirty in if !dirty || self.confirmDiscard(update ? "更新后台" : "卸载后台") { go() } }
+        } else { go() }
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(updateBackend) { return !backendBusy && backendState == "update_available" }
+        if item.action == #selector(uninstallBackend) { return !backendBusy && ["update_available", "current"].contains(backendState) }
+        return true
     }
 
     @objc func submitSetup() {
@@ -359,7 +547,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func nextScriptedSetup() {
         guard smoke else { return }
         // 页面已打开后由页面检查负责结束测试；这里只在首用表单阶段输入用完时结束。
-        guard !scriptedInputs.isEmpty else { if mainLoads == 0 { finishSmoke() }; return }
+        guard !scriptedInputs.isEmpty else { if mainLoads == 0 && !installScripted && !backendBusy { finishSmoke() }; return }
         let text = scriptedInputs.removeFirst()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             guard !self.setupView.isHidden else { return }
@@ -555,6 +743,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             let item = NSMenuItem(); let sub = NSMenu(title: title); items.forEach(sub.addItem); item.submenu = sub; main.addItem(item)
         }
         add("一起成长", [NSMenuItem(title: "更改本机服务地址…", action: #selector(changeAddress), keyEquivalent: ""),
+                     NSMenuItem(title: "更新后台到这个版本…", action: #selector(updateBackend), keyEquivalent: ""),
+                     NSMenuItem(title: "卸载后台（保留家庭资料）…", action: #selector(uninstallBackend), keyEquivalent: ""),
                      NSMenuItem.separator(),
                      NSMenuItem(title: "隐藏一起成长", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"),
                      NSMenuItem.separator(),
@@ -652,6 +842,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
 
     func sleep(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
 
+    // 测试：经菜单同一路径更新/卸载（确认框自动选执行），等到后台回执；更新后等原页面重新打开。
+    func backendStep(_ command: String) async -> [String: Any] {
+        for _ in 0..<100 where backendState.isEmpty { await sleep(0.1) }
+        let before = backendReplies.count, loads = mainLoads
+        backendChange(command)
+        for _ in 0..<3000 where backendReplies.count == before { await sleep(0.1) }
+        guard backendReplies.count > before, let reply = backendReplies.last else {
+            return ["ok": false, "error": "no backend reply", "backend_state": backendState]
+        }
+        if command == "update" { for _ in 0..<600 where mainLoads == loads { await sleep(0.1) } }
+        return ["ok": true, "reply": reply, "main_frame_loads": mainLoads, "reloaded": mainLoads > loads,
+                "web_visible": webView?.isHidden == false, "subtitle": window?.subtitle ?? "", "backend_state": backendState]
+    }
+
     // 关窗、Esc、Cmd+Q 实际经过同一窗口/应用委托；测试模式里确认框自动选默认的“继续编辑”。
     func closeAttempts(_ web: WKWebView, _ window: NSWindow) async -> [String: Any] {
         let wasDirty = await dirty(web)
@@ -703,6 +907,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 case "snapshot": await snapshot(name); result = ["ok": true]
                 case "close_attempts": result = await closeAttempts(web, window)
                 case "change_address": result = await changeAddressAttempt(discard: step["discard"] as? Bool == true)
+                case "update_backend": result = await backendStep("update")
+                case "uninstall_backend": result = await backendStep("uninstall")
                 default: result = await runStep(web, step)
                 }
                 steps.append(["name": name, "result": result])

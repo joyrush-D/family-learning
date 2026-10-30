@@ -163,6 +163,8 @@
 !/test_settings_ui.cjs
 !/configure_mac.py
 !/test_configure_mac.py
+!/test_mac_backend.py
+!/test_mac_install.cjs
 !/family_collector_mac.py
 !/test_collector_mac.py
 !/family_qq_cua.py
@@ -354,6 +356,9 @@
 !/packaging/macos/Info.plist
 !/packaging/macos/build.sh
 !/packaging/macos/README.md
+!/packaging/macos/backend.py
+!/packaging/macos/build_bundle.py
+!/packaging/macos/runtime.lock.json
 !/packaging/macos/Sources/
 /packaging/macos/Sources/*
 !/packaging/macos/Sources/DesktopPolicy.swift

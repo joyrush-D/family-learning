@@ -52,7 +52,8 @@ def cli_path(value, *, executable=False):
     return str(path)
 
 
-def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile_url=None):
+def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile_url=None, label=LABEL, python=None, deeptutor_python=None):
+    """label/python/deeptutor_python 只供 Mac App 安装器使用：服务名、包外稳定运行时与 DeepTutor 显式解释器；默认行为不变。"""
     if sys.version_info < (3, 10):
         raise ValueError('需要 Python 3.10 或以上版本；请使用已安装的新版本运行本命令')
     root = Path(root).expanduser().resolve(strict=True)
@@ -70,7 +71,8 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
     if tls_hosts:
         family_tls.openssl_binary()
     child_path, child_public = _mobile_paths(mobile) if mobile else ('', '')
-    python = str(Path(sys.executable).resolve(strict=True))
+    python = str(Path(python or sys.executable).resolve(strict=True))
+    deeptutor = str(Path(deeptutor_python).resolve(strict=True)) if deeptutor_python else None
     wechat = cli_path(wechat_cli or shutil.which('wechat-cli'), executable=True)
     qq = cli_path(qq_cli)
     config = {'app_url': url}
@@ -93,10 +95,12 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
             arguments += ['--root', str(root), 'daily']
         environment = {'PATH': path, 'PYTHONUNBUFFERED': '1', 'FAMILY_DATA': str(private),
                        'PORT': str(urlsplit(url).port or 80)}
+        if deeptutor:
+            environment['FAMILY_DEEPTUTOR_PYTHON'] = deeptutor
         if mobile and kind == 'web':
             environment.update(FAMILY_CHILD_SECURE='1' if urlsplit(mobile).scheme == 'https' else '0', FAMILY_CHILD_COOKIE_PATH=child_path,
                                FAMILY_CHILD_PUBLIC_URL=child_public, FAMILY_CALENDAR_ID='local-family-learning')
-        plist = dict(Label=LABEL + '.' + kind, ProgramArguments=arguments, WorkingDirectory=str(root),
+        plist = dict(Label=label + '.' + kind, ProgramArguments=arguments, WorkingDirectory=str(root),
                      RunAtLoad=kind != 'collector' or enabled, ProcessType='Background', Umask=0o077,
                      EnvironmentVariables=environment,
                      StandardOutPath=str(private / (kind + '.stdout.log')),
@@ -112,7 +116,7 @@ def plan(root, url='http://127.0.0.1:8765', wechat_cli=None, qq_cli=None, mobile
         if kind == 'collector' and not enabled:
             plist['Disabled'] = True
         files['LaunchAgents/' + plist['Label'] + '.plist'] = plistlib.dumps(plist)
-    return {'root': root, 'url': url, 'mobile_url': mobile, 'collector_enabled': enabled, 'files': files, 'tls_hosts': tls_hosts}
+    return {'root': root, 'url': url, 'mobile_url': mobile, 'collector_enabled': enabled, 'files': files, 'tls_hosts': tls_hosts, 'label': label}
 
 
 def exclusive_write(path, content):
@@ -153,10 +157,11 @@ def wait_for_web(plan):
     raise ValueError('网页与数据库未在10秒内就绪；正在撤销本次安装，已有资料保留')
 
 
-def install(plan):
+def install(plan, agents=None):
     if sys.platform != 'darwin' or os.getuid() == 0:
         raise ValueError('--install 只支持已登录的 macOS 普通用户；不要使用 sudo')
-    agents = no_links(Path.home() / 'Library/LaunchAgents')
+    agents = no_links(Path(agents) if agents else Path.home() / 'Library/LaunchAgents')
+    prefix = plan.get('label', LABEL)
     private = no_links(plan['root'] / 'private')
     targets = {private / 'collector.json': plan['files']['private/collector.json']}
     targets.update({agents / Path(name).name: content for name, content in plan['files'].items() if name.startswith('LaunchAgents/')})
@@ -164,8 +169,8 @@ def install(plan):
         target = plan['root'] / name
         if target.exists() or target.is_symlink():
             raise ValueError('已有手机访问配置；不会覆盖，请先核对原安装')
-    labels = [LABEL, LABEL + '.web', LABEL + '.agent', LABEL + '.collector', LABEL + '.backup']
-    if any(p.exists() or p.is_symlink() for p in [*targets, agents / (LABEL + '.plist')]):
+    labels = [prefix, prefix + '.web', prefix + '.agent', prefix + '.collector', prefix + '.backup']
+    if any(p.exists() or p.is_symlink() for p in [*targets, agents / (prefix + '.plist')]):
         raise ValueError('已有家庭服务或 collector.json；不会覆盖、卸载或改动，请先核对原安装')
     domain = 'gui/' + str(os.getuid())
     run = lambda *args: subprocess.run(['/bin/launchctl', *args], capture_output=True, timeout=20, check=False)
@@ -199,7 +204,7 @@ def install(plan):
         for kind in ('web', 'agent', 'collector', 'backup'):
             if kind == 'collector' and not plan['collector_enabled']:
                 continue
-            target = agents / (LABEL + '.' + kind + '.plist')
+            target = agents / (prefix + '.' + kind + '.plist')
             attempted.append(target)
             if run('bootstrap', domain, str(target)).returncode:
                 raise ValueError('新服务加载失败；正在撤销本次安装的服务文件，已有家庭资料保留')
