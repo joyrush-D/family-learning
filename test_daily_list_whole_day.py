@@ -16,6 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import family_agenda
 import family_agent as agent
 import family_deeptutor
 import family_study
@@ -636,6 +637,33 @@ def serve_actual(port, guards=()):
     finally:
         case.doCleanups()
 
+
+
+class ImageOriginalDateScopeTests(unittest.TestCase):
+    """The two requirements a fictional English teacher's linked image holds, as its actual reader reply restated them on
+    their sending day: the shared date readers give the evening work its own completion day and the next day's lesson
+    dictation its classroom check, as the same message words (今晚…；明天英语课听写) already read. Each from its own words only."""
+    SENT = DAY + 'T16:02:00+08:00'
+    FOLLOW = '2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍；不用抄写。'
+    DICTATION = '2026年11月5日英语课参加听写。'
+
+    def test_the_evening_work_keeps_its_own_completion_day(self):
+        self.assertEqual(family_agenda.completion_day(self.FOLLOW, '', self.SENT, ''), DAY)
+        self.assertEqual(family_agenda.completion_day(self.FOLLOW, '', self.SENT, DAY), '')  # due_on is never rewritten
+        self.assertNotIn(family_agenda.date_meaning(self.FOLLOW, DAY, DAY, '英语'), ('handback', 'inspection', 'arranged'))
+
+    def test_the_lesson_dictation_is_the_classroom_check_not_a_home_deadline(self):
+        self.assertEqual(family_agenda.deadlines(self.DICTATION, DAY), {'2026-11-05'})
+        self.assertEqual(family_agenda.date_meaning(self.DICTATION, '2026-11-05', DAY, '英语'), 'inspection')
+        self.assertEqual(family_agenda.date_meaning('明天英语课听写。', '2026-11-05', DAY, '英语'), 'inspection')
+        self.assertEqual(family_agenda.completion_day(self.DICTATION, '', self.SENT, '2026-11-05'), '')
+
+    def test_unknown_past_or_handed_in_days_stay_unknown(self):
+        self.assertEqual(family_agenda.completion_day('2026年11月3日晚听音频跟读Unit 7单词。', '', self.SENT, ''), '')
+        self.assertEqual(family_agenda.completion_day('2026年11月4日晚交回练习册。', '', self.SENT, ''), '')
+        self.assertEqual(family_agenda.completion_day('2026年11月4日晚不用跟读。', '', self.SENT, ''), '')
+        self.assertEqual(family_agenda.completion_day('英语：老师布置的两项要求见图片。', '', self.SENT, ''), '')
+        self.assertEqual(family_agenda.completion_day(self.FOLLOW, '', DAY + 'T16:02:00', ''), '')  # no written timezone
 
 if __name__ == '__main__':
     import sys
