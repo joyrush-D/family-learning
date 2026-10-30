@@ -347,3 +347,16 @@
 !/third_party/deeptutor/src/deeptutor/utils/secret_files.py
 !/third_party/deeptutor/src/deeptutor/utils/text_display.py
 !/test_taxonomy.py
+!/packaging/
+/packaging/*
+!/packaging/macos/
+/packaging/macos/*
+!/packaging/macos/Info.plist
+!/packaging/macos/build.sh
+!/packaging/macos/README.md
+!/packaging/macos/Sources/
+/packaging/macos/Sources/*
+!/packaging/macos/Sources/DesktopPolicy.swift
+!/packaging/macos/Sources/SelfTest.swift
+!/packaging/macos/Sources/main.swift
+!/test_mac_desktop.cjs
