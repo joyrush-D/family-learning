@@ -155,7 +155,7 @@ function fixtures(base){
     }
     assert.deepEqual(errors,[]);
     let printAttempts=0,draftCalls=0;const printBodies=[];
-    await p.route('**/api/print/homework/materials?task_id=TODAY',r=>r.fulfill({json:{task:{id:'TODAY',child:state.children[0].name},files:['虚构题目.png','虚构题目续页.png'].map(name=>({name,source:{type:'attachment',name}})),school_error:''}}));
+    await p.route('**/api/print/homework/materials?task_id=TODAY',r=>r.fulfill({json:{task:{id:'TODAY',child:state.children[0].name},print_basis:'b'.repeat(64),files:['虚构题目.png','虚构题目续页.png'].map(name=>({name,source:{type:'attachment',name}})),school_error:''}}));
     await p.route('**/api/print/homework/draft',r=>{assert.equal(r.request().postDataJSON().task_id,'TODAY');draftCalls++;return r.fulfill({status:200,contentType:'application/json',body:JSON.stringify({draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'一页'},question_sha256:'a'.repeat(64)})})});
     await p.route('**/api/print/homework',async route=>{printBodies.push(route.request().postDataJSON());printAttempts++;
       await route.fulfill({status:printAttempts===1?503:200,contentType:'application/json',body:JSON.stringify(printAttempts===1?{error:'虚构打印失败'}:{jobs:{question:{id:'1'.repeat(32)},questions:printBodies.at(-1).question_sources.map((_,n)=>({id:String(n+1).repeat(32)})),guide:{id:'2'.repeat(32)}}})})});
@@ -179,7 +179,7 @@ function fixtures(base){
     await printForm.locator('[type="submit"]').click();await eventually(async()=>await printForm.locator('[type="submit"]').isEnabled(),'failed pair remains editable');
     assert.match(await p.locator('#homeworkPrintError').innerText(),/虚构打印失败/);
     await printForm.locator('[type="submit"]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').isVisible(),'pair retried');
-    assert.equal(printAttempts,2);assert.equal(printBodies[0].request_key,printBodies[1].request_key);
+    assert.equal(printAttempts,2);assert.equal(printBodies[0].request_key,printBodies[1].request_key);assert.deepEqual(printBodies.map(b=>b.confirmed_basis),['b'.repeat(64),'b'.repeat(64)]);
     assert.equal(printBodies[0].guide_source,null);assert.equal(printBodies[0].question_sources.length,2);assert.equal(printBodies[0].expected_question_sha256,'a'.repeat(64));assert.equal(await p.locator('body').getAttribute('data-page'),'print');
     let releaseDraft;
     await p.unroute('**/api/print/homework/draft');
@@ -192,7 +192,7 @@ function fixtures(base){
     assert.equal(await printForm.locator('[name="guide_text"]').inputValue(),'家长在等待期间填写的参考');
     // Fictional print review: a two-page PDF sat under "题目第1页" and an extra image under "还有第2—4页题目". A slot holds one file: titles, the extra choice, the empty-choice message, the queue line and the receipt count files in slot order and never guess PDF pages.
     await p.locator('#homeworkPrintDialog [data-close]').click();await p.unroute('**/api/print/homework/materials?task_id=TODAY');await p.evaluate(()=>{for(const key of Object.keys(sessionStorage))if(key.startsWith('family-homework-print:'))sessionStorage.removeItem(key)});
-    const fileNames=['虚构两页题目.pdf','虚构补充题.png'];await p.route('**/api/print/homework/materials?task_id=TODAY',r=>r.fulfill({json:{task:{id:'TODAY',child:state.children[0].name},files:fileNames.map(name=>({name,source:{type:'attachment',name}})),school_error:''}}));
+    const fileNames=['虚构两页题目.pdf','虚构补充题.png'];await p.route('**/api/print/homework/materials?task_id=TODAY',r=>r.fulfill({json:{task:{id:'TODAY',child:state.children[0].name},print_basis:'b'.repeat(64),files:fileNames.map(name=>({name,source:{type:'attachment',name}})),school_error:''}}));
     await p.locator('[data-query-target="task:TODAY"] details.task-more').evaluate(x=>x.open=true);await p.locator('[data-query-target="task:TODAY"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
     assert.deepEqual(await printForm.locator('select[name^="question_source"]').evaluateAll(xs=>xs.map(x=>x.closest('label').firstChild.textContent)),['第1份题目文件','第2份题目文件','第3份题目文件','第4份题目文件'],'each slot is titled as one file');
     await printForm.locator('[name="question_source"]').selectOption({label:fileNames[0]});await printForm.locator('details summary').click();await printForm.locator('[name="question_source_2"]').selectOption({label:fileNames[1]});

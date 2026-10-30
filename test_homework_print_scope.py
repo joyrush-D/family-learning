@@ -55,6 +55,10 @@ class HomeworkPrintScopeTests(unittest.TestCase):
     def source(ident): return dict(type='upload',id=ident)
 
     def request(self,method,path,obj=None):
+        if method=='POST' and path=='/api/print/homework' and isinstance(obj,dict) and 'confirmed_basis' not in obj:
+            # The real page sends the basis it read with the materials; fill it the same way.
+            status,value=self.request('GET','/api/print/homework/materials?task_id='+str(obj.get('task_id')))
+            if status==200: obj=dict(obj,confirmed_basis=value['print_basis'])
         conn=HTTPConnection('127.0.0.1',self.server.server_port,timeout=5)
         try:
             conn.request(method,path,json.dumps(obj).encode() if obj is not None else None,{'X-Family-Token':app.TOKEN})

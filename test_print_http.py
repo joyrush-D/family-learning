@@ -49,6 +49,10 @@ class PrintHTTPTests(unittest.TestCase):
         finally: conn.close()
 
     def post(self,path,obj,headers=None):
+        if path=='/api/print/homework' and isinstance(obj,dict) and 'confirmed_basis' not in obj:
+            # The real page sends the basis it read with the materials; fill it the same way.
+            status,_,body=self.request('GET','/api/print/homework/materials?task_id='+str(obj.get('task_id')),None,self.parent if headers is None else headers)
+            if status==200: obj=dict(obj,confirmed_basis=json.loads(body)['print_basis'])
         return self.request('POST',path,obj,self.parent if headers is None else headers)
 
     def config(self,printers=None):

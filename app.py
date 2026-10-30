@@ -1107,6 +1107,21 @@ def homework_review_context(c,task_id,record_id,expected_created=None):
     fingerprint=hashlib.sha256(json.dumps(context,ensure_ascii=False,sort_keys=True).encode()).hexdigest()
     return dict(task=task,record=dict(row),allowed=material['allowed'],context_sha256=fingerprint,school_error=material['school_error'])
 
+PRINT_BASIS_CHANGED='这项作业的要求或归属已更新，尚未打印；已选文件、参考文字和原打印编号保留。请关闭后重新打开，对照新版再核对两项'
+PRINT_BASIS_REQUIRED='这次打印请求没有带上当前作业的核对依据，尚未新建打印；原打印编号保留。请刷新或重新打开后对照当前要求核对两项，并到打印页查看原打印进展'
+
+def homework_print_basis_given(obj):
+    """Only a well-formed basis read with the materials may queue; anything else may at most read a complete receipt back."""
+    return isinstance(obj.get('confirmed_basis'),str) and re.fullmatch(r'[a-f0-9]{64}',obj['confirmed_basis']) is not None
+
+def homework_print_basis(c,task):
+    """What both print checks were made against: this child's same task, its saved requirement, school source and open state.
+    Due dates and ordinary feedback stay out; it is not part of the queued jobs' source snapshot, so original-number retries keep their fingerprints."""
+    update=c.execute('SELECT status FROM task_updates WHERE id=?',(task['id'],)).fetchone()
+    basis={k:task.get(k) for k in ('id','child','source','title','action')}|dict(category=task.get('agenda',{}).get('category'),
+        closed=task_status(task,update['status'] if update else None) in TASK_CLOSED)
+    return hashlib.sha256(json.dumps(basis,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
+
 def homework_print_sources(obj,*,pair=False,connection=None,expected=None,freeze=False):
     """Scope selected originals; a server-only snapshot also guards preparation and the enqueue transaction."""
     questions=family_print.question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
@@ -1123,6 +1138,9 @@ def homework_print_sources(obj,*,pair=False,connection=None,expected=None,freeze
                 if current is None or task_basis(current)!=expected['context']['task']:
                     raise family_print.PrintError('作业归属或来源已变化，请重新打开核对','review_source_changed',409)
             context=homework_material_context(c,obj.get('task_id'))
+            # A page that read the basis must still match it here: before any preparation and again in each queue transaction.
+            if pair and homework_print_basis_given(obj) and obj['confirmed_basis']!=homework_print_basis(c,context['task']):
+                raise family_print.PrintError(PRINT_BASIS_CHANGED,'print_basis_changed',409)
             for source in sources:
                 if (not isinstance(source,dict) or set(source)!={'type','id'} or source.get('type')!='upload'
                         or not isinstance(source.get('id'),str) or source['id'] not in context['allowed']
@@ -2342,12 +2360,12 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     with connect_read_only() as c:
                         c.execute('BEGIN')
-                        context=homework_material_context(c,query['task_id'][0])
+                        context=homework_material_context(c,query['task_id'][0]);basis=homework_print_basis(c,context['task'])
                 except sqlite3.OperationalError:
                     return self.reply(503,dict(error='作业资料暂时无法读取；本次读取未更改任何资料',code='storage_unavailable'))
                 files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'])
                        for ident,value in context['allowed'].items() if value['origin']!='review_result']
-                return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},files=files,school_error=context['school_error']))
+                return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},files=files,school_error=context['school_error'],print_basis=basis,task_title=context['task']['title']))
             if path=='/api/print/homework/sources':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if (set(query)!={'task_id','record_id'} or any(len(v)!=1 for v in query.values())
@@ -2572,9 +2590,15 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/print/homework':
                 authorized_printer(obj.get('printer'),color=obj.get('color','monochrome'),sides=obj.get('sides','one-sided'))
                 frozen=homework_print_sources(obj,pair=True,freeze=True)
+                guard=lambda c:homework_print_sources(obj,pair=True,connection=c,expected=frozen)
+                if not homework_print_basis_given(obj):
+                    # Without the basis the page read nothing is prepared or queued anew: only a request whose every job is
+                    # already queued for this same child, task, originals and settings reads its receipt back.
+                    return self.reply(200,dict(jobs=print_store().homework_receipt(obj,frozen['task'],queue_guard=guard,
+                        context_sha256=frozen['context_sha256'],source_sha256=frozen['source_sha256'],refusal=PRINT_BASIS_REQUIRED)))
                 return self.reply(200,dict(jobs=print_store().homework_pair(obj,frozen['task'],
                     before_queue=lambda:homework_print_sources(obj,pair=True,expected=frozen),
-                    queue_guard=lambda c:homework_print_sources(obj,pair=True,connection=c,expected=frozen),
+                    queue_guard=guard,
                     context_sha256=frozen['context_sha256'],source_sha256=frozen['source_sha256'])))
             if path=='/api/print/cancel': return self.reply(200,dict(job=print_store().cancel(obj.get('job_id'))))
             if path=='/api/print/received': return self.reply(200,dict(job=print_store().confirm_received(obj.get('job_id'),obj.get('note'))))
