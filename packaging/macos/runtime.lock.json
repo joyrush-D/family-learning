@@ -1,0 +1,60 @@
+{
+ "note": "构建一起成长.app 时只用这些已核对的官方材料；构建不联网，hash 不符即停止。",
+ "python": {
+  "implementation": "CPython",
+  "version": "3.11.18",
+  "release": "python-build-standalone 20261026",
+  "target": "aarch64-apple-darwin",
+  "archive": "cpython-3.11.18+20261026-aarch64-apple-darwin-install_only_stripped.tar.gz",
+  "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-aarch64-apple-darwin-install_only_stripped.tar.gz",
+  "sha256": "f3e1cd83a7f1d70e58b0d69102c18bd6867d2f973068dc5cbfd5822e445c66df",
+  "license": "Python Software Foundation License (CPython) and the bundled component licenses in runtime-notices"
+ },
+ "wheels": [
+  {
+   "name": "pydantic",
+   "version": "2.14.1",
+   "filename": "pydantic-2.14.1-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/35/ea/a56b9fe5066f3537b7882f77e9c5dfb26d8c2eefdaed9b5fc73d57b4dc22/pydantic-2.14.1-py3-none-any.whl",
+   "sha256": "9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454",
+   "license": "MIT",
+   "source": "https://pypi.org/project/pydantic/2.14.1/"
+  },
+  {
+   "name": "pydantic_core",
+   "version": "2.50.1",
+   "filename": "pydantic_core-2.50.1-cp311-cp311-macosx_11_0_arm64.whl",
+   "url": "https://files.pythonhosted.org/packages/59/20/938ef7e0541af0a314e2f9d63848dbd1656ba2ebfe5ca0469f7ebee00d5e/pydantic_core-2.50.1-cp311-cp311-macosx_11_0_arm64.whl",
+   "sha256": "b6d0c2183008c188e19f4906d426b293bdc4f67ab17df8e180fe16cda208fa71",
+   "license": "MIT",
+   "source": "https://pypi.org/project/pydantic_core/2.50.1/"
+  },
+  {
+   "name": "annotated-types",
+   "version": "0.8.0",
+   "filename": "annotated_types-0.8.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/99/91/8acff4f5e50511b911bbccb72b8628a49c68ce14148cd9f6431094859a90/annotated_types-0.8.0-py3-none-any.whl",
+   "sha256": "f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0",
+   "license": "MIT",
+   "source": "https://pypi.org/project/annotated-types/0.8.0/"
+  },
+  {
+   "name": "typing-extensions",
+   "version": "4.16.0",
+   "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+   "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8",
+   "license": "PSF-2.0",
+   "source": "https://pypi.org/project/typing-extensions/4.16.0/"
+  },
+  {
+   "name": "typing-inspection",
+   "version": "0.4.4",
+   "filename": "typing_inspection-0.4.4-py3-none-any.whl",
+   "url": "https://files.pythonhosted.org/packages/67/81/4add07e5172b7ac40d8ed5ff580409a7801a4fe26d529bdd915401dabfbe/typing_inspection-0.4.4-py3-none-any.whl",
+   "sha256": "65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147",
+   "license": "MIT",
+   "source": "https://pypi.org/project/typing-inspection/0.4.4/"
+  }
+ ]
+}

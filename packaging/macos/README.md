@@ -1,14 +1,13 @@
-# 一起成长桌面入口（内部候选）
+# 一起成长.app（内部候选）
 
-AppKit + WKWebView 薄壳：只打开家长已配置的本机原服务，业务界面和数据仍由现有 `app.py` 与网页负责。这是 Mac App 目标的第一份内部里程碑，**不是**独立安装包：不内置 Python 或服务，不安装、启动、停止或改动任何 launchd 服务、配置或业务游标；未做 Developer ID 签名和公证。
+AppKit + WKWebView 薄壳：业务界面和数据仍由现有 `app.py` 与网页负责，网页不获得任何原生桥接。完整包另带 Python 运行环境与当前提交的程序，新家庭可以在 App 里点击安装后台，不需要终端、Homebrew 或开发用 Python。用户最新要求的SwiftUI原生主工作台另行实现；本包的WKWebView界面只用于打包、数据保护与后台生命周期内部验收，不作为最终Mac界面交付。未做Developer ID签名和公证（只有本机ad-hoc签名）；干净Mac首次打开与正式分发仍待验证。
 
-- 构建：`packaging/macos/build.sh [输出目录]`，只用系统 `swiftc` 和 AppKit/WebKit，产物做本机 ad-hoc 签名。默认输出到 `packaging/macos/build/`（Git 忽略）。
-- 配置：首次打开显示一个原生小表单，预填默认本机地址 `http://127.0.0.1:8765`，可改成本机其他端口；只有确认该地址上确是一起成长网页后才保存并直接打开原清单。地址不合规、不是本服务或服务不在时说明原因、不保存；已保存的地址失效时可在失败状态点“更改地址”或菜单“更改本机服务地址…”纠正。家长不需要编辑文件；地址保存在本用户 Application Support 下桌面入口自己的目录（仅本用户可读写：目录 0700、`desktop.json` 0600），外链白名单默认为空、只能手工加入，更正地址时原样保留。登录态保存在本用户的 WebKit 数据目录，包内没有家庭数据、密钥或配置。
-- 行为：
-  - 按解析后的 scheme/host/port 完全相等限定同源，阻止 file/data/其他端口/带账号密码/其他程序的导航；
-  - 证书错误不忽略；麦克风只在原服务主页面实际请求时交系统询问，其他媒体拒绝；
-  - 第二次打开只聚焦原窗口；关窗、退出和“更改本机服务地址…”都先按页面原有 beforeunload 确认，默认“继续编辑”，保留原画面、草稿和原地址；明确放弃后才显示地址表单，新地址确认后才重新载入；
-  - 服务不在时有界重试，绝不改用其他端口或自行启动服务。
-- 来源：生命周期设计参考了 margrop/wrong-notebook 03153ef7 的 `packaging/desktop/main.js`（MIT，wttwins 2025、margrop 2026），但没有复制任何代码，也不使用其 Electron/Node 服务管理。
-- 测试模式：`--smoke-test` 只用于虚构 demo，必须另给 `FAMILY_DESKTOP_SUPPORT_DIR`（不能是默认目录）和受信虚构 `FAMILY_DESKTOP_TEST_ORIGIN`，否则以退出码 2 拒绝。测试时 WebKit 数据不落盘、不保存窗口位置，不读写本用户默认会话；选文件改回测试声明的虚构文件，麦克风一律拒绝（不触发系统权限询问），网页确认框选“取消”。每步网页操作由原生一侧限时并逐步输出结果，超时或异常如实回执。测试操作只由原生一侧在隔离脚本世界执行，网页仍没有任何原生桥接。
-- 验收：`node test_mac_desktop.cjs`（虚构 demo，真实 WKWebView 窗口；可选 `FAMILY_DESKTOP_EVIDENCE_DIR` 保存行日志与截图，可选 Playwright Chrome 基线）。
+- 构建：`packaging/macos/build.sh [输出目录]`，只用系统 `swiftc`、AppKit/WebKit。同时给 `FAMILY_MAC_MATERIALS`（官方 CPython 压缩包、`runtime-notices/`、`MATERIAL-MANIFEST.json`）和 `FAMILY_MAC_WHEELS`（`runtime.lock.json` 所列 wheel）时打完整包，否则只构建连接入口。`FAMILY_MAC_BUILD_NUMBER` 是构建号（默认 1，更新只接受更大的构建号）。构建不联网：CPython 3.11.18 arm64（python-build-standalone 20261026）与 pydantic 2.14.1、pydantic_core 2.50.1、annotated-types 0.8.0、typing_extensions 4.16.0、typing-inspection 0.4.4 的官方 PyPI wheel 都按 `runtime.lock.json` 的来源与 sha256 核对，hash 不符即停止；上游许可证随包放在 `Contents/Resources/licenses/`。程序只取 git HEAD 已提交的公开文件（不含测试与构建源码），逐文件 hash 写进 `Contents/Resources/BUILD.json`。默认输出 `packaging/macos/build/`（Git 忽略）。
+- 首次使用：先按原表单连接已有后台（默认 `http://127.0.0.1:8765`，确认是一起成长网页才保存并打开原清单）。只有没有桌面连接设置时才做只读检查：这台 Mac 没有本入口的安装或资料目录、没有本服务名或任何运行家庭程序/指向家庭资料的登录服务、端口空闲，才显示“在这台 Mac 上安装后台”。已有设置、已知服务（含离线）或端口被占用时只说明原因和原纠正入口，不复制主库、不改端口、不另起服务。
+- 安装：家长点击后，包内 `backend.py` 把运行时与程序复制到本用户 `~/Library/Application Support/local.yiqichengzhang.backend/`（0700；资料在其中 `app/private/`），再复用 `configure_mac.plan/install` 装原 web/agent/collector/backup 登录服务（`~/Library/LaunchAgents/local.family-learning.*`，与原手动安装同一服务名，同一用户只能有一套）。服务指向包外的稳定副本，移动或删除 .app 不影响后台；关窗、退出、强杀 App 后后台继续，再次打开只连接原服务。消息来源未接入时 collector 不加载；DeepTutor 子进程经 `FAMILY_DEEPTUTOR_PYTHON` 显式使用同一已带 pydantic 2 的稳定运行时，仍是原独立子进程与临时目录。安装失败由 `configure_mac.install` 撤销服务和配置，并删除本次新建、尚无家庭资料的目录。没有 root、系统 LaunchDaemon 或自动更新服务。
+- 更新：只在本入口安装、记录可逐文件核对（程序 hash、服务设置 hash、运行时）且包的构建号更大时，菜单“更新后台到这个版本…”可用，经页面原有未保存确认和家长确认后才执行：停下全部写入者→用当前运行代码做一致备份（`private/backups/更新前-*.zip`）→用新代码 `family_backup.py restore` 到隔离临时目录，核对完整性。备份包里的主库与停写的原库逐表逐行一致（每张表含空表的列定义、行数与全部行的值和存储类型做多重集摘要，与行顺序无关），包内设置文件与原文件一致；隔离恢复也逐表逐行对比，只允许恢复规则有意的差异（清空登录/邀请表、挂起未完成打印与计时的状态列、停用 Agent），这些规则只用于隔离副本，不用于在用主库→留一份逐文件核对过的旧代码→换运行时、程序和服务设置→写入方仍停着时再核主库全部表逐行（含全部会话与到期时间）和 `private/` 设置文件（访问与手机凭据、证书、Agent/采集设置等，只比摘要、不输出）与停写时完全一致，才启动→启动后核旧表都在、停写那一刻有效的会话（含五分钟内到期和旧格式到期时间）都在，只有确已到期的可以不在。任何一步失败只退回已核对的旧代码与服务设置并重新启动，主库原地保留（不用备份回灌），启动后新服务写入的资料保留；写入方恢复前发现设置文件被改，就不启动任何服务并提示联系维护的人。安装记录缺失、被手动改动或版本不明就拒绝更新/卸载。
+- 卸载：菜单“卸载后台（保留家庭资料）…”只停本入口的服务、删除服务设置、程序与运行时；`app/private/` 中的主库、附件与备份和安装记录保留，之后也不会在原资料旁另装一套。删除 .app 本身不触碰后台或资料。
+- 外链白名单、证书错误不忽略、同源导航、下载/选文件/麦克风、草稿与关窗/退出确认、单实例与有界重试保持原入口规则；家长屏幕不显示路径、命令或进程号，技术细节只写进桌面入口自己的 Support 目录。
+- 来源：生命周期设计参考了 margrop/wrong-notebook 03153ef7 的 `packaging/desktop/main.js`（MIT，wttwins 2025、margrop 2026），没有复制代码，也不使用其 Electron/Node 服务管理。
+- 测试模式：`--smoke-test` 只用于虚构 demo，必须另给 `FAMILY_DESKTOP_SUPPORT_DIR`（不能是默认目录）和受信虚构 `FAMILY_DESKTOP_TEST_ORIGIN`，否则以退出码 2 拒绝。安装/更新/卸载在测试模式下还必须给 `FAMILY_DESKTOP_TEST_PROFILE`（本用户 Library 以外的虚构目录）：服务名改为 `test.yiqichengzhang.*`、服务设置放在该目录、端口取测试 origin，未给就不提供安装。测试时 WebKit 数据不落盘、不保存窗口位置；选文件改回测试声明的虚构文件，麦克风一律拒绝，网页确认框选“取消”，后台确认自动选执行。
+- 验收：`node test_mac_desktop.cjs`（连接入口，虚构 demo）；`FAMILY_MAC_APP_V1=… FAMILY_MAC_APP_V2=… node test_mac_install.cjs`（构建号 1、2 的完整包：首次安装→同一作业保存重开→关闭/强杀 GUI 后台不变→第二客户端同库→重复安装/端口冲突/离线已知服务零新写入者→有新资料的更新失败只退回代码→正常更新→模拟退出登录再登录→卸载保资料）；`python -m unittest test_mac_backend`。真实手机、QQ/微信登录、实际麦克风授权、真实重启与签名公证不在这些检查内。

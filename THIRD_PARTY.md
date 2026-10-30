@@ -1,5 +1,9 @@
 # 第三方复用与取舍
 
+## Mac App 内置运行时与离线依赖（2026-10-30，内部完整安装候选，未签名公证）
+
+`packaging/macos/build.sh` 只在构建时取已核对的官方材料，包内离线提供，不向用户全局 pip 安装：[python-build-standalone 20261026](https://github.com/astral-sh/python-build-standalone/releases/tag/20261026) 的 CPython 3.11.18 aarch64-apple-darwin `install_only_stripped`（CPython 为 PSF 许可，随附 bzip2、expat、libedit、libffi、liblzma、libuuid、mpdecimal、ncurses、OpenSSL 3、SQLite、Tcl、zlib、zlib-ng 等 14 份上游原许可证）；PyPI 官方 wheel pydantic 2.14.1（MIT）、pydantic_core 2.50.1 cp311 macOS arm64（MIT）、annotated-types 0.8.0（MIT）、typing_extensions 4.16.0（PSF-2.0）、typing-inspection 0.4.4（MIT），只供原 DeepTutor 子进程使用。来源网址与 sha256 固定在 `packaging/macos/runtime.lock.json`，hash 不符即停止构建；许可证原文随包在 `Contents/Resources/licenses/`。未改动上游代码；数学知识包仍按原可选导入与许可，不随安装器打入家庭私包。
+
 ## wrong-notebook桌面打包参考（2026-10-30，未接入）
 
 同一固定03153ef的[`packaging/desktop`](https://github.com/margrop/wrong-notebook/tree/03153ef7f9050f8df20247610888fc16c04c55e5/packaging/desktop)使用Electron45/electron-builder26，Mac输出dmg/zip；[`packages.yml`](https://github.com/margrop/wrong-notebook/blob/03153ef7f9050f8df20247610888fc16c04c55e5/.github/workflows/packages.yml)明确unsigned、关闭签名自动发现。这证明其打包路线，不证明本项目已有安装包或正式签名。M4实际Opus5.5限定评审完成，Root采纳Swift/WKWebView薄壳为主选、经实际WebKit不兼容才回退Electron；原网页/Python直接复用，桌面生命周期机制作为参考。当前未复制Electron壳源码；移植任何片段仍保MIT。原Node/Prisma服务、默认种子账号、同源前缀匹配与退出杀后台语义不照搬，按现有Python服务、认证、后台独立及唯一主库适配。Electron及所含Chromium/Node、Python与实际依赖须随选定版本另核许可和安全更新；正式分发签名公证按[Apple说明](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)，窗口隔离与权限按[Electron官方安全要求](https://www.electronjs.org/docs/latest/tutorial/security)。
