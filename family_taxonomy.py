@@ -487,6 +487,65 @@ def _same_retry(prev, mine, record):
     if prev['record_hash'] != record_hash(record): raise TaxonomyError(BASIS_CHANGED, 'basis_changed', 409)
 
 
+def _retry_note(q, topic, text, verdict, is_correct):
+    """The one wording retry() saves for an independent new attempt; retry_views() only compares a record to it."""
+    return '\n'.join([f"新题（{REVIEW_STATUS}）：{q.get('prompt', '')}", f"孩子作答：{text}",
+                      f"题库核对：{ {'correct': '对', 'wrong': '错'}[verdict] }；复核结果：{'对' if is_correct else '错'}（独立作答，两项检查一致）",
+                      f"知识点：{topic.get('name', '')}（{q['topicId']}，知识包{TAXONOMY_SHA[:7]}）",
+                      '这题此前各次诊断都没出示、没答过、没看过说明；一次结果不等于掌握。'])
+
+
+def retry_views(conn, records, profile_ids, root=None):
+    """Read-only short view of saved new-question attempts for the web and Mac lists alike. Found only through the explicit
+    topic_retries.followup_record_id; the original wrong record's record_hash and voids decide current or history, as in
+    task_progress. The question and topic name come from the fixed pack by the saved qid/topic_id, the child's answer is
+    the saved one; record text is compared whole with what retry() wrote, never parsed. A missing/other pack, unreadable
+    original or changed text keeps the record's own text shown. Nothing is written, settled, judged or called."""
+    ids = [r['id'] for r in records if r.get('source') == RETRY_SOURCE and r.get('followup_kind') == '复测']
+    if not ids: return {}
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('topic_diagnoses','topic_retries','topic_basis_voids')")}
+    if not {'topic_diagnoses', 'topic_retries'} <= tables: return {}
+    try: pack = load_pack(root)
+    except (TaxonomyError, OSError, ValueError): pack = None
+    by_id, out = {r['id']: r for r in records}, {}
+    for rid in ids:
+        rec = by_id[rid]; rows = conn.execute('SELECT * FROM topic_retries WHERE followup_record_id=?', (rid,)).fetchall()
+        if len(rows) != 1 or rows[0]['outcome'] not in ('independent_correct', 'independent_wrong'): continue
+        a = rows[0]; child_id = profile_ids.get(rec.get('child'))
+        if child_id is None or child_id != a['child_id']: continue
+        wrong = conn.execute('SELECT id,child,day,subject,title,note,source,attachments,created FROM records WHERE id=?', (int(a['record_id']),)).fetchone()
+        if wrong is not None and wrong['child'] != rec.get('child'): continue
+        d = conn.execute('SELECT pack_sha FROM topic_diagnoses WHERE id=?', (a['diagnosis_id'],)).fetchone()
+        try: dt = json.loads(a['deeptutor'] or '{}')
+        except ValueError: dt = {}
+        correct = a['outcome'] == 'independent_correct'
+        q = question(pack, a['qid']) if pack else None; topic = pack['by_id'].get(a['topic_id']) if pack else None
+        known = bool(q and topic and d and d['pack_sha'] == TAXONOMY_SHA and wrong is not None and q.get('topicId') == a['topic_id']
+                     and a['taxonomy_verdict'] in ('correct', 'wrong') and isinstance(dt.get('is_correct'), bool))
+        same = known and (rec.get('note') or '').strip() == _retry_note(q, topic, a['answer'], a['taxonomy_verdict'], dt['is_correct']).strip()
+        # Only a changed original or a recorded void proves a correction; an unreadable original proves neither.
+        voided = 'topic_basis_voids' in tables and conn.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?', (a['diagnosis_id'],)).fetchone() is not None
+        stale = voided or (wrong is not None and a['record_hash'] != record_hash({k: wrong[k] for k in wrong.keys()} | dict(child_id=child_id)))
+        missing = wrong is None and not stale
+        lines = ([['题目', f"{q.get('prompt', '')}（{REVIEW_STATUS}）"]] if known else []) + [['孩子原答', a['answer']],
+                 ['当时结果' if stale or wrong is None else '本次结果', ('对' if correct else '错') + ' · ' + (rec.get('assistance') or '独立作答') + ' · 题库核对与复核一致']]
+        lines += ([['知识点', topic.get('name', '')]] if known else []) + ([['原错题', wrong['title'] or '未写标题']] if wrong is not None else [])
+        status = (['原错题当前读不到，不能确认这次结果是否仍对应它；下面保留这条记录原文和当时保存的结果。'] if missing else
+                  ['原错题当前读不到；下面保留这条记录的原文。'] if wrong is None else [] if known else ['知识包当前读不到或版本不同，题目依据不明；下面保留这条记录的原文。'])
+        if known and not same: status.append('这条记录保存后改过文字；下面保留当前原文。')
+        if stale: status.append('原错题之后已更正，这次结果只作历史，不算当前进展。')
+        verdicts = {'correct': '对', 'wrong': '错'}
+        trace = ' · '.join(x for x in [f"题号{a['qid']}", a['topic_id'], f"知识包{(d['pack_sha'] if d else '')[:7] or '未知'}",
+                                       f"判定组件{str(dt.get('deeptutor_sha') or '')[:7]}" if dt.get('deeptutor_sha') else '',
+                                       f"题库核对{verdicts.get(a['taxonomy_verdict'], '未知')}、复核{'对' if dt.get('is_correct') is True else '错' if dt.get('is_correct') is False else '未知'}"] if x)
+        out[rid] = dict(state='history' if stale else 'current' if same else 'unclear' if not known else 'edited', lines=lines,
+                        status=' '.join(status), show_note=not same, wrong_id=a['record_id'] if wrong is not None else None, trace=trace,
+                        next='需要时按更正后的错题在原错题卡重新诊断。' if stale else
+                        '原错题恢复可读前，这次结果只按当时保存的原文看待，不算当前进展。' if missing else
+                        '一次答对还不等于掌握；之后再独立做一道没见过的同类题。' if correct else '这题还没做对；回原错题卡看说明，再继续诊断或另试一道新题。')
+    return out
+
+
 def retry(app, obj, root=None):
     """帮助之后的新题再试：这题须先由面板登记为本次诊断的“新题再试”出示，且同孩历次诊断从没出示、作答、
     看过说明或再试过；DeepTutor原register_question/grade_interaction登记并判定。题库核对（上游judgeQuestion）
@@ -539,10 +598,7 @@ def retry(app, obj, root=None):
         followup = None
         if outcome.startswith('independent_'):
             topic = pack['by_id'][q['topicId']]
-            note = '\n'.join([f"新题（{REVIEW_STATUS}）：{q.get('prompt', '')}", f"孩子作答：{text}",
-                              f"题库核对：{ {'correct': '对', 'wrong': '错'}[obj['verdict']] }；复核结果：{'对' if dt['is_correct'] else '错'}（独立作答，两项检查一致）",
-                              f"知识点：{topic.get('name', '')}（{q['topicId']}，知识包{TAXONOMY_SHA[:7]}）",
-                              '这题此前各次诊断都没出示、没答过、没看过说明；一次结果不等于掌握。'])
+            note = _retry_note(q, topic, text, obj['verdict'], dt['is_correct'])
             saved = app.save_record(dict(child=record['child'], day=time.strftime('%Y-%m-%d'), category='学习进展', subject=record['subject'] or '数学',
                                          title=('新题再试 · ' + (record['title'] or '错题'))[:200], note=note, source=RETRY_SOURCE,
                                          related_record_id=record['id'], followup_kind='复测', assistance='独立尝试',

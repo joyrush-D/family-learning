@@ -69,6 +69,7 @@
 !/workbench.css
 !/test_native_workspace.py
 !/test_native_workspace.cjs
+!/test_native_topic_journey.py
 !/test_calendar_ui.js
 
 !/startup.js
@@ -292,6 +293,7 @@
 !/topic-diagnosis.js
 !/test_deeptutor_bridge.py
 !/test_topic_diagnosis_ui.cjs
+!/test_retry_view.py
 # DeepTutor a31d826 Apache-2.0 learning子集：逐个已审文件放行（原字节+一处惰性导入适配，见NOTICE、patches/、PROVENANCE.json）。
 # 每层目录先放行再默认忽略其内部：未审文件（.env、private/、*.json数据、*.sqlite3、logs/、__pycache__等）一律不入Git。
 !/third_party/

@@ -142,6 +142,25 @@ final class WorkspaceStore: ObservableObject {
     }
 }
 
+/// 新题再试的短视图：题目、孩子原答、本次结果、知识点、原错题，然后下一步；追溯细节一行小字。行文由后台给出，这里只排版。
+struct RetryLines: View {
+    let v: RetryView; let note: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if !v.status.isEmpty { Text(v.status).font(.caption).foregroundStyle(Palette.coralInk) }
+            ForEach(Array(v.lines.enumerated()), id: \.offset) { _, l in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(l.first ?? "").font(.caption).foregroundStyle(Palette.ink2).frame(width: 64, alignment: .leading)
+                    Text(l.count > 1 ? l[1] : "").foregroundStyle(Palette.ink).textSelection(.enabled)
+                }
+            }
+            if v.show_note { Text(note).foregroundStyle(Palette.ink).textSelection(.enabled) }
+            Text("下一步 " + v.next).font(.callout).foregroundStyle(Palette.ink)
+            Text("追溯：" + v.trace).font(.caption2).foregroundStyle(Palette.ink2).textSelection(.enabled)
+        }
+    }
+}
+
 func progressWords(_ p: TaskProgress) -> String {
     var parts: [String] = []
     if p.feedback > 0 { parts.append("反馈\(p.feedback)条") }
@@ -522,8 +541,9 @@ struct Inspector: View {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack { Badge(text: r.followup_kind.isEmpty ? "反馈" : r.followup_kind); Text(r.created.prefix(16).replacingOccurrences(of: "T", with: " ")).font(.caption).foregroundStyle(Palette.ink2)
                         if !r.attachments.isEmpty { Label("\(r.attachments.count)", systemImage: "camera").font(.caption).foregroundStyle(Palette.ink2) } }
-                    Text(r.note.isEmpty ? r.title : r.note).foregroundStyle(Palette.ink).textSelection(.enabled)
-                    if r.note_truncated { Text("（较长，完整内容在网页版记录中）").font(.caption).foregroundStyle(Palette.ink2) }
+                    if let v = r.retry { RetryLines(v: v, note: r.note).probe("retry-\(r.id)", text: v.lines.map { $0.joined(separator: "：") }.joined(separator: "\n") + "\n下一步 " + v.next) }
+                    else { Text(r.note.isEmpty ? r.title : r.note).foregroundStyle(Palette.ink).textSelection(.enabled) }
+                    if r.note_truncated && (r.retry?.show_note ?? true) { Text("（较长，完整内容在网页版记录中）").font(.caption).foregroundStyle(Palette.ink2) }
                     Button("记一道错题") { store.sheet = .wrong(item, r); store.sheetDirty = false }.probe("wrong-new-\(r.id)")
                 }.padding(10).background(RoundedRectangle(cornerRadius: 10).fill(Palette.paper)).probe("record-\(r.id)", text: r.note)
             }
