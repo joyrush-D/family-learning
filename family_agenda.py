@@ -557,9 +557,15 @@ def completion_day(quote,header,time,due_on):
     words=re.sub(r'^(?:'+label+r')\s*[：:]\s*','',words)
     first,_,rest=(re.split(r'([，,。；;\n])',words,maxsplit=1)+['',''])[:3]
     lead=re.match(r'(今天|今日|今晚)',first)
+    # The same evening opening restated with its own written day (2026年11月4日晚听音频跟读…, a read original's requirement)
+    # names that day for its work as 今晚 does; a past or invalid day, or handing in/carrying, stays unknown.
+    written=None if lead else re.match(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]\s*(?:晚上|晚)',first)
+    own_day=written and f'{int(written[1] or sent.year):04d}-{int(written[2]):02d}-{int(written[3]):02d}'
+    if own_day and (not date(own_day) or own_day<sent.isoformat() or re.search(r'交|带',first[written.end():])):return ''
+    lead=lead or written
     work=first[lead.end():] if lead else first
     if not re.search(_COMPLETION_VERB,work) or re.search(r'不用|不必|无需|无须|不需要?|不要求',work):return ''
-    day=sent.isoformat()
+    day=own_day or sent.isoformat()
     if lead or (re.fullmatch(r'\s*(?:今天|今日|今晚)的?[^，,。；;\n\d]{0,8}?作业\s*[：:]?\s*',header or '')
                 and re.match(r'\s*(?:明天|明日|明早)',rest) and not re.search(_DAY_WORDS,re.sub(r'^\s*(?:明天|明日|明早)','',rest))):
         if re.search(_DAY_WORDS,work):return ''
@@ -701,7 +707,7 @@ def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
     return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=()):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -716,6 +722,14 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
             if not any(p['ref']==ref for p in publications):
                 publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
         except family_agent.AgentError:continue
+    # A read attachment's own requirements (image/PDF) saved with this action are its original words, read on their own
+    # message's sending time; a caption only pointing to them (英语：老师布置的两项要求见图片。) gives no day of its own.
+    attached=[o for o in originals if isinstance(o,dict) and isinstance(o.get('text'),str) and o['text'].strip()
+              and any(m['ref']==o.get('ref') for m in messages) and not any(o['text'] in m.get('text','') for m in messages)]
+    if attached and not any(date_quote and date_quote in m.get('text','') and deadlines(date_quote,sent_day(m.get('time','')))
+                            for m in messages):
+        for o in attached:messages=[dict(m,text=m.get('text','')+'\n'+o['text']) if m['ref']==o['ref'] else m for m in messages]
+        date_quote='\n'.join(o['text'] for o in attached)
     # Only words found in this child's own originals of this item can tell what its day means.
     if date_quote and not any(date_quote in m.get('text','') for m in messages):date_quote=''
     times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
@@ -939,7 +953,7 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None
+        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None;originals=()
         subject_title=task.get('original_title',task['title']);own_quote='';saved_subject=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
@@ -957,6 +971,8 @@ def enrich(app,c,tasks):
                 school_focus=_school_focus(c,task,proposal,plan)
                 if cited_by is None:cited_by=_cited_by(c)
                 date_siblings=_date_siblings(cited_by,proposal)
+                # Only while this item's own originals still stand as saved (same child, messages, files and drafts).
+                originals=family_agent.school_original_requirements(family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False),c,dict(proposal))
         due=task['due'];teacher={}
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
@@ -969,7 +985,7 @@ def enrich(app,c,tasks):
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
             saved_subject=captured[3] or ''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,action=task.get('action',''))
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''))
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):
             task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
@@ -1020,7 +1036,8 @@ def snapshot(app,start,end):
                 # A candidate reads its day from the same stored original words, publication and siblings as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
                            date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)),
-                           date_siblings=_date_siblings(cited_by,row),pending=True)
+                           date_siblings=_date_siblings(cited_by,row),pending=True,
+                           originals=family_agent.school_original_requirements(store,c,dict(row)))
                 m['category']=category
                 m.update(subject_fields(row['title'],_stored_date_quote(plan),saved=str((plan.get('school_learning') or {}).get('subject') or '')))
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],

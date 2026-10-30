@@ -3682,6 +3682,71 @@ def _school_generated_snapshot(row):
     return _hash([row['child_id'],row['title'],row['body'],row.get('due',''),evidence,plan])
 
 
+_SCHOOL_ORIGINAL_DAY_REVIEW='本项日期与对应原件行动不一致，日期待补充；已读要求保留。'
+
+
+def school_original_requirements(store,c,row):
+    """This saved action's own read-original requirements, only while they still stand as saved: the same child's same
+    messages (origin basis) and the same attached files and drafts (the save's own material fingerprint), its source and
+    Agent active. A replaced, detached or revoked original, a corrected message or another child's row returns (): its day
+    stays unknown. Read only: no model call, claim or write."""
+    try:
+        plan=json.loads(row['plan']);brief=plan.get('school_task') or {};action=plan.get('school_original_action') or {}
+        requirements=tuple(r for r in action.get('requirements') or () if isinstance(r,dict) and isinstance(r.get('text'),str) and r['text'].strip())
+        recorded=(brief.get('material_evidence') or {}).get('fingerprint','')
+        if not requirements or not recorded or action.get('condition_changes') or not _school_active(store,c,row):return ()
+        evidence,_=_school_material(store,c,row)
+        if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return ()
+        if not {r.get('ref') for r in requirements}<={e['ref'] for e in evidence}:return ()
+        material=_school_drafts(store,c,row)
+        if not material or material.get('fingerprint')!=recorded:return ()
+    except (AgentError,ValueError,KeyError,TypeError,AttributeError):return ()
+    return requirements
+
+
+def _school_original_reselect(store,c,row,evidence,now):
+    """An untouched saved original action held only by the earlier save reading: its anchors gave no day and its own read
+    requirement restates one (2026年11月4日晚听音频跟读…), which that reading could not date, so any model day was cleared
+    as 本项日期与对应原件行动不一致. The current save reading runs again on the same saved requirements while the same
+    originals still stand (school_original_requirements); never a model call. The due is the one day those requirements
+    give; title, goal or handback stating any other day, a past day, a parent edit, decision, task, record or feedback,
+    a changed original/message/source, an unfinished batch or an item already reselected returns None."""
+    plan=json.loads(row['plan']);brief=plan.get('school_task',{});action=plan.get('school_original_action') or {}
+    if row['state']!='pending' or brief.get('state')!='review' or brief.get('reason')!=_SCHOOL_ORIGINAL_DAY_REVIEW:return None
+    if row['due'] or row['task_id'] or row['record_id'] is not None or row['care_id'] or not row['job_id'].startswith('messages:'):return None
+    if brief.get('policy')!=SCHOOL_TASK_POLICY or brief.get('original_actions_revision')!=SCHOOL_ORIGINAL_REVISION:return None
+    if action.get('correction_proof') or action.get('condition_changes') or (brief.get('change') or 'new')!='new' or brief.get('target_id'):return None
+    if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
+                                 'approved','school_native_cover','school_first_batch_correction','school_previous_policy','school_saved_reread',
+                                 'school_batch_reread','school_role_reselect','school_split','school_split_from',
+                                 'school_legacy_correction_recovery','previous_pdf_action')):return None
+    # The row still reads as the program saved it: a parent's own title or text stays theirs.
+    if not brief.get('title') or not brief.get('goal') or (row['title'],row['body'])!=(brief['title'],brief['goal']):return None
+    requirements=school_original_requirements(store,c,row)
+    if not requirements or not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
+    import family_agenda
+    sent={e['ref']:e.get('time','') for e in evidence};stamps={ref:family_agenda.sent_day(t) for ref,t in sent.items()}
+    if not all(stamps.values()):return None
+    # Only the shared cause: the action's own anchors date nothing, its own requirements date one work day.
+    if set().union(*(family_agenda.deadlines(a.get('quote',''),stamps.get(a.get('ref'),'')) for a in action.get('anchors') or ())):return None
+    days={family_agenda.completion_day(r['text'],'',sent.get(r.get('ref'),''),'') for r in requirements}-{''}
+    if len(days)!=1:return None
+    due=next(iter(days))
+    stated=set().union(*(family_agenda.deadlines(str(brief.get(f) or ''),s) for f in ('title','goal','submission') for s in stamps.values()))
+    if stated-{due} or due<now.date().isoformat():return None
+    job=c.execute('SELECT done FROM agent_jobs WHERE id=?',(row['job_id'],)).fetchone()
+    if job is None or not job['done'] or c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(_school_audit_mark(row['job_id']),)).fetchone():return None
+    for e in evidence:
+        source_id,message_id=e['ref'][len('message:'):].rsplit(':',1)
+        message=c.execute('SELECT processed FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        if message is None or message['processed']!=1:return None
+    if (c.execute('SELECT 1 FROM records WHERE source=? LIMIT 1',('Agent建议:'+row['id'],)).fetchone()
+            or c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone()):return None
+    fresh=dict(brief,state='ready',reason='已读原件写明本项完成日，按当前保存读法核对；原要求保留。')
+    return dict(due=due,quote='\n'.join(r['text'] for r in requirements),receipt=_hash(list(requirements)),origin_basis=brief['origin_basis'],
+                original_reselect=True,brief=fresh)
+
+
 def _school_role_reselect(store,c,row,evidence,now):
     """Prove an untouched saved review is held only by an older reading of its own date roles; never a model call.
 
@@ -3694,6 +3759,8 @@ def _school_role_reselect(store,c,row,evidence,now):
     None: its saved state stays.
     """
     plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+    # A saved original action is read again only by its own save reading, through this same caller, claim and once-only mark.
+    if plan.get('school_original_action'):return _school_original_reselect(store,c,row,evidence,now)
     if row['state']!='pending' or brief.get('state')!='review' or row['task_id'] or row['record_id'] is not None or row['care_id']:return None
     if not row['job_id'].startswith('messages:') or brief.get('policy')!=SCHOOL_TASK_POLICY:return None
     # The same current authorization as all automatic school work: a paused source or Agent leaves the saved row as it is.
@@ -3956,7 +4023,8 @@ def _school_lesson_assessment(clause):
     from family_agenda import _titles_read_as_objects
     text=_titles_read_as_objects(clause)
     head=_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?|\s*早读(?:时)?)'
-    return any(re.match(_SCHOOL_ROLE_LEAD+r'(?:'+_SCHOOL_LESSON_ASSESSMENT+r')',text[m.end():]) for m in re.finditer(head,text))
+    # 参加听写 at that lesson (2026年11月5日英语课参加听写) is the same assessment as 英语课听写.
+    return any(re.match(_SCHOOL_ROLE_LEAD+r'(?:参加\s*)?(?:'+_SCHOOL_LESSON_ASSESSMENT+r')',text[m.end():]) for m in re.finditer(head,text))
 
 
 def _school_clause_day(clause,published):
@@ -7433,11 +7501,19 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
         dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors))
-        inherited_dates=set()
+        own_dated=False
+        if not dates and requirements and not conditions:
+            # A read original's own requirement restating its own work day (2026年11月4日晚听音频跟读…) dates that work by the
+            # same completion reading as its message words (今晚听音频跟读…), on its own message's sending time; nothing else.
+            import family_agenda
+            sent={e['ref']:e.get('time','') for e in cited}
+            dates={family_agenda.completion_day(r['text'],'',sent.get(r['ref'],''),'') for r in requirements}-{''}
+            own_dated=len(dates)==1
         if generated_match:
             inherited_dates=deadlines(batch_proof['action_text']+'\n'+batch_proof['shared_date_text'],sent_day(batch_proof['original_time']))
             if len(inherited_dates)==1 and not dates:dates=inherited_dates
         stated=dates if conditions else set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
+        if own_dated and not stated:stated=dates
         resolved=due or (next(iter(dates)) if len(dates)==1 else '')
         if resolved and (not date(resolved) or dates!={resolved} or stated and stated!={resolved}):
             due='';brief.update(state='review',reason='本项日期与对应原件行动不一致，日期待补充；已读要求保留。')
