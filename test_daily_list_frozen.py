@@ -11,6 +11,7 @@ import json
 import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import family_agenda
 import family_agent as agent
@@ -1086,6 +1087,201 @@ class DailyListFrozenTests(unittest.TestCase):
             self.store.message(ask, None)
         self.assertEqual((changed.exception.status, changed.exception.code, str(changed.exception)),
                          (409, 'school_original_scope_stale', '本项原消息已变化，请回原消息重新核对'), 'a changed original')
+
+    def _t05_receipt(self, messages, schema, name, timeout=60, *, data_path=None):
+        """The fixed fictional receipt recorded for the asked message; only identifiers this fixture creates are mapped."""
+        self.assertEqual((name, data_path), ('family_agent_selection', self.app.DATA), 'only the synthetic school selection')
+        s = self._t05
+        asked = {e.get('ref') for e in json.loads(messages[-1]['content']).get('evidence', []) if isinstance(e, dict)}
+        for reply in s['replay']['replies']:
+            if reply['proposals'][0]['evidence'][0]['ref'] in asked:
+                reply = json.loads(json.dumps(reply))
+                for row in reply['proposals']:
+                    row['task_target_id'] = s['ids'].get(row['task_target_id'], row['task_target_id'])
+                    row['learning_goal_id'] = s['ids'].get(row['learning_goal_id'], row['learning_goal_id'])
+                s['calls'].append(reply['proposals'][0]['evidence'][0]['ref'])
+                return reply
+        raise agent.family_llm.LLMUnavailable('not part of the fixed replay')
+
+    def _t05_step(self, index):
+        """T05 message index in its own run_once round through the receipt recorded for it (test_school_change_replay.json,
+        also replayed in the browser by test_school_change_ui.cjs). The original is accepted and gets the parent's feedback;
+        the later update and cancel are confirmed through the existing school_change request, as the dialog sends it
+        (an update whose date is unchanged sends the original's date)."""
+        if index == 0:
+            replay = json.loads(Path(__file__).with_name('test_school_change_replay.json').read_text(encoding='utf-8'))
+            self.assertEqual((replay['all_fictional'], replay['source_id'], replay['new_model_calls_authorized_for_this_UI_change']),
+                             (True, self.source['id'], 0))
+            self._t05 = dict(replay=replay, ids={}, calls=[], task_id='',
+                             refs=['message:' + self.source['id'] + ':' + m for m in replay['message_ids']])
+            self.model.side_effect = self._t05_receipt
+        s = self._t05; replay = s['replay']
+        ident, text, sent = (replay[k][index] for k in ('message_ids', 'texts', 'send_times'))
+        stamp = dt.datetime.fromisoformat(replay['as_of'] + 'T' + sent + ':00+08:00'); at = stamp + dt.timedelta(minutes=2)
+        payload = self.fixture.payload(cursor=ident)
+        if index: payload['expected_cursor'] = replay['message_ids'][index - 1]
+        payload['messages'] = [dict(id=ident, time=stamp.isoformat(), kind='text', sender=replay['sender'],
+                                    sender_id=replay['sender_id'], text=text, unread=False)]
+        self.store.ingest(payload)
+        result = agent.run_once(self.app, at)
+        self.assertEqual((result['failed'], s['calls']), (0, s['refs'][:index + 1]), 'one recorded receipt per message')
+        with self.app.connect() as c:
+            row = dict(c.execute("SELECT * FROM agent_items WHERE kind='school' AND evidence LIKE ?", ('%"' + s['refs'][index] + '"%',)).fetchone())
+            task = next((t for t in self.app.tasks(c) if t['id'] == s['task_id']), None)
+            update = c.execute('SELECT * FROM task_updates WHERE id=?', (s['task_id'],)).fetchone()
+        if index == 0:
+            with patch.object(agent, '_now', return_value=at):
+                s['task_id'] = row['task_id'] or self.store.act(dict(id=row['id'], action='accept'))['task_id']
+            s['ids'][replay['replies'][1]['proposals'][0]['task_target_id']] = s['task_id']
+            with self.app.connect() as c:
+                if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='learning_goals'").fetchone():
+                    goal = c.execute("SELECT id FROM learning_goals WHERE child_id='child-1' ORDER BY rowid DESC LIMIT 1").fetchone()
+                    if goal: s['ids'][replay['replies'][1]['proposals'][0]['learning_goal_id']] = goal[0]
+            self.app.save_task(dict(id=s['task_id'], status='待跟进', note=replay['feedback']))
+            return
+        change = ('update', 'cancel')[index - 1]; brief = json.loads(row['plan'])['school_task']
+        self.assertEqual((row['state'], brief['change'], brief['target_id']), ('pending', change, s['task_id']))
+        request = dict(action='school_change', id=row['id'], target_id=s['task_id'], change=change, title=row['title'], body=row['body'],
+                       due=row['due'] or (task['agenda']['due_on'] if change == 'update' else ''), expected_updated=row['updated'], target_version=task['focus']['version'],
+                       target_updated=update['updated'] if update else '')
+        with patch.object(agent, '_now', return_value=at):
+            agent.apply_school_change(self.app, self.store, request)
+
+    @staticmethod
+    def _t05_rows(c):
+        return {t: [tuple(r) for r in c.execute('SELECT * FROM ' + t + ' ORDER BY rowid')]
+                for t in ('agent_items', 'agent_messages', 'agent_message_attachments', 'manual_tasks', 'task_updates', 'records')}
+
+    def _t05_reads(self, count):
+        """The same task's school materials and each of its originals as the parent opens them: text only, no file bound,
+        no school_error, and reading writes nothing."""
+        s = self._t05; refs = s['refs'][:count]
+        with self.app.connect() as c:
+            before = self._t05_rows(c)
+            c.execute('BEGIN')
+            context = self.app.homework_material_context(c, s['task_id'])
+            c.rollback()
+        self.assertEqual(context['school_error'], '', 'the confirmed change keeps the school materials readable')
+        self.assertEqual([(b[1]['id'], b[2]) for b in context['school']], [(r.rsplit(':', 1)[1], []) for r in refs])
+        self.assertEqual([i for i, v in context['allowed'].items() if v['origin'] == 'school'], [], 'no school file is bound')
+        for ref in refs:
+            source_id, message_id = ref[8:].rsplit(':', 1)
+            view = self.store.message(dict(child_id='child-1', source_id=source_id, message_id=message_id, task_id=s['task_id']), None)
+            self.assertEqual((view['task_id'], view['attachments'], view['nearby_materials'], view['action_material']['scoped']),
+                             (s['task_id'], [], [], True))
+            self.assertEqual([(q['text'], q['upload_ids'], q['pages']) for q in view['action_material']['quotes']],
+                             [(s['replay']['texts'][s['replay']['message_ids'].index(message_id)], [], [])])
+        with self.app.connect() as c:
+            self.assertEqual(self._t05_rows(c), before, 'reading the materials and originals writes nothing')
+            originals = [json.loads(r[0])['text'] for r in c.execute('SELECT payload FROM agent_messages ORDER BY rowid')]
+            tasks = [t for t in self.app.tasks(c) if t['child'] == '示例甲' or t['id'] == s['task_id']]
+            update = dict(c.execute('SELECT * FROM task_updates WHERE id=?', (s['task_id'],)).fetchone())
+        self.assertEqual(originals, s['replay']['texts'][:count], 'originals unchanged')
+        self.assertEqual([t['id'] for t in tasks], [s['task_id']], 'the same task, no copy')
+        return dict(tasks[0], update=update)
+
+    def test_t05_confirmed_correction_then_cancel_keep_the_same_tasks_originals_readable(self):
+        """T05 at both time points. Root: after the confirmed correction the same task's school materials fell back to
+        school_original_scope_stale (school bindings 1→0). The original was saved from its reply's quotes (no native action),
+        so its accepted change shares the read-only text scope while both stay plain, fully read, unchanged words."""
+        self._t05_step(0)
+        first = self._t05_reads(1)
+        self.assertEqual((first['update']['note'], first['agenda']['due_on']), (self._t05['replay']['feedback'], '2026-11-05'))
+        self._t05_step(1)
+        changed = self._t05_reads(2)
+        self.assertIn('1至3', changed['action']); self.assertEqual(changed['agenda']['due_on'], '2026-11-05')
+        self._t05_step(2)
+        stopped = self._t05_reads(3)
+        self.assertEqual(stopped['update']['status'], '不适用')
+        self.assertEqual(self.model.call_count, 3, 'reading and reopening request no model receipt')
+
+    def test_t05_change_scope_stays_unknown_unless_both_originals_are_proven_plain_text(self):
+        """Missing or changed basis, rewritten or recalled originals, a file of unknown share, a revoked or rebound source,
+        another child, no explicit relation or several owners keep the old refusals; reading writes nothing. An adjacent
+        message's file is never bound. A native original keeps its explicit empty file scope for a supplement."""
+        self._t05_step(0); self._t05_step(1)
+        s = self._t05; first, change = s['refs'][:2]; sid = self.source['id']; texts = s['replay']['texts']
+        unknown, stale, owners = ('本项资料范围尚未核明，请查看老师完整原消息', '本项原消息已变化，请回原消息重新核对',
+                                  '原消息与当前事项的独立出处无法核对')
+        with self.app.connect() as c:
+            task = next(t for t in self.app.tasks(c) if t['id'] == s['task_id'])
+            canonical = dict(agent._school_origin(self.store, c, task, 'child-1'))
+            owner = dict(c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted' AND evidence LIKE ?", ('%"' + change + '"%',)).fetchone())
+        self.assertNotIn('school_original_action', json.loads(canonical['plan']), 'saved from its reply, not a native action')
+        self.assertNotIn('school_original_action', json.loads(owner['plan']))
+        self.assertEqual((json.loads(owner['plan'])['school_change_of'], owner['task_id']), (canonical['id'], s['task_id']))
+
+        def scope(c, ref, row=None):
+            ids = [r[0] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',
+                                           (sid, ref.rsplit(':', 1)[1]))]
+            before = self._t05_rows(c)
+            try: return agent.school_original_upload_ids(self.store, c, row or canonical, ref, ids)
+            finally: self.assertEqual(self._t05_rows(c), before, 'reading writes nothing')
+
+        def refused(c, ref, message, row=None, code='school_original_scope_stale'):
+            with self.assertRaises(agent.AgentError) as caught: scope(c, ref, row)
+            self.assertEqual((caught.exception.code, str(caught.exception)), (code, message))
+
+        def attach(c, message_id, ident):
+            c.execute('INSERT INTO agent_message_attachments(source_id,message_id,upload_id) VALUES(?,?,?)', (sid, message_id, ident))
+
+        def plan_without(row, *path):
+            plan = json.loads(row['plan']); inner = plan
+            for key in path[:-1]: inner = inner[key]
+            inner.pop(path[-1]); return plan
+
+        with self.app.connect() as c:
+            self.assertEqual((scope(c, first), scope(c, change)), ([], []))
+            attach(c, '14', 'u-t05-adjacent')  # another message's file is never part of this task's text scope
+            self.assertEqual((scope(c, first), scope(c, change)), ([], []))
+            c.execute("DELETE FROM agent_message_attachments WHERE upload_id='u-t05-adjacent'")
+            for message_id in ('12', '11'):  # a file now sharing either original: its share stays unknown, not all files
+                attach(c, message_id, 'u-t05-shared'); refused(c, change, unknown)
+                c.execute("DELETE FROM agent_message_attachments WHERE upload_id='u-t05-shared'")
+            # A native original: a supplement keeps its explicit empty file scope even beside a file (no expansion).
+            native = json.loads(canonical['plan'])
+            native['school_original_action'] = dict(anchors=[dict(ref=first, upload_ids=[], pages=[], quote=texts[0])])
+            native = dict(canonical, plan=json.dumps(native, ensure_ascii=False)); attach(c, '12', 'u-t05-shared')
+            row = agent.school_original_source_row(self.store, c, native, change)
+            self.assertEqual([(a['ref'], a['upload_ids'], a['pages']) for a in json.loads(row['plan'])['school_original_action']['anchors']],
+                             [(change, [], [])])
+            self.assertEqual((scope(c, change, native), scope(c, first, native)), ([], []))
+            c.execute("DELETE FROM agent_message_attachments WHERE upload_id='u-t05-shared'")
+            # A legacy decision that never recorded its basis, on either side.
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?', (json.dumps(plan_without(owner, 'school_task', 'origin_basis'), ensure_ascii=False), owner['id']))
+            refused(c, change, unknown)
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?', (owner['plan'], owner['id']))
+            refused(c, change, unknown, dict(canonical, plan=json.dumps(plan_without(canonical, 'school_task', 'origin_basis'), ensure_ascii=False)))
+            # Rewritten or recalled originals.
+            for message_id, changes, ref, message in (('12', dict(text=texts[1].replace('1至3', '1至4')), change, stale),
+                                                      ('12', dict(text='[已撤回，正文未读取]', kind='recalled', unread=True), change, unknown),
+                                                      ('11', dict(text=texts[0].replace('1至5', '1至6')), change, unknown),
+                                                      ('11', dict(text=texts[0].replace('1至5', '1至6')), first, stale)):
+                saved = c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?', (sid, message_id)).fetchone()[0]
+                c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?',
+                          (json.dumps(dict(json.loads(saved), **changes), ensure_ascii=False), sid, message_id))
+                refused(c, ref, message)
+                c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (saved, sid, message_id))
+            # Only an explicit relation counts: none is refused, an explicit repeat is the same relation, several owners conflict.
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?', (json.dumps(plan_without(owner, 'school_change_of'), ensure_ascii=False), owner['id']))
+            refused(c, change, owners)
+            repeat = dict(plan_without(owner, 'school_change_of'), school_duplicate_of=canonical['id'])
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?', (json.dumps(repeat, ensure_ascii=False), owner['id']))
+            self.assertEqual(scope(c, change), [])
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?', (owner['plan'], owner['id']))
+            again = dict(owner, id=owner['id'] + '-again')
+            c.execute('INSERT INTO agent_items(' + ','.join(again) + ') VALUES(' + ','.join('?' * len(again)) + ')', tuple(again.values()))
+            refused(c, change, owners)
+            c.execute('DELETE FROM agent_items WHERE id=?', (again['id'],))
+            refused(c, change, owners, dict(canonical, child_id='child-other'))  # another child's binding of the same task
+            self.assertEqual((scope(c, first), scope(c, change)), ([], []), 'every probe was restored')
+        config = self.app.DATA / 'agent.json'; saved = config.read_text(encoding='utf-8')
+        for sources in ([], [dict(self.source, child_id='child-2')]):  # a revoked source, or one rebound to another child
+            config.write_text(json.dumps(dict(json.loads(saved), sources=sources), ensure_ascii=False), encoding='utf-8')
+            try:
+                with self.app.connect() as c: refused(c, change, '消息来源不属于所选孩子', code='source_not_allowed')
+            finally: config.write_text(saved, encoding='utf-8')
+        self.assertEqual(self.model.call_count, 2, 'no model receipt beyond the two recorded ones')
 
     def test_t01_counterexample_a_send_day_due_for_tonight_work_states_no_handback(self):
         payload, refs = self._day([('18:00', '语文老师甲', 'cn-teacher-a', '今晚朗读《荷塘》2遍。')])

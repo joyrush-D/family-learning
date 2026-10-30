@@ -6696,12 +6696,19 @@ def school_original_source_row(store,c,canonical,ref):
         related=plan.get('school_change_of')==canonical['id'] or plan.get('school_duplicate_of')==canonical['id']
         if related and ref in {e['ref'] for e in json.loads(saved['evidence'])}:owners.append(dict(saved))
     if len(owners)!=1:raise AgentError('原消息与当前事项的独立出处无法核对',409,'school_original_scope_stale')
-    row=owners[0];plan=json.loads(row['plan'])
-    if json.loads(canonical['plan']).get('school_original_action') and not plan.get('school_original_action'):
+    row=owners[0];plan=json.loads(row['plan']);original=json.loads(canonical['plan'])
+    if original.get('school_original_action') and not plan.get('school_original_action'):
         # Legacy append/repeat decisions prove native body text, not the set of
         # files sharing that message. Give them an explicit empty file scope.
         row=_school_text_scope(store,c,row,False)
         if row is None:raise AgentError('补充原件尚无独立行动依据，请核对原消息',409,'school_original_scope_stale')
+    elif (original.get('school_original_action') is None and not plan.get('school_original_action') and canonical['state']=='accepted'
+          and canonical['task_id'] and _school_text_scope(store,c,canonical,True)
+          and original.get('school_task',{}).get('origin_basis')==_school_message_basis(_school_material(store,c,canonical)[0])):
+        # The original is still read from its own unchanged plain words alone; its one accepted change, repeat or
+        # supplement proves only its own words when it too is plain, fully read text with no file or page at all.
+        # Anything else stays without a scope, so the shared check below keeps it unknown.
+        row=_school_text_scope(store,c,row,True) or row
     return row
 
 
