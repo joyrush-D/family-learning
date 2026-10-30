@@ -1479,7 +1479,7 @@ function saveHomeworkPrintDraft(f){
     question_confirmed:f.elements.question_confirmed.checked,guide_confirmed:f.elements.guide_confirmed.checked}));return true}
   catch{return false}
 }
-async function openHomeworkPrint(id){
+async function openHomeworkPrint(id,intent=''){
   const task=data.tasks.find(t=>t.id===id),owner=child,opening=++homeworkPrintOpening;
   if(!task||task.child!==owner||homeworkPrintBusy)return;
   let materials;const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
@@ -1529,12 +1529,14 @@ async function openHomeworkPrint(id){
   if(!saveHomeworkPrintDraft(f)){toast('无法保留本次打印编号，请启用站点存储后再打印');return}
   // Open at the top every time, so the current title and any re-check notice come first even after scrolling down last time.
   const dialog=$('#homeworkPrintDialog');dialog.showModal();dialog.scrollTop=0;f.scrollTop=0;
+  // A distinct entry starts at its own part of the same guarded dialog: the original's question file or the parent reference.
+  if(intent){const field=intent==='reference'?f.elements.guide_source:f.elements.question_source;field?.scrollIntoView({block:'center'});field?.focus();f.dataset.printIntent=intent;toast(intent==='reference'?'先选家长参考：参考文件或参考文字二选一；核对依据后才排队打印。':'先选题目原件；核对依据后才排队打印。')}
 }
 function homeworkPrintSelectionCurrent(f){
   const allowed=new Set(JSON.parse(f.dataset.printSources||'[]'));
   return [...homeworkQuestionValues(f),f.elements.guide_source.value].filter(Boolean).every(value=>allowed.has(value));
 }
-document.addEventListener('click',e=>{const b=e.target.closest('[data-homework-print]');if(b)openHomeworkPrint(b.dataset.homeworkPrint)});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-homework-print]');if(b)openHomeworkPrint(b.dataset.homeworkPrint,b.dataset.printIntent||'')});
 $('#homeworkPrintForm')?.addEventListener('input',e=>{if(homeworkPrintBusy)return;if(e.target.name==='guide_text'&&!e.target.value.trim())e.currentTarget.dataset.questionSha='';saveHomeworkPrintDraft(e.currentTarget)});
 // A question slot holds one chosen file whatever its page count: the extra-file summary, the queue line and the browser's empty-choice message count files in slot order and never guess PDF pages.
 function drawHomeworkPrintFiles(f){

@@ -129,7 +129,7 @@ function taskGroupsHTML(items,today=false,emptyText=''){
 }
 function taskInboxHTML(){
  if(!Array.isArray(data.today_calendar?.inbox))return `<h1>事务收集箱</h1><p role="alert" class="error">${esc(data.today_calendar?.source_error||'收集箱暂时无法读取，请刷新记录；不能据此判断没有待办。')}</p>`;
- const views=taskBoxes();if(!(taskView in views))taskView='Inbox';
+ const views=taskBoxes();if(!(taskView in views))taskView='Inbox';setTimeout(revealTaskLink);
  return `<header class="today-heading"><h1>${taskView==='Wish'?'心愿清单':taskView==='全部'?'所有作业与待办':'收集箱'}</h1><button class="primary" data-new-task="${taskView==='Wish'?'wish':'yes'}">${taskView==='Wish'?'＋ 记心愿':'＋ 记一件事'}</button></header>${filters()}${taskBoxesHTML()}<p class="small muted">${({'Inbox':'所有未完成事务，包含已安排和已逾期的事项。','Wish':'想做的事先留在这里，选定日期再转成计划。','计划':'已安排日期、尚未完成的事项。','已完成':'已确认完成的事项，可撤销完成。','已逾期':'截止日已过；未填截止日时按计划日判断。重复安排不计入。','已搁置':'不参加、无需处理、已取消等事项，保留原决定。','全部':'所有日期的作业与待办，包含未完成、已完成及已搁置；心愿单独标注。'})[taskView]}</p><div class="today-task-groups" id="task-groups">${taskGroupsHTML(views[taskView],false,taskView==='Wish'?'这里暂时没有心愿。':'')}</div>`;
 }
 function todayTaskOrder(a,b){
@@ -144,11 +144,164 @@ function todayTaskOrder(a,b){
  const [ar,ad]=key(a),[br,bd]=key(b);
  return ar-br||(ar===2?ad.localeCompare(bd):bd.localeCompare(ad));
 }
+// The server's one-child day (family_agenda.day_view), the same selection, order and subjects the Mac workbench reads; a
+// snapshot without it (older service, or its projection failed) keeps this page's own reading below.
+function todayViewItems(){const view=data.today_view?.[currentChild()?.id];if(!Array.isArray(view?.groups))return null;const byID=new Map(taskInboxItems().map(x=>[x.id,x]));const rows=view.groups.flatMap(g=>g.items||[]).map(r=>byID.get(r.id));return rows.every(Boolean)?rows:null}
+// The Mac workbench opens the same original task here (#task=<id>, optionally &do=<intent>): the task is shown once; an intent
+// opens that task's own existing flow — the print dialog on its original or its parent reference, the feedback/photo-check
+// dialog, its original message — where every confirmation, basis check and duplicate guard still applies. Nothing is printed or saved.
+let taskLinkPending='',taskLinkIntent='';
+{const m=/^#task=([^&]{1,100})(?:&do=(print-original|print-reference|check|original|history))?$/.exec(location.hash);if(m){taskLinkPending=decodeURIComponent(m[1]);taskLinkIntent=m[2]||''}}
+function revealTaskLink(){
+ if(!taskLinkPending||!data)return;const id=taskLinkPending;
+ if(page==='home'&&groveView()){const row=groveRows(groveView()).find(r=>r.task_id===id||r.id===id);if(row&&groveSelected!==row.id){groveSelected=row.id;groveDetailOpen=true;return render()}}
+ const target=[...document.querySelectorAll('[data-query-target]')].find(x=>x.dataset.queryTarget==='task:'+id)||[...document.querySelectorAll('[data-subject-item]')].find(x=>x.dataset.subjectItem===id);
+ if(!target&&page==='home'){page='tasks';taskView='全部';return render()}
+ const intent=taskLinkIntent;taskLinkPending='';taskLinkIntent='';history.replaceState(null,'',location.pathname+location.search);
+ if(target){target.tabIndex=-1;target.classList.add('task-linked');target.scrollIntoView({block:'center'});target.focus({preventScroll:true})}
+ const scope=page==='home'&&document.getElementById('groveDetail')||target?.closest('article')||document;
+ if(intent==='print-original'||intent==='print-reference')openHomeworkPrint(id,intent==='print-reference'?'reference':'original');
+ else if(intent==='check'||intent==='history')scope.querySelector('[data-task="'+CSS.escape(id)+'"]')?.click();
+ else if(intent==='original')scope.querySelector('.grove-originals button,.grove-originals a')?.click();
+}
+
+// The home (今天): one child's day from the server projection (family_agenda.day_view, data.today_view), the same rows the Mac
+// workbench reads. A compact subject-first list; the selected row's own detail beside it (>=900px) or in its place on a phone,
+// where the browser's back returns to the list. Rows keep their original ids, task state and controllers; nothing is saved here.
+let groveSelected='',groveDetailOpen=false,groveStamp=null;const groveMaterials=new Map();
+const groveWhen={later:'以后安排',overdue:'已过期限',earlier:'之前安排',unknown:'日期未写明'};
+function groveView(){const v=data?.today_view?.[currentChild()?.id];return Array.isArray(v?.groups)?v:null}
+function groveRows(view){return [...(view?.groups||[]),...(view?.closed||[])].flatMap(g=>g.items||[])}
+function groveWide(){return matchMedia('(min-width: 900px)').matches}
+function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.label+' '+(f.known?f.value:'日期未写明')}
+function groveChipsHTML(r){
+ const chips=[];if(groveWhen[r.when])chips.push(`<span class="grove-chip is-soft" data-when="${esc(r.when)}">${groveWhen[r.when]}</span>`);
+ for(const f of (r.facts||[]).filter(f=>f.role==='due'||f.role==='complete'))
+  chips.push(`<span class="grove-chip${f.state==='next_morning'||f.state==='overdue'?' is-coral':f.known?'':' is-soft'}" data-fact="${esc(f.role)}">${esc(groveFactWords(f))}</span>`);
+ if(r.pending_review)chips.push('<span class="grove-chip is-coral">待核对</span>');
+ return chips.join('');
+}
+function groveProgressWords(p){
+ if(!p)return '';const parts=[];
+ if(p.feedback)parts.push(`反馈${p.feedback}条`);if(p.wrong)parts.push(`错题${p.wrong}道`);if(p.clues)parts.push(`知识点线索${p.clues}条（不等于掌握）`);
+ if(p.retries)parts.push(`独立再试${p.retries}次`);if(p.history)parts.push(`更正前的诊断${p.history}条作历史`);
+ return parts.join(' · ');
+}
+function groveSource(r){return [r.publisher,String(r.published_at||'').slice(11,16)].filter(Boolean).join(' ')}
+function groveCheckHTML(r){
+ const t=r.task_id&&data.tasks.find(t=>t.id===r.task_id);
+ if(r.pending_review)return '<span class="grove-mark" role="img" aria-label="学校消息待核对，确认后才算正式事项">?</span>';
+ if(!t)return `<span class="grove-mark" aria-hidden="true">${r.closed?'✓':''}</span>`;
+ const done=status(t)==='已完成',pending=pendingTask?.id===t.id;
+ if(taskClosed(t)&&!done)return '<span class="grove-mark" aria-hidden="true">−</span>';
+ if(t.agenda?.category==='homework'&&t.homework_report?.needs_review)return '<span class="grove-mark" role="img" aria-label="作业要求待核对，暂不能确认完成">?</span>';
+ return `<label class="checkhit grove-check"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`;
+}
+function groveRowHTML(r){
+ const on=r.id===groveSelected,meta=[groveSource(r),groveProgressWords(r.progress)].filter(Boolean).join(' · ');
+ const task=r.task_id?` data-today-task="${esc(r.task_id)}" data-query-target="task:${esc(r.task_id)}"`:'';
+ return `<article class="grove-row${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
+  +`${groveCheckHTML(r)}<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
+  +`<span class="grove-title">${esc(r.title)}</span><span class="grove-lines">${r.lines?.length?esc(r.lines.join('；')):'<em>完成标准未提供，待补充</em>'}</span>`
+  +`<span class="grove-chips">${groveChipsHTML(r)}</span>${meta?`<span class="grove-meta">${esc(meta)}</span>`:''}</button></article>`;
+}
+function groveMaterialHTML(f){
+ const tone=f.state==='ready'?' is-leaf':['unread','error'].includes(f.state)?' is-coral':'';
+ return `<div class="grove-material is-${esc(f.state||'saved')}" data-material="${esc(f.source?.id||'')}" data-material-state="${esc(f.state||'saved')}">`
+  +`<p class="grove-material-head"><span class="grove-chip${tone}">${esc(f.label||'原件已保存')}</span><strong>${esc(f.name)}</strong></p>`
+  +`<p class="small muted">${esc(f.role_label||'原件（用途未注明）')}</p>`
+  +`${f.summary?`<p class="grove-material-summary">${esc(f.summary)}</p>`:''}`
+  +`${f.unclear?.length?`<p class="grove-unclear">看不清：${esc(f.unclear.join('；'))}。请看原件。</p>`:''}`
+  +`${!['ready','saved'].includes(f.state)&&f.explanation?`<p class="small">${esc(f.explanation)}</p>`:''}`
+  +`<a class="grove-link" href="./upload/${encodeURIComponent(f.source?.id||'')}" target="_blank" rel="noopener">打开原件</a></div>`;
+}
+function groveMaterialsHTML(id){
+ const m=groveMaterials.get(id);
+ if(!m||m.loading)return '<h3>资料</h3><p class="small muted" role="status">正在读取资料…</p>';
+ if(m.error)return `<h3>资料</h3><p class="error" role="alert">${esc(m.error)}</p><button type="button" data-grove-materials-retry="${esc(id)}">重新读取资料</button>`;
+ const files=m.files||[],unread=files.filter(f=>['unread','error','partial'].includes(f.state)).length;
+ return `<h3>资料 · ${files.length} 份${unread?`（${unread} 份尚未读清）`:''}</h3>${files.map(groveMaterialHTML).join('')||'<p class="small muted">这一项没有已保存的原件。</p>'}${m.school_error?`<p class="grove-unclear">${esc(m.school_error)}</p>`:''}`;
+}
+async function groveLoadMaterials(id,force=false){
+ if(!force&&groveMaterials.has(id))return;groveMaterials.set(id,{loading:true});
+ const paint=()=>{const host=document.querySelector('[data-grove-materials="'+CSS.escape(id)+'"]');if(host)host.innerHTML=groveMaterialsHTML(id)};paint();
+ try{
+  const r=await apiFetch('/api/print/homework/materials?task_id='+encodeURIComponent(id),{signal:AbortSignal.timeout(20000)}),out=await r.json();
+  if(!r.ok)throw Error(out.error||'资料暂时读不到');
+  groveMaterials.set(id,{files:Array.isArray(out.files)?out.files:[],school_error:typeof out.school_error==='string'?out.school_error:''});
+ }catch(e){groveMaterials.set(id,{error:(e.name==='TimeoutError'?'资料读取超时':e.message||'资料暂时读不到')+'；记录未更改，可以重试。'})}
+ paint();
+}
+function groveDetailHTML(r){
+ const back='<div class="grove-back"><button type="button" data-grove-back>‹ 返回清单</button></div>';
+ if(!r)return '<div class="grove-empty"><p>从清单里选一项，看要做什么、资料和反馈。</p></div>';
+ const head=extra=>`<div class="grove-head"><span class="grove-tag">${esc(r.subject)}</span>${groveSource(r)?`<span class="grove-source">${esc(groveSource(r))} 发布</span>`:''}${extra||''}</div><h2 class="grove-h">${esc(r.title)}</h2>`;
+ const item=taskInboxItems().find(x=>x.id===r.id),t=r.task_id&&data.tasks.find(t=>t.id===r.task_id);
+ if(!t)return back+head()+(item?agendaItemHTML(item):'<p class="small muted">此条尚未载入详情，请刷新记录。</p>');
+ const open=!taskClosed(t),done=status(t)==='已完成',homework=t.agenda?.category==='homework',reportPending=open&&homework&&t.homework_report?.needs_review;
+ const originals=schoolOriginalButtons(String(t.source||'').split('\n').filter(x=>x.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id,'看原消息',t.agenda?.publications,t.school_origin?t.id:'');
+ const facts=(r.facts||[]).map(f=>`<div class="grove-fact${f.state==='next_morning'||f.state==='overdue'?' is-coral':''}" data-fact="${esc(f.role)}"><span>${esc(f.label)}</span><strong>${esc(f.known?(f.today?'今天 ':'')+f.value:'日期未写明，不猜')}</strong>${f.state==='next_morning'?'<em>明天</em>':f.state==='overdue'?'<em>已逾期</em>':''}</div>`).join('');
+ const history=[...(r.records||[]).map(x=>`<li data-grove-record="${esc(x.id)}"><span class="grove-chip">${esc(x.followup_kind||'反馈')}</span> <span class="small muted">${esc(String(x.created||'').slice(0,16).replace('T',' '))}${x.attachments?.length?` · 照片${x.attachments.length}份`:''}</span><p>${esc(x.note||x.title)}</p></li>`),
+  ...(r.wrong||[]).map(w=>`<li data-grove-wrong="${esc(w.id)}"><span class="grove-chip${w.state==='待订正'?' is-coral':' is-leaf'}">${esc(w.state||'待订正')}</span> <span>错题：${esc(w.title)}</span></li>`)].join('');
+ const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open?`<button class="primary" data-task="${esc(t.id)}">${homework?'交作答照片 / 写反馈':'写反馈'}</button>`:`<button data-task="${esc(t.id)}">查看反馈</button>`;
+ const more=(open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button><button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:'')
+  +(open&&homework?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:'')+`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`
+  +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
+ const standards=r.lines?.length?`<ul class="grove-standards">${r.lines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
+ return back+head(originals?`<span class="grove-originals">${originals}</span>`:'')
+  +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
+  +`<section class="grove-card"><h3>要做什么与完成标准</h3>${standards}${r.complete_words?`<p class="small muted">完成要求：${esc(r.complete_words)}</p>`:''}${!t.agenda?.due_on&&t.due&&t.due!=='无明确截止'?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}</section>`
+  +`<div class="grove-facts">${facts}</div>`
+  +(homework?`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section><div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
+  +`<section class="grove-card"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted">还没有反馈。照片可以不交，只写几句文字也行；没有反馈不等于没做。</p>'}<div class="grove-actions">${primary}</div></section>`
+  +`<details class="grove-more"><summary>更多操作</summary><div class="tasktools">${more}</div></details>`;
+}
+function groveSelect(id,user){
+ groveSelected=id;
+ if(!groveWide()){groveDetailOpen=true;if(user&&!history.state?.grove)history.pushState({grove:id},'',location.pathname+location.search)}
+ render();
+ requestAnimationFrame(()=>{const d=document.getElementById('groveDetail');if(!groveWide())window.scrollTo(0,0);d?.focus({preventScroll:true})});
+}
+document.addEventListener('click',e=>{
+ const open=e.target.closest('[data-grove-open]');if(open){groveSelect(open.dataset.groveOpen,true);return}
+ if(e.target.closest('[data-grove-back]')){if(history.state?.grove)history.back();else{groveDetailOpen=false;render()}return}
+ const retry=e.target.closest('[data-grove-materials-retry]');if(retry)groveLoadMaterials(retry.dataset.groveMaterialsRetry,true);
+});
+window.addEventListener('popstate',()=>{if(groveDetailOpen&&!history.state?.grove){groveDetailOpen=false;if(page==='home')render()}});
 function todayTasksHTML(){
+ const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
+ const view=groveView();if(!view)return todayTasksLegacyHTML();  // an older service, or a snapshot whose projection failed
+ if(groveStamp!==data){groveStamp=data;groveMaterials.clear()}
+ const rows=groveRows(view);
+ if(!rows.some(x=>x.id===groveSelected)){groveSelected=groveWide()?(rows[0]?.id||''):'';groveDetailOpen=false}
+ const selected=rows.find(x=>x.id===groveSelected),c=view.counts||{};
+ setTimeout(()=>{revealTaskLink();if(selected?.task_id&&selected.category==='homework')groveLoadMaterials(selected.task_id)});
+ const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
+ const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
+ const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
+ const originalGap=sources.some(s=>s.unread_count>0);
+ const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
+ const groups=view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${g.items.length} 项</span></h2>`
+  +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
+  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>';
+ const closed=(view.closed||[]).flatMap(g=>g.items||[]);
+ const plans=(r.timetables||[]).filter(matches).map(t=>calendarTimetableHTML(t,{open:true})).join('')+(r.events||[]).filter(x=>matches(x)&&!['cancelled','completed'].includes(x.status)).map(calendarEventHTML).join('');
+ const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
+ const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
+ return `<div class="grove" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}"><section class="grove-list" aria-labelledby="groveListTitle">`
+  +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[data.today,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${add}</header>`
+  +`<div class="today-controls">${filters()}</div>${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
+  +`<div class="today-task-groups" id="task-groups">${groups}</div>`
+  +(closed.length?`<details class="grove-closed"><summary>这一天已办 ${closed.length} 项</summary><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></details>`:'')
+  +`<details id="today-courses" class="grove-plans today-plans"><summary>今日课程与安排</summary>${plans||'<p class="small muted">当天课表尚未提供。</p><button data-page="calendar">查看日历 / 导入课表</button>'}</details></section>`
+  +`<section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`;
+}
+function todayTasksLegacyHTML(){
  const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
  const reviewDue=x=>x.kind==='task'&&data.tasks.some(t=>t.id===x.task_id&&taskReviewDue(t));
- const items=taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on||reviewDue(x))).sort(todayTaskOrder);
+ const items=todayViewItems()||taskInboxItems().filter(x=>!x.closed&&x.kind!=='event'&&x.agenda.box!=='wish'&&(!x.agenda.published_on||x.agenda.published_on<=data.today)&&(!x.agenda.scheduled_on||x.agenda.scheduled_on<=data.today||x.agenda.due_on||reviewDue(x))).sort(todayTaskOrder);
+ setTimeout(revealTaskLink);
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
  const originalGap=sources.some(s=>s.unread_count>0);

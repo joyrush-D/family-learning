@@ -1,6 +1,7 @@
-// 一起成长桌面入口（内部候选）：AppKit + WKWebView 薄壳，打开本机原服务；关窗/退出只影响本窗口。
+// 一起成长桌面入口（内部候选）：AppKit 生命周期 + SwiftUI 原生每日工作台；富文档与次级旧功能经 WKWebView 打开本机原服务。关窗/退出只影响本窗口。
 // 只有全新 Mac 上家长明确点击“安装后台”，或本入口安装的后台要更新/卸载时，才经包内运行时执行 backend.py；网页不获得任何原生桥接。
 import AppKit
+import SwiftUI
 import WebKit
 
 let bundleID = Bundle.main.bundleIdentifier ?? "local.yiqichengzhang.desktop"
@@ -158,7 +159,7 @@ func runBackend(_ command: String, fault: String? = nil, _ done: @escaping @Main
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSMenuItemValidation {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSMenuItemValidation, WKHTTPCookieStoreObserver {
     var config = DesktopConfig.load()
     var window: NSWindow?
     var webView: WKWebView?
@@ -181,6 +182,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var faultPending: String? = smoke ? environment["FAMILY_DESKTOP_TEST_UPDATE_FAULT"].flatMap { $0.isEmpty ? nil : $0 } : nil
     var installScripted = smoke && environment["FAMILY_DESKTOP_TEST_INSTALL"] == "1"
     var popups: [NSWindow] = []
+    var loginPending = false      // 工作台发起的登录：同一 origin 的家长登录 cookie 出现后自动回到工作台
+    var loginWindow: NSWindow?    // 单独的登录窗口：工作台和打开着的填写框都不动
+    var loginWeb: WKWebView?
+    var loginBaseline = ""        // 打开登录窗口时已有的登录 cookie；换成新的才算登录完成
+    var observingCookies = false
+    // 主界面是原生工作台；网页只在家长打开“网页版工具”、原件或照片检查时载入。测试默认沿用原网页验收，声明 native 才验原生工作台。
+    var surface = smoke ? (environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native" ? "native" : "web") : "native"
+    var workspace: WorkspaceStore?
+    var container: NSView?
+    var nativeRan = false
     var attempts = 0
     var mainLoads = 0
     var blocked: [String] = []
@@ -256,8 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             }
             return .terminateCancel
         }
-        guard !quitApproved, let web = webView else { return .terminateNow }
-        unsaved(web) { dirty in
+        guard !quitApproved, webView != nil || workspace != nil else { return .terminateNow }
+        unsavedAny { dirty in
             let reply = !dirty || self.confirmDiscard("退出")
             self.lastQuitReply = reply
             NSApp.reply(toApplicationShouldTerminate: reply)
@@ -266,8 +277,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        guard sender === window, !closeApproved, let web = webView else { return true }
-        unsaved(web) { dirty in
+        guard sender === window, !closeApproved, webView != nil || workspace != nil else { return true }
+        unsavedAny { dirty in
             if !dirty || self.confirmDiscard("关闭窗口") { self.closeApproved = true; sender.close() }
         }
         return false
@@ -277,6 +288,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         guard let closing = notification.object as? NSWindow else { return }
         if closing === window { window = nil; webView = nil; closeApproved = false }
         popups.removeAll { $0 === closing }
+        if closing === loginWindow { loginWindow = nil; loginWeb = nil; loginPending = false }
+    }
+
+    /// 原生弹出层有未保存输入，或网页版页面自己的 beforeunload 判断有草稿，都算未保存。
+    func unsavedAny(_ done: @escaping (Bool) -> Void) {
+        if workspace?.hasUnsavedInput == true { return done(true) }
+        guard let web = webView, surface == "web" else { return done(false) }
+        unsaved(web, done)
     }
 
     func unsaved(_ web: WKWebView, _ done: @escaping (Bool) -> Void) {
@@ -360,6 +379,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
             setupView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
         ])
         w.contentView = container
+        self.container = container
         if smoke || w.frame.origin == .zero { w.center() }
         window = w; webView = web
         w.makeKeyAndOrderFront(nil)
@@ -368,6 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func status(_ text: String, retry: Bool) {
+        restoreContainer()
         webView?.isHidden = true
         setupView.isHidden = true
         statusView.isHidden = false
@@ -382,8 +403,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     // 首次使用或失败状态下没有可见网页，直接显示表单，不多问。
     @objc func changeAddress() {
         let typed = config.policy?.origin.string ?? config.typed
-        guard let web = webView, !web.isHidden else { attempts = 0; return showSetup("", typed: typed) }
-        unsaved(web) { dirty in
+        guard webView?.isHidden == false || nativeVisible else { attempts = 0; return showSetup("", typed: typed) }
+        unsavedAny { dirty in
             guard !dirty || self.confirmDiscard("更改地址") else { return }
             self.attempts = 0
             self.showSetup("", typed: typed)
@@ -391,6 +412,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     }
 
     func showSetup(_ message: String, typed: String) {
+        restoreContainer()
         webView?.isHidden = true
         statusView.isHidden = true
         setupView.isHidden = false
@@ -494,14 +516,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                 if !smoke { let alert = NSAlert(); alert.messageText = reply.message; alert.addButton(withTitle: "好"); alert.runModal() }
             }
         }
-        if let web = webView, !web.isHidden {
-            unsaved(web) { dirty in if !dirty || self.confirmDiscard(update ? "更新后台" : "卸载后台") { go() } }
+        if webView?.isHidden == false || nativeVisible {
+            unsavedAny { dirty in if !dirty || self.confirmDiscard(update ? "更新后台" : "卸载后台") { go() } }
         } else { go() }
     }
 
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(updateBackend) { return !backendBusy && backendState == "update_available" }
         if item.action == #selector(uninstallBackend) { return !backendBusy && ["update_available", "current"].contains(backendState) }
+        if item.action == #selector(menuWorkbench) { return surface == "web" && config.policy != nil && webView?.isHidden == false }
+        if [#selector(menuPrintOriginal), #selector(menuPrintReference)].contains(item.action) { return nativeVisible && workspace?.sheet == nil && workspace?.selected?.task_id.isEmpty == false }
+        if [#selector(menuOral), #selector(menuPrev), #selector(menuNext), #selector(menuToday), #selector(menuChild1), #selector(menuChild2), #selector(menuReload), #selector(menuWebTools)].contains(item.action) {
+            return nativeVisible && workspace?.sheet == nil && workspace?.view != nil
+        }
         return true
     }
 
@@ -578,6 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         guard let web = webView else { return }
         switch result {
         case .family:
+            if surface == "native" { return showWorkspace(policy) }
             status("正在打开…", retry: false)
             web.load(URLRequest(url: policy.origin.url))
         case .tls:
@@ -626,7 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         setupView.isHidden = true
         webView.isHidden = false
         mainLoads += 1
-        if smoke && mainLoads == 1 { Task { await self.runSmokeChecks(webView) } }
+        if smoke && mainLoads == 1 && environment["FAMILY_DESKTOP_TEST_SURFACE"] != "native" { Task { await self.runSmokeChecks(webView) } }
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { loadFailed(webView, error) }
@@ -749,6 +777,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                      NSMenuItem(title: "隐藏一起成长", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h"),
                      NSMenuItem.separator(),
                      NSMenuItem(title: "退出桌面入口（后台继续）", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")])
+        func command(_ title: String, _ action: Selector, _ key: String) -> NSMenuItem { NSMenuItem(title: title, action: action, keyEquivalent: key) }
+        add("清单", [command("补录口头作业…", #selector(menuOral), "n"), NSMenuItem.separator(),
+                   command("前一天", #selector(menuPrev), "["), command("后一天", #selector(menuNext), "]"), command("回到今天", #selector(menuToday), "t"),
+                   NSMenuItem.separator(), command("第一个孩子", #selector(menuChild1), "1"), command("第二个孩子", #selector(menuChild2), "2"),
+                   NSMenuItem.separator(), command("打印原卷…", #selector(menuPrintOriginal), "p"), command("打印家长参考…", #selector(menuPrintReference), "P"),
+                   NSMenuItem.separator(), command("刷新清单", #selector(menuReload), "r"), command("网页版工具", #selector(menuWebTools), "e"),
+                   command("回到原生工作台", #selector(menuWorkbench), "0")])
         add("编辑", [NSMenuItem(title: "撤销", action: Selector(("undo:")), keyEquivalent: "z"),
                    NSMenuItem(title: "重做", action: Selector(("redo:")), keyEquivalent: "Z"), NSMenuItem.separator(),
                    NSMenuItem(title: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x"),
@@ -931,6 +966,427 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
               "main_frame_loads": mainLoads, "unsaved_after_steps": fresh, "steps": steps, "events": testEvents,
               "isolation": ["data_store_persistent": web.configuration.websiteDataStore.isPersistent, "frame_autosave": window.frameAutosaveName,
                             "marker_seen_at_start": markerBefore ?? NSNull(), "support_is_default": supportDirectory().path == defaultSupportDirectory().path]])
+        finishSmoke()
+    }
+}
+
+
+// MARK: 原生工作台：SwiftUI 视图由 NSHostingController 挂进原窗口；设置、状态与网页版仍用原 AppKit 容器。
+extension AppDelegate {
+    var nativeVisible: Bool { surface == "native" && window?.contentViewController is NSHostingController<WorkspaceView> }
+
+    func restoreContainer() {
+        guard let window, let container, window.contentView !== container else { return }
+        let frame = window.frame
+        window.contentViewController = nil
+        window.toolbar = nil
+        window.appearance = nil
+        window.contentView = container
+        window.setFrame(frame, display: true)
+    }
+
+    func showWorkspace(_ policy: DesktopPolicy) {
+        guard let window else { return }
+        if workspace?.client.origin != policy.origin {
+            let client = WorkspaceClient(origin: policy.origin, ephemeral: smoke)
+            // 原生请求与网页版工具共用同一个网页数据存储里的家长登录（测试模式是不落盘的临时存储，从不读本机默认 cookie）。
+            client.sessionCookies = { [weak self] in await self?.configuration.websiteDataStore.httpCookieStore.allCookies() ?? [] }
+            let store = WorkspaceStore(client: client)
+            store.openDocument = { [weak self] url, name in self?.openDocument(url, name) }
+            store.openWebTools = { [weak self] task, intent in self?.openWebTools(task, intent) }
+            store.openLogin = { [weak self] in self?.openLogin() }
+            store.confirmDiscard = { [weak self] action in self?.confirmDiscard(action) ?? false }
+            store.onLoaded = { [weak self] in self?.workspaceLoaded() }
+            workspace = store
+        }
+        guard let store = workspace else { return }
+        if !observingCookies { observingCookies = true; configuration.websiteDataStore.httpCookieStore.add(self) }
+        surface = "native"
+        TestTargets.enabled = smoke && environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native"
+        let frame = window.frame
+        let host = NSHostingController(rootView: WorkspaceView(store: store))
+        host.sizingOptions = []
+        window.contentViewController = host
+        window.setFrame(frame, display: true)
+        window.toolbarStyle = .unified
+        window.appearance = NSAppearance(named: .aqua)  // 工作台配色只设计了浅色
+        window.subtitle = ""
+        Task { await store.load() }
+    }
+
+    /// 网页版工具（日历、学校消息、照片检查、打印确认等原功能）在同一窗口打开；指定作业时打开同一份原作业，并带上意图
+    /// （print-original 打印原卷、print-reference 打印家长参考、check 照片检查、original 原消息、history 错题诊断与再试）：
+    /// 网页只打开对应的原流程，确认、依据核对和防重复照旧，不会自动打印或保存。
+    static let webIntents: Set<String> = ["", "print-original", "print-reference", "check", "original", "history"]
+    func openWebTools(_ task: String, _ intent: String = "") {
+        guard let policy = config.policy, let web = webView, AppDelegate.webIntents.contains(intent) else { return }
+        guard workspace?.hasUnsavedInput != true || confirmDiscard("打开网页版") else { return }
+        workspace?.sheet = nil; workspace?.sheetDirty = false
+        surface = "web"
+        var c = URLComponents(url: policy.origin.url, resolvingAgainstBaseURL: false)!
+        if !task.isEmpty {
+            let id = task.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_."))) ?? ""
+            c.percentEncodedFragment = "task=" + id + (intent.isEmpty ? "" : "&do=" + intent)
+        }
+        status("正在打开网页版…", retry: false)
+        web.load(URLRequest(url: c.url!))
+        emit(["state": "web_tools_opened", "task": task, "intent": intent])
+    }
+
+    /// 登录用原服务自己的登录页（同一 origin、同一网页数据存储），开在单独的登录窗口：工作台视图不被替换，打开着的填写框、
+    /// 草稿、已选附件和提交标识都原样保留。新的家长登录 cookie 出现后关掉登录窗口、重读清单；保存仍由家长自己再点一次。
+    func openLogin() {
+        guard let policy = config.policy else { return }
+        if let open = loginWindow { open.makeKeyAndOrderFront(nil); return }
+        Task { @MainActor in
+            loginBaseline = WorkspaceClient.session(await configuration.websiteDataStore.httpCookieStore.allCookies(), for: policy.origin)?.value ?? ""
+            loginPending = true
+            let login = WKWebView(frame: .zero, configuration: configuration)
+            login.navigationDelegate = self
+            login.uiDelegate = self
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 480, height: 640), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+            w.title = "登录家庭账号"
+            w.isReleasedWhenClosed = false
+            w.minSize = NSSize(width: 360, height: 420)
+            w.contentView = login
+            w.delegate = self
+            w.center()
+            w.makeKeyAndOrderFront(nil)
+            popups.append(w)
+            loginWindow = w; loginWeb = login
+            login.load(URLRequest(url: policy.origin.url.appendingPathComponent("login")))
+            emit(["state": "login_opened", "window": true])
+        }
+    }
+
+    nonisolated func cookiesDidChange(in cookieStore: WKHTTPCookieStore) {
+        Task { @MainActor in await self.sessionChanged() }
+    }
+
+    /// 家长登录状态变了：登录完成就回工作台；工作台开着时重读（退出后服务端会拒绝，工作台显示需要登录）。
+    func sessionChanged() async {
+        guard let policy = config.policy else { return }
+        let current = WorkspaceClient.session(await configuration.websiteDataStore.httpCookieStore.allCookies(), for: policy.origin)
+        if loginPending, let current, current.value != loginBaseline {
+            loginPending = false
+            emit(["state": "login_returned"])
+            loginWindow?.close()
+            window?.makeKeyAndOrderFront(nil)  // 登录窗口关掉后回到工作台（和它打开着的填写框），下一次点击直接生效
+            // 工作台一直开着：只重读清单，不换掉工作台视图（换掉会丢掉打开着的填写框）。
+            if surface == "native", let store = workspace { await store.load() } else { showWorkspace(policy) }
+            return
+        }
+        if surface == "native", let store = workspace { await store.load() }
+    }
+
+    /// 原件等富文档：只开原服务同源地址，另开窗口，工作台与草稿不受影响。
+    func openDocument(_ url: URL, _ name: String) {
+        guard config.policy?.origin.matches(url) == true else { return }
+        let popup = WKWebView(frame: .zero, configuration: configuration)
+        popup.navigationDelegate = self
+        popup.uiDelegate = self
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 760), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        w.title = name
+        w.isReleasedWhenClosed = false
+        w.minSize = NSSize(width: 360, height: 400)
+        w.contentView = popup
+        w.delegate = self
+        w.center()
+        w.makeKeyAndOrderFront(nil)
+        popups.append(w)
+        popup.load(URLRequest(url: url))
+        emit(["state": "document_opened"])
+    }
+
+    @objc func menuOral() { workspace?.sheetDirty = false; workspace?.sheet = .oral }
+    @objc func menuPrev() { workspace?.shift(-1) }
+    @objc func menuNext() { workspace?.shift(1) }
+    @objc func menuToday() { workspace?.change(day: workspace?.view?.today ?? "") }
+    @objc func menuChild1() { workspace?.childAt(0) }
+    @objc func menuChild2() { workspace?.childAt(1) }
+    @objc func menuReload() { Task { await workspace?.load() } }
+    @objc func menuWebTools() { openWebTools("") }
+    @objc func menuPrintOriginal() { if let id = workspace?.selected?.task_id, !id.isEmpty { openWebTools(id, "print-original") } }
+    @objc func menuPrintReference() { if let id = workspace?.selected?.task_id, !id.isEmpty { openWebTools(id, "print-reference") } }
+    @objc func menuWorkbench() {
+        guard let policy = config.policy else { return }
+        guard let web = webView, surface == "web" else { return showWorkspace(policy) }
+        unsaved(web) { dirty in if !dirty || self.confirmDiscard("回到工作台") { self.showWorkspace(policy) } }
+    }
+
+    func workspaceLoaded() {
+        guard smoke, surface == "native", !nativeRan, workspace?.view != nil || workspace?.error.isEmpty == false else { return }
+        nativeRan = true
+        Task { await runNativeChecks() }
+    }
+
+    // MARK: 原生验收（仅 --smoke-test + 虚构后台）：经无障碍树找控件，在其位置投递真实鼠标/键盘事件，读回控件文字；截图只取本窗口。
+    struct AXNode { let id: String; let text: String; let frame: NSRect }
+
+    func axNodes(_ root: NSObject, _ out: inout [AXNode], _ depth: Int = 0) {
+        guard depth < 80, out.count < 4000 else { return }
+        func string(_ key: String) -> String {
+            guard root.responds(to: NSSelectorFromString(key)) else { return "" }
+            let v = root.value(forKey: key)
+            return (v as? String) ?? (v as? NSAttributedString)?.string ?? (v.map { "\($0)" } ?? "")
+        }
+        let id = string("accessibilityIdentifier")
+        let text = [string("accessibilityLabel"), string("accessibilityTitle"), string("accessibilityValue")].filter { !$0.isEmpty }.joined(separator: " ")
+        var frame = NSRect.zero
+        if root.responds(to: NSSelectorFromString("accessibilityFrame")), let v = root.value(forKey: "accessibilityFrame") as? NSValue { frame = v.rectValue }
+        out.append(AXNode(id: id, text: text, frame: frame))
+        guard root.responds(to: NSSelectorFromString("accessibilityChildren")), let children = root.value(forKey: "accessibilityChildren") as? [Any] else { return }
+        for child in children { if let o = child as? NSObject { axNodes(o, &out, depth + 1) } }
+    }
+
+    func testWindows() -> [NSWindow] { [window?.attachedSheet, window].compactMap { $0 } }
+
+    func nodes() -> [AXNode] {
+        var out: [AXNode] = []
+        for w in testWindows() { axNodes(w, &out) }
+        return out
+    }
+
+    /// 先找无障碍树；SwiftUI 没有在进程内提供节点时，用工作台登记的控件位置（换算成屏幕坐标）与其显示文字。
+    func find(_ id: String, contains: String = "") -> AXNode? {
+        if let node = nodes().first(where: { $0.id == id && (contains.isEmpty || $0.text.contains(contains)) && $0.frame.width > 0 }) { return node }
+        guard let (view, text) = TestTargets.live(id), contains.isEmpty || text.contains(contains), let w = view.window else { return nil }
+        let frame = w.convertToScreen(view.convert(view.bounds, to: nil))
+        return frame.width > 0 ? AXNode(id: id, text: text, frame: frame) : nil
+    }
+
+    /// 控件不在可见区域时，像滚轮一样让它所在的真实滚动视图滚到那里（不调用工作台自己的任何动作）。
+    func reveal(_ id: String) async -> Bool {
+        guard let (view, _) = TestTargets.live(id), !onScreen(view) else { return false }
+        var moved = view.scrollToVisible(view.bounds)
+        if !moved, let scroll = view.enclosingScrollView, let doc = scroll.documentView {
+            // 真实滚动视图自己的滚动：把控件移到可见区域中间。
+            let target = doc.convert(view.bounds, from: view), page = scroll.contentView.bounds
+            scroll.contentView.scroll(to: NSPoint(x: page.origin.x, y: max(0, min(target.midY - page.height / 2, doc.bounds.height - page.height))))
+            scroll.reflectScrolledClipView(scroll.contentView); moved = true
+        }
+        if moved { await sleep(0.5) }
+        return moved
+    }
+
+    /// 控件中心在它所在滚动视图的可见区域内，也在窗口内容里。
+    func onScreen(_ view: NSView) -> Bool {
+        guard let w = view.window, w.isVisible, let content = w.contentView else { return false }
+        let rect = content.convert(view.bounds, from: view), center = NSPoint(x: rect.midX, y: rect.midY)
+        let seen = view.enclosingScrollView.map { content.convert($0.contentView.bounds, from: $0.contentView) } ?? content.bounds
+        return seen.contains(center) && content.bounds.contains(center)
+    }
+
+    /// 只认真正显示在窗口里的文字：登记了显示文字的控件可见（必要时先滚过去）；不读清单数据本身。
+    func shown(_ text: String) async -> [String] {
+        var ids: [String] = []
+        for id in TestTargets.anchors.keys.sorted() where (TestTargets.live(id)?.1 ?? "").contains(text) {
+            _ = await reveal(id)
+            if let (view, _) = TestTargets.live(id), onScreen(view) { ids.append(id) }
+        }
+        return ids
+    }
+
+    func post(_ type: NSEvent.EventType, at screen: NSPoint, in w: NSWindow) {
+        let p = w.convertFromScreen(NSRect(origin: screen, size: .zero)).origin
+        if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
+                                      context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) { NSApp.postEvent(e, atStart: false) }
+    }
+
+    func click(_ id: String, contains: String = "") async -> [String: Any] {
+        let scrolled = await reveal(id)
+        guard let node = find(id, contains: contains) else { return ["ok": false, "error": "control not found", "id": id] }
+        var center = NSPoint(x: node.frame.midX, y: node.frame.midY), row = -1
+        // 列表里的一行：用表格自己的那一行（锚点所在的那一行）的位置；先让表格自己滚到这一行，再点这一行的中间。
+        if let (anchor, _) = TestTargets.live(id), let (table, index) = TestTargets.row(of: anchor), let tw = table.window {
+            // 滚到这一行在可见区域中间（贴着顶边时会被浮动的科目标题盖住）。
+            if let scroll = table.enclosingScrollView, let doc = scroll.documentView {
+                let target = doc.convert(table.rect(ofRow: index), from: table), page = scroll.contentView.bounds
+                scroll.contentView.scroll(to: NSPoint(x: page.origin.x, y: max(0, min(target.midY - page.height / 2, doc.bounds.height - page.height))))
+                scroll.reflectScrolledClipView(scroll.contentView)
+            } else { table.scrollRowToVisible(index) }
+            await sleep(0.4); row = index
+            let r = tw.convertToScreen(table.convert(table.rect(ofRow: index), to: nil)); center = NSPoint(x: r.midX, y: r.midY)
+        }
+        guard let w = testWindows().first(where: { $0.frame.contains(center) }) else { return ["ok": false, "error": "control outside the test window", "id": id, "scrolled": scrolled, "has_scroll_view": TestTargets.live(id)?.0.enclosingScrollView != nil] }
+        // 像家长先把窗口点到最前面：App 不在前台、窗口不是当前窗口时先激活（只激活，不算这一步的点击）。
+        var activated = false
+        if !w.isKeyWindow { NSApp.activate(ignoringOtherApps: true); w.makeKeyAndOrderFront(nil); await sleep(0.5); activated = true }
+        let local = w.convertFromScreen(NSRect(origin: center, size: .zero)).origin
+        let hit = w.contentView?.hitTest(w.contentView?.convert(local, from: nil) ?? local)
+        // 列表行必须点在那一行上；点到列表空白处不算点了这一行。
+        if id.hasPrefix("row-"), row < 0 || hit is NSTableView || hit.map({ String(describing: type(of: $0)).contains("HeaderForSection") }) == true {
+            return ["ok": false, "error": "not on this list row", "id": id, "row": row, "hit": hit.map { String(describing: type(of: $0)) } ?? "none"]
+        }
+        post(.leftMouseDown, at: center, in: w); post(.leftMouseUp, at: center, in: w)
+        await sleep(0.6)
+        return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
+                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "row": row, "key": w.isKeyWindow, "activated": activated]
+    }
+
+    func key(_ chars: String, _ modifiers: [String], code: UInt16 = 0) async {
+        guard let w = testWindows().first else { return }
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers.contains("command") { flags.insert(.command) }
+        if modifiers.contains("shift") { flags.insert(.shift) }
+        for type in [NSEvent.EventType.keyDown, .keyUp] {
+            if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
+                                        context: nil, characters: chars, charactersIgnoringModifiers: chars.lowercased(), isARepeat: false, keyCode: code) { NSApp.postEvent(e, atStart: false) }
+        }
+        await sleep(0.6)
+    }
+
+    func nativeStep(_ step: [String: Any]) async -> [String: Any] {
+        let limit = step["timeout"] as? Double ?? 10
+        if let faults = step["faults"] as? [String] { workspaceTestFaults = faults; return ["ok": true, "faults": faults] }
+        if let id = step["click"] as? String { return await click(id, contains: step["contains"] as? String ?? "") }
+        if let prefix = step["click_prefix"] as? String {
+            let id = nodes().first(where: { $0.id.hasPrefix(prefix) && $0.frame.width > 0 })?.id ?? TestTargets.anchors.keys.sorted().first { $0.hasPrefix(prefix) && TestTargets.live($0) != nil }
+            guard let id else { return ["ok": false, "error": "control not found", "prefix": prefix] }
+            return await click(id)
+        }
+        if let text = step["find_text"] as? String {
+            let start = Date(), absent = step["absent"] as? Bool == true
+            while Date().timeIntervalSince(start) < limit {
+                let hits = nodes().filter { $0.text.contains(text) && $0.frame.width > 0 }
+                if absent {
+                    let anywhere = TestTargets.anchors.keys.filter { (TestTargets.live($0)?.1 ?? "").contains(text) }
+                    if hits.isEmpty && anywhere.isEmpty { return ["ok": true, "text": text, "absent": true] }
+                } else {
+                    let visible = await shown(text)
+                    if !visible.isEmpty || !hits.isEmpty { return ["ok": true, "text": text, "ax_ids": hits.map(\.id).filter { !$0.isEmpty }, "shown_ids": visible] }
+                }
+                await sleep(0.25)
+            }
+            return ["ok": false, "error": "timeout", "text": text, "absent": absent]
+        }
+        if let text = step["type"] as? String {
+            guard let w = testWindows().first, let tv = w.firstResponder as? NSTextView else { return ["ok": false, "error": "no focused text field"] }
+            // 真实按键：逐字投递 keyDown/keyUp，走文本框自己的 keyDown → interpretKeyEvents → insertText。
+            for ch in text {
+                for type in [NSEvent.EventType.keyDown, .keyUp] {
+                    if let e = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
+                                                context: nil, characters: String(ch), charactersIgnoringModifiers: String(ch), isARepeat: false, keyCode: 0) { NSApp.postEvent(e, atStart: false) }
+                }
+            }
+            await sleep(0.8)
+            // 只认真实按键送达；不再用 insertText 直接写入文本框。
+            var result: [String: Any] = ["ok": tv.string.contains(text), "responder": String(describing: type(of: tv)), "method": "key_events",
+                                         "field": String(tv.string.prefix(80)), "sheet_dirty": workspace?.sheetDirty == true]
+            // 指定了目标控件时：输入必须恰好落在那个控件里（正在编辑的控件与它的位置重合），且内容正好是这次输入的文字。
+            if let target = step["into"] as? String {
+                let editing: NSView = tv.isFieldEditor ? (tv.delegate as? NSView ?? tv) : tv
+                let anchor = TestTargets.live(target)?.0
+                let same = anchor != nil && editing.window === anchor?.window
+                    && editing.convert(editing.bounds, to: nil).intersects(anchor.map { $0.convert($0.bounds, to: nil) } ?? .zero)
+                result["ok"] = same && tv.string == text
+                result["into"] = target; result["same_control"] = same; result["exact"] = tv.string == text; result["editing"] = String(describing: type(of: editing))
+            }
+            return result
+        }
+        if let chars = step["key"] as? String {
+            await key(chars, step["modifiers"] as? [String] ?? [], code: UInt16(step["code"] as? Int ?? 0)); return ["ok": true, "key": chars]
+        }
+        if let id = step["until"] as? String {
+            let start = Date(), wanted = step["contains"] as? String ?? "", absent = step["absent"] as? Bool == true
+            while Date().timeIntervalSince(start) < limit {
+                let found = find(id, contains: wanted)
+                if absent ? found == nil : found != nil { return ["ok": true, "id": id, "text": found?.text ?? ""] }
+                await sleep(0.25)
+            }
+            let near = nodes().filter { !$0.id.isEmpty }.prefix(80).map { $0.id + ": " + String($0.text.prefix(60)) }
+            return ["ok": false, "error": "timeout", "id": id, "contains": wanted, "visible_ids": Array(near), "ax_nodes": nodes().count,
+                    "registered": TestTargets.anchors.keys.sorted().filter { TestTargets.live($0) != nil }.prefix(80).map { $0 + ": " + String((TestTargets.live($0)?.1 ?? "").prefix(60)) }]
+        }
+        switch step["native"] as? String ?? "" {
+        case "snapshot":
+            await snapshot(step["name"] as? String ?? "native")
+            if let sheet = window?.attachedSheet, let dir = environment["FAMILY_DESKTOP_TEST_SNAPSHOT_DIR"], let v = sheet.contentView,
+               let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                v.cacheDisplay(in: v.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir).appendingPathComponent((step["name"] as? String ?? "native") + "-sheet.png"))
+            }
+            return ["ok": true]
+        case "dirty": return ["ok": true, "dirty": workspace?.hasUnsavedInput == true]
+        case "web_login", "web_logout":
+            // 虚构登录（测试声明的虚构账号）：在网页版自己的登录页里填写并提交，或用网页自己的退出请求；原生端不碰 cookie。
+            guard let web = loginWeb ?? webView, loginWeb != nil || surface == "web" || step["native"] as? String == "web_logout" else { return ["ok": false, "error": "web tools not open"] }
+            let login = (try? JSONSerialization.jsonObject(with: Data((environment["FAMILY_DESKTOP_TEST_LOGIN"] ?? "[]").utf8))) as? [String] ?? []
+            let script: String
+            if step["native"] as? String == "web_login" {
+                guard login.count == 2 else { return ["ok": false, "error": "no fictional login"] }
+                let quoted = login.map { String(data: try! JSONSerialization.data(withJSONObject: [$0]), encoding: .utf8)!.dropFirst().dropLast() }
+                script = "document.getElementById('username').value=\(quoted[0]);document.getElementById('password').value=\(quoted[1]);document.getElementById('loginForm').requestSubmit();'submitted'"
+            } else {
+                script = "fetch('/api/parent/logout',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-Family-Login':'1'},body:'{}'}).then(r=>r.status)"
+            }
+            let start = Date()
+            // 等登录页真正载入完（地址在开始载入时就变了，表单还没出来）。
+            while Date().timeIntervalSince(start) < 10, step["native"] as? String == "web_login" {
+                if web.url?.path.hasSuffix("login") == true, !web.isLoading,
+                   (try? await web.evaluateJavaScript("document.readyState==='complete'&&document.getElementById('loginForm')?1:0")) as? Int == 1 { break }
+                await sleep(0.25)
+            }
+            let value = try? await web.callAsyncJavaScript(script.hasPrefix("fetch") ? "return await " + script : "return (()=>{" + script.replacingOccurrences(of: ";'submitted'", with: ";return 'submitted'") + "})()", contentWorld: .page)
+            await sleep(1.5)
+            return ["ok": value != nil, "result": value.map { "\($0)" } ?? "", "url_path": web.url?.path ?? ""]
+        case "fixture_get":
+            // 只给虚构后台的测试控制地址（/__fixture/…），不带任何 cookie。
+            guard let path = step["path"] as? String, path.hasPrefix("/__fixture/"), let origin = config.policy?.origin else { return ["ok": false] }
+            let reply = try? await URLSession(configuration: .ephemeral).data(from: origin.url.appendingPathComponent(String(path.dropFirst())))
+            return ["ok": (reply?.1 as? HTTPURLResponse)?.statusCode == 200, "path": path]
+        case "discard_next": testDiscardNext = true; return ["ok": true]
+        case "reopen":
+            // 像重新打开 App 一样：丢掉内存里的清单，从后台重新读同一天。
+            guard let policy = config.policy, let keep = workspace?.selection, let child = workspace?.childID, let day = workspace?.day else { return ["ok": false, "error": "nothing open"] }
+            workspace = nil; showWorkspace(policy); workspace?.childID = child; workspace?.day = day
+            await workspace?.load(); workspace?.select(keep); await sleep(0.8)
+            return ["ok": workspace?.selected != nil, "selection": workspace?.selection ?? ""]
+        case "close_attempts":
+            guard let window else { return ["ok": false] }
+            let dirty = workspace?.hasUnsavedInput == true
+            window.performClose(nil); await sleep(0.8)
+            let open = self.window === window && window.isVisible
+            lastQuitReply = nil
+            // 验收实际 Cmd+Q：原来的 perform(afterDelay:) 在 sheet 的事件循环里可能根本没被投递。
+            // 系统可能在调用应用委托之前拦住退出；用实际窗口/草稿与后续保存读回验，不伪造委托回执。
+            let quitKeyWindow = testWindows().first?.isKeyWindow == true
+            await key("q", ["command"], code: 12); await sleep(1.5)
+            return ["ok": true, "dirty": dirty, "window_open_after_close": open, "quit_reply": lastQuitReply.map { $0 ? "terminate" : "cancelled" } ?? "none",
+                    "quit_key_posted": true, "quit_key_window": quitKeyWindow,
+                    "window_open_after_quit": self.window === window && window.isVisible,
+                    "still_dirty": workspace?.hasUnsavedInput == true]
+        case "state":
+            let s = workspace
+            return ["ok": true, "child": s?.childID ?? "", "day": s?.day ?? "", "selection": s?.selection ?? "", "error": s?.error ?? "",
+                    "login_required": s?.loginRequired == true, "summary": s?.summary ?? "", "surface": surface, "web_url": webView?.url?.absoluteString ?? "",
+                    "groups": (s?.view?.groups ?? []).map { ["subject": $0.subject, "items": $0.items.map(\.id)] },
+                    "web_visible": webView?.isHidden == false && surface == "web", "native_visible": nativeVisible, "windows": NSApp.windows.filter(\.isVisible).count,
+                    "login_window": loginWindow != nil, "sheet": s?.sheet?.id ?? "", "dirty": s?.hasUnsavedInput == true]
+        default: return ["ok": false, "error": "unknown step"]
+        }
+    }
+
+    func runNativeChecks() async {
+        guard let window, config.policy?.origin == testOrigin else { emit(["state": "loaded_untrusted_origin"]); return finishSmoke() }
+        NSApp.activate(ignoringOtherApps: true); window.makeKeyAndOrderFront(nil)
+        await sleep(1.2)
+        var results: [[String: Any]] = []
+        if let file = environment["FAMILY_DESKTOP_TEST_NATIVE_STEPS"], let data = FileManager.default.contents(atPath: file),
+           let list = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+            for step in list {
+                let name = step["name"] as? String ?? ""
+                if let width = step["width"] as? Double { window.setContentSize(NSSize(width: width, height: step["height"] as? Double ?? 860)); await sleep(0.8) }
+                let result = await nativeStep(step)
+                results.append(["name": name, "result": result])
+                emit(["state": "native_step_done", "name": name, "result": result])
+                if result["ok"] as? Bool == false, step["required"] as? Bool != false {
+                    await snapshot(name + "-failed"); emit(["state": "native_steps_stopped", "after": name]); break
+                }
+            }
+        }
+        emit(["state": "native_loaded", "steps": results, "events": testEvents, "main_frame_loads": mainLoads,
+              "isolation": ["support_is_default": supportDirectory().path == defaultSupportDirectory().path, "frame_autosave": window.frameAutosaveName]])
         finishSmoke()
     }
 }
