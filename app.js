@@ -1457,7 +1457,7 @@ async function printPost(path,body,timeout=90000){
   try{
     const r=await apiFetch('/api/print/'+path,{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
     let result;try{result=await r.json()}catch{throw Error('打印服务返回了无法读取的结果')}
-    if(!r.ok){const error=Error(result.error||'打印请求未完成');error.status=r.status;throw error}
+    if(!r.ok){const error=Error(result.error||'打印请求未完成');error.status=r.status;error.code=result.code;throw error}
     return result;
   }catch(error){if(error.name==='AbortError')throw Error('打印请求超时');throw error}
   finally{clearTimeout(timer)}
@@ -1465,13 +1465,17 @@ async function printPost(path,body,timeout=90000){
 let homeworkPrintBusy=false;
 let homeworkPrintOpening=0;
 const homeworkPrintKey='family-homework-print:v1:'+basePath;
+// The two checks bind to the requirement and owner they were made against; files, words and the print number stay.
+const homeworkBasisNotice='作业要求或归属已更新：原选文件、参考文字和打印编号已保留，请对照上方新版重新核对并勾选下方两项。';
+// One notice under the current title; it stays across close and reopen until both checks are made again on this version.
+function homeworkBasisRecheck(f,text){f.dataset.recheck=text?'1':'';const notice=$('#homeworkPrintBasis');if(notice){notice.textContent=text||'';notice.hidden=!text}}
 const homeworkQuestionValues=f=>['question_source','question_source_2','question_source_3','question_source_4'].map(name=>f.elements[name].value).filter(Boolean);
 function saveHomeworkPrintDraft(f){
   try{sessionStorage.setItem(homeworkPrintKey+':'+f.elements.task_id.value,JSON.stringify({task_id:f.elements.task_id.value,
     request_key:f.dataset.requestKey,question_source:f.elements.question_source.value,
     question_source_2:f.elements.question_source_2.value,question_source_3:f.elements.question_source_3.value,question_source_4:f.elements.question_source_4.value,
     guide_source:f.elements.guide_source.value,guide_text:f.elements.guide_text.value,
-    expected_question_sha256:f.dataset.questionSha||'',
+    expected_question_sha256:f.dataset.questionSha||'',basis:f.dataset.printBasis||'',recheck:!!f.dataset.recheck,
     question_confirmed:f.elements.question_confirmed.checked,guide_confirmed:f.elements.guide_confirmed.checked}));return true}
   catch{return false}
 }
@@ -1490,13 +1494,14 @@ async function openHomeworkPrint(id){
   const files=materials.files.filter(f=>/\.(pdf|jpe?g|png|docx|pptx|txt)$/i.test(f.name));
   if(!files.length){toast(materials.school_error||'这项作业还没有可打印原件，请在同一作业上传资料。');return}
   const f=$('#homeworkPrintForm');f.reset();f.elements.task_id.value=id;
+  f.dataset.printBasis=typeof materials.print_basis==='string'&&/^[a-f0-9]{64}$/.test(materials.print_basis)?materials.print_basis:'';f.dataset.basisStale='';homeworkBasisRecheck(f,'');
   f.dataset.printSources=JSON.stringify(files.map(file=>JSON.stringify(file.source)));
   const choices=files.map(file=>`<option value="${esc(JSON.stringify(file.source))}">${esc(file.name)}</option>`).join('');
   f.elements.question_source.innerHTML='<option value="">请选择题目原件</option>'+choices;
   for(const n of [2,3,4])f.elements['question_source_'+n].innerHTML='<option value="">不添加</option>'+choices;
   f.elements.guide_source.innerHTML='<option value="">填写下方参考文字</option>'+choices;
   let saved;try{saved=JSON.parse(sessionStorage.getItem(homeworkPrintKey+':'+id)||'null')}catch{}
-  let unavailable=false;
+  let unavailable=false,stale=false;
   if(saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')){
     for(const key of ['question_source','question_source_2','question_source_3','question_source_4','guide_source','guide_text'])if(typeof saved[key]==='string'){
       const field=f.elements[key];
@@ -1505,12 +1510,15 @@ async function openHomeworkPrint(id){
       }
       field.value=saved[key];
     }
-    f.elements.question_confirmed.checked=!unavailable&&!!saved.question_confirmed;f.elements.guide_confirmed.checked=!unavailable&&!!saved.guide_confirmed;
+    // An older unbound draft, a later change or cancellation never carries its checks over.
+    stale=(typeof saved.basis==='string'?saved.basis:'')!==f.dataset.printBasis&&(!!saved.question_confirmed||!!saved.guide_confirmed);
+    if(stale||saved.recheck===true)homeworkBasisRecheck(f,homeworkBasisNotice);
+    f.elements.question_confirmed.checked=!unavailable&&!stale&&!!saved.question_confirmed;f.elements.guide_confirmed.checked=!unavailable&&!stale&&!!saved.guide_confirmed;
   }
   f.querySelector('details').open=[2,3,4].some(n=>f.elements['question_source_'+n].value);drawHomeworkPrintFiles(f);
   f.dataset.questionSha=saved?.task_id===id&&typeof saved.expected_question_sha256==='string'?saved.expected_question_sha256:'';
   f.dataset.requestKey=saved?.task_id===id&&/^[A-Za-z0-9_-]{8,128}$/.test(saved.request_key||'')?saved.request_key:crypto.randomUUID();
-  $('#homeworkPrintTask').textContent=task.child+' · '+task.title+(task.agenda?.due_on?' · '+agendaDueLabel(task.agenda)+' '+task.agenda.due_on:'');
+  $('#homeworkPrintTask').textContent=task.child+' · '+(typeof materials.task_title==='string'&&materials.task_title?materials.task_title:task.title)+(task.agenda?.due_on?' · '+agendaDueLabel(task.agenda)+' '+task.agenda.due_on:'');
   $('#homeworkPrintError').textContent=unavailable?'原选择有资料现在无法核对；参考文字与请求编号保留，请回原作业核对资料。':materials.school_error||'';
   const printers=data.printing?.printers||[];normalizePrintDefaults();
   let printer=f.elements.printer;
@@ -1519,7 +1527,8 @@ async function openHomeworkPrint(id){
   printer.innerHTML='<option value="">请选择打印机</option>'+printers.map(p=>`<option value="${esc(p.name)}">${esc(p.label||p.name)}</option>`).join('');
   printer.value=printDefaults.printer;
   if(!saveHomeworkPrintDraft(f)){toast('无法保留本次打印编号，请启用站点存储后再打印');return}
-  $('#homeworkPrintDialog').showModal();
+  // Open at the top every time, so the current title and any re-check notice come first even after scrolling down last time.
+  const dialog=$('#homeworkPrintDialog');dialog.showModal();dialog.scrollTop=0;f.scrollTop=0;
 }
 function homeworkPrintSelectionCurrent(f){
   const allowed=new Set(JSON.parse(f.dataset.printSources||'[]'));
@@ -1542,8 +1551,10 @@ $('#homeworkPrintForm')?.addEventListener('change',e=>{
     e.currentTarget.elements.guide_confirmed.checked=false;
     drawHomeworkPrintFiles(e.currentTarget);
   }
-  saveHomeworkPrintDraft(e.currentTarget);
-  const error=$('#homeworkPrintError');
+  const error=$('#homeworkPrintError'),f=e.currentTarget;
+  // Only both checks made again on the version opened here release the notice; a refused submit waits for a reopen.
+  if(/_confirmed$/.test(e.target.name)&&!f.dataset.basisStale&&f.elements.question_confirmed.checked&&f.elements.guide_confirmed.checked)homeworkBasisRecheck(f,'');
+  saveHomeworkPrintDraft(f);
   if(homeworkPrintSelectionCurrent(e.currentTarget)&&/^原选择有资料现在无法核对|^原已选资料当前无法核对/.test(error.textContent))error.textContent='';
 });
 $('#homeworkDraftButton')?.addEventListener('click',async()=>{
@@ -1570,6 +1581,8 @@ $('#homeworkDraftButton')?.addEventListener('click',async()=>{
 });
 $('#homeworkPrintForm')?.addEventListener('submit',async e=>{
   e.preventDefault();if(homeworkPrintBusy)return;const f=e.currentTarget,error=$('#homeworkPrintError');
+  if(f.dataset.basisStale){homeworkBasisRecheck(f,f.dataset.basisStale);$('#homeworkPrintTask').scrollIntoView({block:'nearest'});return}
+  if(!f.dataset.printBasis){error.textContent='这项作业的核对依据暂时无法读取，尚未提交打印；原选文件、参考文字和打印编号保留。请关闭后重新打开，或到打印页查看原打印进展。';return}
   if(!homeworkPrintSelectionCurrent(f)){error.textContent='原已选资料当前无法核对，尚未提交打印；请回原作业核对后重试。';return}
   if(!f.reportValidity())return;
   if(!!f.elements.guide_source.value===!!f.elements.guide_text.value.trim()){
@@ -1582,12 +1595,17 @@ $('#homeworkPrintForm')?.addEventListener('submit',async e=>{
       question_sources:sources,
       guide_source:f.elements.guide_source.value?JSON.parse(f.elements.guide_source.value):null,
       guide_text:f.elements.guide_text.value.trim(),printer:f.elements.printer.value,
-      expected_question_sha256:f.dataset.questionSha||'',question_confirmed:true,guide_confirmed:true};
+      expected_question_sha256:f.dataset.questionSha||'',question_confirmed:true,guide_confirmed:true,confirmed_basis:f.dataset.printBasis};
     const result=await printPost('homework',body,180000);
     if(result.jobs?.questions?.length!==sources.length||result.jobs.questions.some(job=>!job.id)||!result.jobs?.guide?.id)throw Error('打印回执不完整，请用原请求编号重试，避免重复打印');
     sessionStorage.removeItem(homeworkPrintKey+':'+f.elements.task_id.value);$('#homeworkPrintDialog').close();
     await refreshPrintJobs();page='print';render();toast('已按所选顺序提交'+sources.length+'份题目文件和家长参考，共'+(sources.length+1)+'个打印任务');
-  }catch(err){error.textContent=(err.message||'打印未完成')+'。已提交的部分不会因原编号重试而重复提交；请核对打印进展。'}
+  }catch(err){
+    if(err.code==='print_basis_changed'||err.code==='print_basis_required'){
+      // Nothing new was queued: keep files, words and number; the checks stay off and the notice stays until both are made again after a reopen.
+      f.dataset.basisStale=err.message;f.elements.question_confirmed.checked=false;f.elements.guide_confirmed.checked=false;
+      homeworkBasisRecheck(f,err.message);saveHomeworkPrintDraft(f);error.textContent='';$('#homeworkPrintTask').scrollIntoView({block:'nearest'});
+    }else error.textContent=(err.message||'打印未完成')+'。已提交的部分不会因原编号重试而重复提交；请核对打印进展。'}
   finally{homeworkPrintBusy=false;controls.forEach(c=>c.disabled=false)}
 });
 $('#homeworkPrintDialog')?.addEventListener('cancel',e=>{if(homeworkPrintBusy)e.preventDefault()});

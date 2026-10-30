@@ -780,6 +780,38 @@ class PrintStore:
         jobs=[queue(prep,'question'+(str(n+1) if n else '')) for n,prep in enumerate(prepared)]
         return dict(question=jobs[0],questions=jobs,guide=queue(second, 'guide'))
 
+    def homework_receipt(self, obj, task, *, queue_guard=None, context_sha256='', source_sha256=None, refusal=''):
+        """Read back a pair whose every job is already queued for this same scope and settings; never prepares, fills a missing half or queues anew."""
+        if not isinstance(obj, dict) or obj.get('question_confirmed') is not True or obj.get('guide_confirmed') is not True:
+            raise PrintError('请分别核对作业题目和家长参考')
+        if not isinstance(task, dict) or obj.get('task_id') != task.get('id'):
+            raise PrintError('作业事项已变化，请刷新后核对', 'conflict', 409)
+        key = _key(obj.get('request_key'))
+        questions = question_sources(obj.get('question_sources') if 'question_sources' in obj else [obj.get('question_source')])
+        guide = obj.get('guide_source')
+        if (guide is None) == (not bool(obj.get('guide_text', ''))):
+            raise PrintError('请选择参考文件，或填写已核对的参考答案与指南')
+        if not isinstance(context_sha256, str) or not re.fullmatch(r'[a-f0-9]{64}', context_sha256): raise PrintError('打印来源快照不正确')
+        settings = {k: obj.get(k, v) for k, v in dict(printer='', copies=1, sides='one-sided', color='monochrome').items()}
+        printer = printer_name(settings['printer'])
+        subkey = lambda role: _hash((key+':'+role).encode())[:32]
+        roles = ['question'+(str(n+1) if n else '') for n in range(len(questions))]+['guide']
+        with self._db() as c:
+            c.execute('BEGIN')
+            if queue_guard is not None: queue_guard(c)
+            rows = [c.execute('SELECT * FROM print_jobs WHERE idem=?', (subkey(role+'_enqueue'),)).fetchone() for role in roles]
+        jobs = []
+        for row, source in zip(rows, questions+[guide]):
+            body = json.loads(row['body']) if row else {}
+            # The stored fingerprint already binds the PDF, settings and this child's frozen task/original snapshot.
+            same = dict(preparation_id=body.get('preparation_id'), pdf_sha256=body.get('pdf_sha256'), printer=printer, pages=body.get('pages'),
+                        copies=settings['copies'], sides=settings['sides'], color=settings['color'], homework_context_sha256=context_sha256)
+            if (not row or row['fingerprint'] != _hash(_json(same).encode())
+                    or source is not None and body.get('source_sha256') != (source_sha256 or {}).get(source.get('id'))):
+                raise PrintError(refusal or '原打印请求无法核对，尚未打印', 'print_basis_required', 409)
+            jobs.append(self._job(row))
+        return dict(question=jobs[0], questions=jobs[:-1], guide=jobs[-1])
+
     def preparation(self, ident):
         with self._db() as c: row = c.execute('SELECT body FROM print_preparations WHERE id=?', (_id(ident),)).fetchone()
         if not row: raise PrintError('打印预览不存在', 'not_found', 404)
