@@ -136,6 +136,8 @@
 !/test_school_history.py
 !/test_agent_http.py
 !/test_agent_ui.cjs
+!/test_school_change_ui.cjs
+!/test_school_change_replay.json
 !/test_collect.py
 !/AGENT运行.md
 !/deploy/
