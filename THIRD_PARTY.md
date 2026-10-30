@@ -183,3 +183,24 @@ SDK源码标示MIT；本轮只在私有实验目录执行公开解析代码，�
 - 只复用 `src/lib/image-crop.ts` 的 `toSafeImageSrc`、`regionFromPoints`、`cropImageRegions`：原 TS 原样保留，浏览器加载的 `image-crop.js` 仅由 Node 24 `stripTypeScriptTypes` 去类型，算法未改；版本、哈希与改动见 `vendor/wrong-notebook/PROVENANCE.json`。
 - 运行位置：原作业已存作答下的“手记错题”表单，家长可选在原图上框题；裁片只在浏览器临时生成预览，不新增上传或附件，原图不变。保存仍是原错题记录，另以 `wrong_regions` 窄表记原图、原作答版本与 0–1 范围。
 - 未接：上游 Next/Prisma 应用与数据库、打印/组卷、相似题、AI 掌握概率、复习调度与标签后台。
+
+
+## 小森林界面设计稿（2026-10-30）
+
+[baoyu-design](https://github.com/jimliu/baoyu-design/tree/c15e76ef5134228d2bb5da35652d30d7d6b8a34d)固定提交的设计方法与`starter-components/macos-window.jsx`用于虚构交互稿；窗口脚手架原文保留在`designs/family-grove/app.js`，仅用其示意控件，实际Mac用系统窗口。不是任天堂界面或素材的复刻，未分发其角色、标志、图标和贴图。
+
+设计稿临时从unpkg读取固定且带SRI的React/ReactDOM18.3.1与Babel7.29.0，联网条件写在入口，不作为原生正式App运行依赖或离线能力。各项目许可见[React](https://github.com/facebook/react/blob/v18.3.1/LICENSE)与[Babel](https://github.com/babel/babel/blob/v7.29.0/LICENSE)。
+
+以下为被复用baoyu-design源码的完整原许可：
+
+```text
+MIT License
+
+Copyright (c) 2026 Jim Liu 宝玉
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```

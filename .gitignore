@@ -365,3 +365,17 @@
 !/packaging/macos/Sources/SelfTest.swift
 !/packaging/macos/Sources/main.swift
 !/test_mac_desktop.cjs
+
+# Fictional baoyu-design UI redesign artifacts only.
+!/designs/
+/designs/*
+!/designs/family-grove/
+/designs/family-grove/*
+!/designs/family-grove/index.html
+!/designs/family-grove/styles.css
+!/designs/family-grove/app.js
+!/designs/family-grove/_d_meta.json
+!/designs/family-grove/design-notes.md
+!/designs/family-grove/assets/
+/designs/family-grove/assets/*
+!/designs/family-grove/assets/original-sprout.png
