@@ -25,7 +25,7 @@ import Foundation
                 action()
             }
         }
-        func wrongSummary() -> String { store.mode = .wrong; defer { store.mode = .today }; return store.summary }
+        func wrongSummary() -> String { store.mode = .wrong; defer { store.mode = .calendar }; return store.summary }
         func snapshot(_ name: String) {
             let entry: [String: Any] = ["requested_child": store.childID, "requested_day": store.day, "child_name": store.childName,
                                         "shown": shown(), "selectable": ids(), "selected": store.selected?.id ?? "", "summary": store.summary,

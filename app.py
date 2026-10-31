@@ -410,6 +410,9 @@ def snapshot():
         today_calendar=calendar_snapshot(today,today)
     except (OSError,sqlite3.Error,ValueError,TypeError,RecursionError):
         today_calendar=dict(events=[],timetables=[],source_error='今日日历暂时无法读取，请到日历重试；不能据此判断今天没有安排。')
+        # The list does not hang on the calendar: one calendar row that cannot be verified leaves only the plans out.
+        try: today_calendar.update(family_agenda.snapshot(SimpleNamespace(**globals()),today,today))
+        except (OSError,sqlite3.Error,ValueError,TypeError,RecursionError): pass
     try:
         agent=agent_store().snapshot()
     except (OSError,sqlite3.Error,ValueError,TypeError):
@@ -418,15 +421,20 @@ def snapshot():
     # The home list of each child reads the same server projection as the Mac workbench; a failure leaves the page's own reading.
     today_view={}
     if isinstance(today_calendar.get('inbox'),list):
-        try: today_view={p['id']:family_agenda.day_view(today_calendar['inbox'],ts,records,p,today,today,family_wrong_review.SOURCE) for p in children}
-        except (KeyError,TypeError,ValueError,AttributeError): today_view={}
+        try:
+            week=week_days(today);cal,schedule_error=schedule_read(week[0],week[-1])
+            with connect() as c:
+                c.execute('BEGIN');learning={p['id']:learning_view(c,p,ts) for p in children}
+            today_view={p['id']:day_projection(today_calendar['inbox'],cal,schedule_error,ts,records,p,today,today,learning[p['id']]) for p in children}
+        except (KeyError,TypeError,ValueError,AttributeError,OSError,sqlite3.Error): today_view={}
     return dict(today_view=today_view,asr=dict(configured=bool(os.environ.get('FAMILY_ASR_URL'))),llm=dict(configured=settings_store().model_state()['configured']),children=children, tasks=ts, records=records, sync=sync, sync_error=sync_error, attachments=attachments, uploads=uploads, care=care,
                 growth=read('学习与成长.md'), sources=read('消息来源.md'), token=TOKEN, record_categories=CATEGORIES,
                 rewards=family_growth.summarize(children,records,ts,today),reading=family_reading.Store(connect,lambda:children,lambda:ts).snapshot(),printing=printing,today=today,today_calendar=today_calendar,agent=agent)
 
 def day_view(child_id,day):
-    """GET /api/day: one child's one day for any client, read only (no collection, model call or write). Any exact date is
-    navigable, as the calendar's history is: each request still reads just that one day."""
+    """GET /api/day: one child's one day for any client, read only (no collection, model call, table or write). Any exact date
+    is navigable, as the calendar's history is; the same request gives that day's lessons and plans, the Monday-Sunday counts
+    by the same day rule (one read, the rule run in memory) and the child's learning evidence (day_projection)."""
     today=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date().isoformat()
     day=day or today
     if not family_agenda.exact_day(day):
@@ -436,14 +444,176 @@ def day_view(child_id,day):
         children=profiles(c);ts=tasks(c)
         records=[dict(r) for r in c.execute('SELECT * FROM records ORDER BY day DESC,id DESC')]
         attach_retry_views(c,records,children)
+        child=next((p for p in children if p['id']==child_id),None) if child_id else (children[0] if children else None)
+        learning=learning_view(c,child,ts) if child else None
     for r in records: r['attachments']=json.loads(r['attachments'])
-    child=next((p for p in children if p['id']==child_id),None) if child_id else (children[0] if children else None)
     if child_id and child is None: raise TaskError('这个孩子的档案不存在，请刷新后重新选择',404,'child_missing')
     listed=[dict(id=p['id'],name=p['name']) for p in children]
     if child is None: return dict(today=today,day=day,child_id='',children=listed,token=TOKEN,groups=[],closed=[],wrong=[],counts=dict(open=0,closed=0))
-    snap=calendar_snapshot(day,day)
-    view=family_agenda.day_view(snap['inbox'],ts,records,child,day,today,family_wrong_review.SOURCE)
-    return dict(today=today,day=day,child_id=child['id'],child_name=child['name'],children=listed,token=TOKEN,source_error=snap.get('source_error',''),**view)
+    week=week_days(day)
+    cal,schedule_error=schedule_read(week[0],week[-1])
+    inbox=family_agenda.snapshot(SimpleNamespace(**globals()),week[0],week[-1])['inbox']
+    view=day_projection(inbox,cal,schedule_error,ts,records,child,day,today,learning)
+    return dict(today=today,day=day,child_id=child['id'],child_name=child['name'],children=listed,token=TOKEN,source_error=(cal or {}).get('source_error',''),**view)
+
+def week_days(day):
+    first=dt.date.fromisoformat(day);first-=dt.timedelta(days=first.weekday())
+    return [(first+dt.timedelta(days=n)).isoformat() for n in range(7)]
+
+SCHEDULE_ERROR='课表和日程暂时读不到，不能据此判断这天没课或没有安排；事项清单不受影响。'
+
+def schedule_read(start,end):
+    """The calendar's own expanded lessons and plans (family_calendar.Store.snapshot: repeats, per-date changes, extra times,
+    timetable dates), read without creating a table. A failure is only the schedule's own error, never the list's."""
+    try: return family_calendar.Store(connect,profiles,DATA,initialize=False).snapshot(start,end),''
+    except (family_calendar.CalendarError,OSError,sqlite3.Error,ValueError,TypeError,KeyError,RecursionError): return None,SCHEDULE_ERROR
+
+def day_schedule(cal,child_id,day,rows):
+    """One child's lessons (timetable slots as written, no clock) and plans that day; cancelled or completed plans are left
+    out and counted. A plan whose task_id is a row already listed for this child only gives that row its time; any other
+    task_id stays a plan of its own, marked as not merged, never guessed into a row."""
+    if cal is None: return None
+    listed={}
+    for r in rows:
+        for ident in [r.get('task_id')]+[m.get('task_id') for m in r.get('members') or []]:
+            if ident: listed.setdefault(ident,r)
+    lessons=[dict(id=t['id'],title=t['title'],source=t['source'],sessions=[dict(slot=s['slot'],title=s['title']) for s in t['sessions']])
+             for t in cal['timetables'] if t['day']==day and t['child_id']==child_id]
+    plans,left=[],dict(cancelled=0,completed=0)
+    for e in cal['events']:
+        if e['day']!=day or child_id not in e['child_ids']: continue
+        if e['status'] in left: left[e['status']]+=1;continue
+        entry=dict(id=e['id'],title=e['title'],start_time=e['start_time'],end_time=e['end_time'],location=e['location'],note=str(e['note'])[:600],
+                   status=e['status'],source=e['source'],repeat=e['repeat']!='none' or bool(e.get('occurrence')),shared=len(e['child_ids'])>1,task_id=e.get('task_id') or '')
+        row=listed.get(entry['task_id'])
+        if row is not None:
+            row.setdefault('times',[]).append(dict(id=e['id'],title=e['title'],start_time=e['start_time'],end_time=e['end_time']));continue
+        if entry['task_id']: entry['unmerged']='关联的事项不在这一天这个孩子的清单里，没有合并，请核对。'
+        plans.append(entry)
+    plans.sort(key=lambda x:(not x['start_time'],x['start_time'],x['title']))
+    return dict(lessons=lessons,plans=plans,**left)
+
+def day_projection(inbox,cal,schedule_error,ts,records,child,day,today,learning=None):
+    """One child's day for the web home and the Mac alike (/api/day and /api/state.today_view): the list
+    (family_agenda.day_view), its lessons and plans, and the Monday-Sunday counts from the same rule run in memory over the
+    same reads (never seven requests). Counts only, no rate or judgement. Nothing is collected, called or written."""
+    out,week=None,[]
+    for d in week_days(day):
+        v=family_agenda.day_view(inbox,ts,records,child,d,today,family_wrong_review.SOURCE)
+        s=day_schedule(cal,child['id'],d,[i for g in v['groups']+v['closed'] for i in g['items']])
+        week.append(dict(day=d,open=v['counts']['open'],today=v['counts'].get('today',0),overdue=v['counts'].get('overdue',0),closed=v['counts']['closed'],
+                         schedule=None if s is None else sum(len(t['sessions']) for t in s['lessons'])+len(s['plans'])))
+        if d==day: out=dict(v,schedule=s,schedule_error=schedule_error)
+    out['week']=week
+    if learning is not None: out['learning']=learning
+    return out
+
+RETRY_WORDS={'independent_correct':'独立作答 · 对','independent_wrong':'独立作答 · 错','not_independent':'有帮助，不算独立',
+             'parent_check':'待家长核对，不算独立','not_new':'题目见过，不算新题'}
+
+def _epoch_day(value):
+    try: return dt.datetime.fromtimestamp(float(value),dt.timezone(dt.timedelta(hours=8))).date().isoformat()
+    except (TypeError,ValueError,OverflowError,OSError): return '日期未知'
+
+def learning_view(c,child,ts):
+    """One child's learning evidence by subject, read only. The child's side: each wrong record with its correction state,
+    its own original task (explicit link, same child) and each saved topic diagnosis as current basis or history, with the
+    new attempts and their help or independence (record_topic_basis, the rule the task card counts). Course-progress
+    records are listed apart with their own saved source; no author is inferred from the category. No table is created and
+    nothing inferred: no record is no evidence, never zero mastery, and there is no percentage."""
+    import family_taxonomy
+    tables=topic_tables(c)
+    rows=[dict(r) for r in c.execute('SELECT id,child,day,category,subject,title,note,source,attachments,created,linked_task_id,followup_kind,related_record_id FROM records WHERE child=? ORDER BY day DESC,id DESC',(child['name'],))]
+    by_task={t['id']:t for t in ts};followups={};pack=[]
+    for r in rows:
+        if r['followup_kind'] in family_agenda.CORRECTION_KINDS and r['related_record_id'] is not None: followups.setdefault(r['related_record_id'],[]).append(r)
+    def topic_name(ident):
+        if not pack:
+            try: pack.append(family_taxonomy.load_pack())
+            except Exception: pack.append(None)
+        topic=pack[0]['by_id'].get(ident) if pack[0] else None
+        return (topic.get('name') or ident,True) if topic else (ident or '知识点未写明',False)
+    def subject_of(r):
+        s=str(r['subject'] or '').strip()
+        return family_agenda.SUBJECT_GENERAL if s=='综合' else s or family_agenda.SUBJECT_UNKNOWN
+    entries=[]
+    for r in rows:
+        if r['category']=='课程进度' and r['source']!=family_wrong_review.SOURCE:
+            note=str(r['note'] or '')
+            entries.append(dict(kind='course',record_id=r['id'],subject=subject_of(r),day=r['day'] or '',title=r['title'] or '未写标题',note=note[:300],
+                                note_truncated=len(note)>300,source=r['source'] or '出处未写明'))
+            continue
+        if r['source']!=family_wrong_review.SOURCE: continue
+        later=sorted(followups.get(r['id'],[]),key=lambda f:(f['created'] or '',f['id']))
+        state={'订正':'已订正','复测':'已复测','独立复测':'已复测'}[later[-1]['followup_kind']] if later else '待订正'
+        task=by_task.get(r['linked_task_id'] or '');task=task if task and task.get('child')==child['name'] else None
+        lines,topics,last,diagnosed=[['原错题',' · '.join(x for x in [r['day'],state] if x)]],[],None,set()
+        for b in record_topic_basis(c,r,child['id'],tables):
+            name,known=topic_name(b['topic_id']);when=_epoch_day(b['created_at']);diagnosed.add((b['topic_id'],b['record_hash']))
+            topics.append(dict(topic_id=b['topic_id'],name=name,known=known,basis='current' if b['current'] else 'history',state='diagnosed'))
+            if not b['current']:
+                lines.append(['历史诊断',name+' · '+when+' · 原错题之后已更正，只作历史，不算当前进展']);continue
+            lines.append(['知识点诊断',name+' · '+when+' · 答了'+str(b['answered'])+'题'+('，其中'+str(b['helped'])+'题看过说明' if b['helped'] else '')])
+            for a in b['retries']:
+                lines.append(['新题再试',_epoch_day(a['created_at'])+' · '+RETRY_WORDS.get(a['outcome'],'结果未写明')+(' · 孩子原答 '+str(a['answer'])[:80] if a['answer'] else '')])
+                if a['outcome'] in ('independent_correct','independent_wrong'): last=a['outcome']
+        # A topic the parent linked and has not diagnosed: its saved name and date, linked/pending, never a clue or mastery.
+        for l in record_topic_links(c,r,child['id'],tables,diagnosed):
+            name,known=topic_name(l['topic_id']) if l['pack_sha']==family_taxonomy.TAXONOMY_SHA else (l['topic_id'],False);when=_epoch_day(l['created_at'])
+            topics.append(dict(topic_id=l['topic_id'],name=name,known=known,basis='current' if l['current'] else 'history',state='linked'))
+            lines.append(['已关联知识点',name+' · '+when+' · 家长确认关联，待诊断'] if l['current'] else ['历史关联',name+' · '+when+' · 原错题之后已更正，只作历史，不算当前进展'])
+        current=any(t['basis']=='current' and t['state']=='diagnosed' for t in topics)
+        linked=any(t['basis']=='current' and t['state']=='linked' for t in topics)
+        nxt=('一次答对还不等于掌握；之后再独立做一道没见过的同类题。' if last=='independent_correct' else
+             '这题还没独立做对；回原错题看说明，再另试一道新题。' if last=='independent_wrong' else
+             '已有知识点线索，还没有独立再试。' if current else
+             '已关联知识点，待诊断；关联不等于掌握。' if linked else
+             '原错题已更正；需要时按更正后的错题重新诊断。' if topics else
+             '还没有知识点诊断；可从原作业的错题卡开始。' if subject_of(r)=='数学' and task else '知识点尚未评估。')
+        if state=='待订正': nxt='先订正。'+nxt
+        note=str(r['note'] or '')
+        entries.append(dict(kind='wrong',record_id=r['id'],subject=subject_of(r),day=r['day'] or '',title=r['title'] or '未写标题',note=note[:600],
+                            note_truncated=len(note)>600,state=state,task_id=task['id'] if task else '',task_title=task.get('title','') if task else '',
+                            topics=topics,lines=lines,next=nxt))
+    status=family_taxonomy.pack_status()
+    subjects=[dict(subject=key,course=[e for e in items if e['kind']=='course'],evidence=[e for e in items if e['kind']=='wrong'])
+              for key,items in family_agenda.subject_filed(entries,lambda e:e['subject'])]
+    return dict(subjects=subjects,pack=dict(installed=bool(status.get('installed')),message=str(status.get('message') or '')))
+
+def topic_tables(c):
+    return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('topic_links','topic_diagnoses','topic_diagnosis_items','topic_retries','topic_basis_voids')")}
+
+def record_basis_hash(r,child_id):
+    """One wrong record's present basis over the same fields the wrong-record card reads, so it is the card's own basis."""
+    import family_taxonomy
+    return family_taxonomy.record_hash({k:r[k] for k in ('id','child','day','subject','title','note','source','attachments','created')}|dict(child_id=child_id))
+
+def record_topic_links(c,r,child_id,tables,diagnosed=()):
+    """The parent's confirmed topic links of one wrong record that no saved diagnosis of the same topic on the same basis
+    already shows. On each basis (record_hash) the latest saved link is the parent's choice there; only a confirmed one with
+    a topic names a topic, an unclear, no-match or candidate one names none. Current on the record's present basis, else
+    history. Read only: a missing topic_links table gives none and nothing is created."""
+    if 'topic_links' not in tables: return []
+    now,latest=record_basis_hash(r,child_id),{}
+    for l in c.execute('SELECT topic_id,state,record_hash,pack_sha,created_at FROM topic_links WHERE child_id=? AND record_id=? ORDER BY id',(child_id,str(r['id']))):
+        latest[l['record_hash']]=l
+    return sorted((dict(topic_id=l['topic_id'],pack_sha=l['pack_sha'],current=digest==now,created_at=l['created_at']) for digest,l in latest.items()
+                   if l['state']=='confirmed' and l['topic_id'] and (l['topic_id'],digest) not in diagnosed),key=lambda x:x['created_at'])
+
+def record_topic_basis(c,r,child_id,tables):
+    """Every saved topic diagnosis of one wrong record, each the current basis (the record's present record_hash, no void)
+    or history, with the answers it holds and the new attempts saved on a current one. The one rule the task card
+    (task_progress) and the learning view both read, so a record gives the same numbers in both. No table, no write."""
+    if 'topic_diagnoses' not in tables: return []
+    now,out=record_basis_hash(r,child_id),[]
+    for d in c.execute('SELECT id,record_hash,topic_id,created_at FROM topic_diagnoses WHERE child_id=? AND record_id=? ORDER BY id',(child_id,str(r['id']))).fetchall():
+        voided='topic_basis_voids' in tables and c.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?',(d['id'],)).fetchone() is not None
+        current=d['record_hash']==now and not voided
+        answered,helped=c.execute("SELECT COUNT(*),COALESCE(SUM(help!=''),0) FROM topic_diagnosis_items WHERE diagnosis_id=? AND kind='answer'",(d['id'],)).fetchone() if 'topic_diagnosis_items' in tables else (0,0)
+        retries=[dict(x) for x in c.execute('SELECT outcome,answer,created_at FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? ORDER BY id',
+                                             (d['id'],child_id,str(r['id']),now))] if current and 'topic_retries' in tables else []
+        out.append(dict(topic_id=d['topic_id'],record_hash=d['record_hash'],current=current,created_at=d['created_at'],answered=answered,helped=helped,retries=retries))
+    return out
 
 MATERIAL_ROLES={'school':'学校消息原件','reported_homework':'孩子报来的作业','same_task':'这项作业里上传的','saved_answer':'已保存的作答','record':'家庭记录附件'}
 MATERIAL_SAVED=dict(state='saved',label='原件已保存',summary='',unclear=[],explanation='')
@@ -1627,20 +1797,16 @@ def task_progress(c,task,names,profile_ids):
     if not rows: return None
     wrong=[r for r in rows if family_taxonomy.WRONG_SOURCE in (r['source'] or '')]
     out=dict(feedback=sum((r['source'] or '')==source for r in rows),wrong=len(wrong),wrong_ids=[r['id'] for r in wrong],clues=0,retries=0,history=0)
-    tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('topic_diagnoses','topic_retries','topic_basis_voids')")}
+    tables=topic_tables(c)
     if 'topic_diagnoses' not in tables: return out
     for r in wrong:
         child_id=profile_ids.get(r['child'])
         if child_id is None: continue
-        # The same fields the wrong-record card reads, so the basis is the card's own basis.
-        now=family_taxonomy.record_hash({k:r[k] for k in ('id','child','day','subject','title','note','source','attachments','created')}|dict(child_id=child_id))
-        for d in c.execute('SELECT id,record_hash FROM topic_diagnoses WHERE child_id=? AND record_id=?',(child_id,str(r['id']))).fetchall():
-            voided='topic_basis_voids' in tables and c.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?',(d['id'],)).fetchone()
-            if d['record_hash']!=now or voided: out['history']+=1;continue
+        for b in record_topic_basis(c,r,child_id,tables):
+            if not b['current']: out['history']+=1;continue
             out['clues']+=1
             # Only an independent new attempt counts; not_new, parent_check and not_independent are saved but are not one.
-            if 'topic_retries' in tables: out['retries']+=c.execute("SELECT COUNT(*) FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? AND outcome IN ('independent_correct','independent_wrong')",
-                                                                    (d['id'],child_id,str(r['id']),now)).fetchone()[0]
+            out['retries']+=sum(a['outcome'] in ('independent_correct','independent_wrong') for a in b['retries'])
     return out
 
 def link_record_task(obj, connection=None):

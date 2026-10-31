@@ -24,6 +24,8 @@ struct SavedRecord: Decodable, Hashable, Identifiable {
     let related_record_id: Int?
     /// The task this saved record belongs to; a grouped same-affair row can show another member's record.
     let task_id: String?
+    /// 错题本：该错题按显式关联指向的同一孩子原作业标题；未关联或较早后台为 nil。
+    let task_title: String?
     let state: String?
     let followups: [SavedRecord]?
     let retry: RetryView?
@@ -64,7 +66,37 @@ struct DayItem: Decodable, Hashable, Identifiable {
     let publisher: String?
     let progress: TaskProgress?
     let same_affair: SameAffair?
+    /// 同一事项在日历里的时段（服务端按 task_id 只并入本孩子当天已列的这一项，不另列不另计）。
+    let times: [PlanTime]?
 }
+
+/// 所选日的课表与日程：服务端 Store.snapshot 已展开（重复、逐次改动、多时段、课表有效期），取消/完成已排除并计数。
+/// 课表节次是原文，不写钟点；排课不代表出勤。较早后台没有这些字段时为 nil，按“未提供”显示。
+struct Lesson: Decodable, Hashable { let slot: String; let title: String }
+struct LessonTable: Decodable, Hashable, Identifiable { let id: String; let title: String; let source: String; let sessions: [Lesson] }
+struct PlanItem: Decodable, Hashable, Identifiable {
+    let id: String; let title: String; let start_time: String; let end_time: String; let location: String; let note: String
+    let status: String; let source: String; let `repeat`: Bool; let shared: Bool; let task_id: String; let unmerged: String?
+}
+struct DaySchedule: Decodable, Hashable { let lessons: [LessonTable]; let plans: [PlanItem]; let cancelled: Int; let completed: Int }
+struct PlanTime: Decodable, Hashable { let id: String; let title: String; let start_time: String; let end_time: String }
+/// 一周里每天与单日同一口径的数量（服务端同一 day_view 规则）；schedule 为 nil 表示日程读不到，不是 0。
+struct WeekDay: Decodable, Hashable { let day: String; let open: Int; let today: Int; let overdue: Int; let closed: Int; let schedule: Int? }
+
+/// 学习进展：孩子表现（原错题、订正、知识点诊断的当前/历史依据、新题再试及帮助/独立）与课程记录分开；只读，不算掌握、不出百分比。
+struct LearningTopic: Decodable, Hashable {
+    let topic_id: String; let name: String; let known: Bool; let basis: String
+    let state: String?  // "linked": the parent linked it, no diagnosis yet; absent or "diagnosed": a saved diagnosis
+}
+struct LearningEntry: Decodable, Hashable, Identifiable {
+    let kind: String; let record_id: Int; let subject: String; let day: String; let title: String; let note: String
+    let source: String?; let state: String?; let task_id: String?; let task_title: String?
+    let topics: [LearningTopic]?; let lines: [[String]]?; let next: String?
+    var id: String { kind + "-\(record_id)" }
+}
+struct LearningSubject: Decodable, Hashable { let subject: String; let course: [LearningEntry]; let evidence: [LearningEntry] }
+struct LearningPack: Decodable, Hashable { let installed: Bool; let message: String }
+struct Learning: Decodable, Hashable { let subjects: [LearningSubject]; let pack: LearningPack }
 
 struct ItemGroup: Decodable, Hashable { let subject: String; let items: [DayItem] }
 struct WrongGroup: Decodable, Hashable { let subject: String; let items: [SavedRecord] }
@@ -82,6 +114,10 @@ struct DayView: Decodable {
     let closed: [ItemGroup]
     let wrong: [WrongGroup]
     let counts: [String: Int]
+    let schedule: DaySchedule?
+    let schedule_error: String?
+    let week: [WeekDay]?
+    let learning: Learning?
 }
 
 /// 一份原作业的资料，服务端 /api/print/homework/materials 原样：出处（学校消息原件、孩子报来的作业……）与已保存的读取状态
