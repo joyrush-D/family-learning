@@ -4,19 +4,35 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
+// 颜色、字号与可点高度取自原型 designs/family-grove/styles.css 的 :root（--paper、--leaf-*、--wood-*、--coral-*、--t-*、--hit）。
 enum Palette {
     static let paper = Color(red: 0xFB / 255, green: 0xF6 / 255, blue: 0xEA / 255)
+    static let paper2 = Color(red: 0xF4 / 255, green: 0xED / 255, blue: 0xDB / 255)
     static let card = Color(red: 0xFF / 255, green: 0xFD / 255, blue: 0xF7 / 255)
     static let desk = Color(red: 0xEA / 255, green: 0xE0 / 255, blue: 0xCA / 255)
+    static let line = Color(red: 0xE7 / 255, green: 0xDD / 255, blue: 0xC8 / 255)
+    static let line2 = Color(red: 0xD6 / 255, green: 0xC8 / 255, blue: 0xAB / 255)
     static let ink = Color(red: 0x3B / 255, green: 0x33 / 255, blue: 0x26 / 255)
     static let ink2 = Color(red: 0x66 / 255, green: 0x5A / 255, blue: 0x48 / 255)
     static let leaf = Color(red: 0xA8 / 255, green: 0xD9 / 255, blue: 0x78 / 255)
+    static let leaf50 = Color(red: 0xF2 / 255, green: 0xF8 / 255, blue: 0xE7 / 255)
+    static let leaf100 = Color(red: 0xE3 / 255, green: 0xF1 / 255, blue: 0xD0 / 255)
+    static let leaf400 = Color(red: 0x86 / 255, green: 0xBE / 255, blue: 0x59 / 255)
+    static let leaf700 = Color(red: 0x2D / 255, green: 0x5A / 255, blue: 0x26 / 255)
     static let leafInk = Color(red: 0x1F / 255, green: 0x4A / 255, blue: 0x1C / 255)
     static let wood = Color(red: 0xF1 / 255, green: 0xE2 / 255, blue: 0xCC / 255)
+    static let wood300 = Color(red: 0xD8 / 255, green: 0xB8 / 255, blue: 0x8C / 255)
     static let woodInk = Color(red: 0x6B / 255, green: 0x45 / 255, blue: 0x20 / 255)
     static let coral = Color(red: 0xFD / 255, green: 0xE6 / 255, blue: 0xDD / 255)
+    static let coral400 = Color(red: 0xE9 / 255, green: 0x8A / 255, blue: 0x6E / 255)
     static let coralInk = Color(red: 0xA1 / 255, green: 0x3F / 255, blue: 0x2A / 255)
+    static let cardShadow = Color(red: 0x6B / 255, green: 0x45 / 255, blue: 0x20 / 255).opacity(0.13)
     static let rounded = Font.system(.body, design: .rounded)
+    /// 标题与控件用圆体（--font-round），正文 15、说明 13（--t-m / --t-xs），主要可点区域 44pt 高（--hit）。
+    static func round(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font { .system(size: size, weight: weight, design: .rounded) }
+    static let body = Font.system(size: 15)
+    static let small = Font.system(size: 13)
+    static let hit: CGFloat = 44
 }
 
 enum ListMode: String, CaseIterable, Identifiable { case today = "当天", done = "已办", wrong = "错题订正"; var id: String { rawValue } }
@@ -192,22 +208,186 @@ extension DayItem {
     var publishedTime: String { String((published_at ?? "").dropFirst(11).prefix(5)) }
     var source: String { [publisher ?? "", publishedTime].filter { !$0.isEmpty }.joined(separator: " ") }
     var webID: String { task_id.isEmpty ? id : task_id }
+    /// 发布一类的事实只是出处，不是要做的日期。
+    static let publishRoles: Set<String> = ["published", "publish"]
+    var actionFacts: [DayFact] { facts.filter { !DayItem.publishRoles.contains($0.role) } }
+    /// 老师与完整发布时间：有发布事实就照写它的原值（未知照写它的原话，如“发布 待核对”）；没有时用原始发布时间的完整日期与时刻。
+    var publishWords: String? {
+        let when: String
+        if let f = facts.first(where: { DayItem.publishRoles.contains($0.role) }) { when = f.known ? f.value + " " + f.label : f.label + " " + f.value }
+        else if let at = published_at, !at.isEmpty { when = String(at.prefix(16)).replacingOccurrences(of: "T", with: " ") + " 发布" }
+        else { when = "" }
+        let words = [publisher ?? "", when].filter { !$0.isEmpty }.joined(separator: " · ")
+        return words.isEmpty ? nil : words
+    }
 }
 
-// MARK: 主工作台：顶栏（孩子 / 日期 / 补录 / 网页版）是窗口内容里的真实按钮；清单 + 所选事项详情。
+// MARK: 原型的小部件：44pt 药丸按钮（底部厚边、按下下沉）、木牌、小标记、叶形状态、自动换行的标记行。
+
+/// 原型 .btn / .btn-primary / .btn-quiet：44pt 高的圆角药丸，底部 3pt 厚边，按下时下沉；不可用时虚线框、深灰字仍可读。
+struct GroveButtonStyle: ButtonStyle {
+    enum Kind { case primary, secondary, quiet }
+    var kind: Kind = .secondary
+    @Environment(\.isEnabled) private var enabled
+
+    private func colors(_ pressed: Bool) -> (fill: Color, ink: Color, edge: Color) {
+        if !enabled { return (kind == .quiet ? Color.clear : Palette.paper2, Palette.ink2, kind == .quiet ? Color.clear : Palette.line2) }
+        switch kind {
+        case .primary: return (Palette.leaf, Palette.leafInk, Palette.leaf400)
+        case .secondary: return (Palette.card, Palette.ink, Palette.line2)
+        case .quiet: return (pressed ? Palette.leaf50 : Color.clear, Palette.leaf700, Color.clear)
+        }
+    }
+
+    func makeBody(configuration: Configuration) -> some View {
+        let pressed = configuration.isPressed && enabled
+        let c = colors(pressed)
+        let lip = kind != .quiet && enabled
+        return configuration.label
+            .font(Palette.round(14))
+            .foregroundStyle(c.ink)
+            .padding(.horizontal, kind == .quiet ? 12 : 18)
+            .frame(minHeight: Palette.hit)
+            .background(Capsule().fill(c.fill))
+            .overlay(Capsule().strokeBorder(c.edge, style: StrokeStyle(lineWidth: 1, dash: enabled ? [] : [4, 3])))
+            .background(Capsule().fill(lip ? c.edge : Color.clear).offset(y: pressed ? 1 : 3))
+            .offset(y: pressed && lip ? 2 : 0)
+            .contentShape(Capsule())
+    }
+}
+
+/// 小标记按行排，放不下就换到下一行：日期、状态与出处文字不被截断。
+struct FlowRow: Layout {
+    var spacing: CGFloat = 6
+    var lineSpacing: CGFloat = 6
+
+    private func measure(_ s: LayoutSubview, _ width: CGFloat) -> CGSize {
+        let natural = s.sizeThatFits(.unspecified)
+        return natural.width <= width ? natural : s.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var x: CGFloat = 0, y: CGFloat = 0, line: CGFloat = 0, widest: CGFloat = 0
+        for s in subviews {
+            let size = measure(s, width)
+            if x > 0 && x + size.width > width { y += line + lineSpacing; x = 0; line = 0 }
+            x += size.width + spacing; line = max(line, size.height); widest = max(widest, x - spacing)
+        }
+        return CGSize(width: min(widest, width), height: y + line)
+    }
+
+    /// 先分好行，再在每行里垂直居中：44pt 按钮和小标记、出处文字排在同一行时中线对齐。
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var lines: [[(LayoutSubview, CGSize)]] = [[]]
+        var x = bounds.minX
+        for s in subviews {
+            let size = measure(s, bounds.width)
+            if x > bounds.minX && x + size.width > bounds.maxX { lines.append([]); x = bounds.minX }
+            lines[lines.count - 1].append((s, size)); x += size.width + spacing
+        }
+        var y = bounds.minY
+        for line in lines where !line.isEmpty {
+            let height = line.map(\.1.height).max() ?? 0
+            var x = bounds.minX
+            for (s, size) in line {
+                s.place(at: CGPoint(x: x, y: y + (height - size.height) / 2), proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += height + lineSpacing
+        }
+    }
+}
+
+/// 科目木牌（原型 .sign）：两颗钉眼、木色底和 2pt 下沿；可带项数。
+struct WoodTag: View {
+    let text: String
+    var count = ""
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(Palette.wood300).frame(width: 4, height: 4)
+            Text(text).font(Palette.round(14, .bold))
+            if !count.isEmpty { Text(count).font(Palette.round(12)).opacity(0.85) }
+            Circle().fill(Palette.wood300).frame(width: 4, height: 4)
+        }
+        .foregroundStyle(Palette.woodInk)
+        .padding(.horizontal, 12).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.wood).shadow(color: Palette.wood300, radius: 0, x: 0, y: 2))
+        .fixedSize()
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 小标记（原型 .chip）：文字自身决定宽度，不截断；dashed 用于“尚未读清”这类需要家长看原件的状态。
+struct Badge: View {
+    let text: String
+    var tone: Color = Palette.wood
+    var ink: Color = Palette.woodInk
+    var dashed = false
+    var body: some View {
+        Text(text).font(Palette.round(12.5)).foregroundStyle(ink)
+            .padding(.horizontal, 9).padding(.vertical, 3)
+            .background(Capsule().fill(dashed ? Palette.card : tone))
+            .overlay(Capsule().strokeBorder(dashed ? Palette.coral400 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
+            .fixedSize()
+    }
+}
+
+/// 原型的叶形勾选：待办是空心圆，已办长成一片带勾的叶子。这里只表示状态，不是“标记已办”按钮。
+struct LeafMark: View {
+    let closed: Bool
+    var body: some View {
+        Group {
+            if closed {
+                ZStack(alignment: .topLeading) { Circle().fill(Palette.leaf400); Rectangle().fill(Palette.leaf400).frame(width: 13, height: 13) }
+                    .frame(width: 26, height: 26)
+                    .overlay(ZStack(alignment: .topLeading) { Circle().fill(Palette.leaf); Rectangle().fill(Palette.leaf).frame(width: 11.5, height: 11.5) }.frame(width: 23, height: 23))
+                    .overlay(Image(systemName: "checkmark").font(.system(size: 12, weight: .bold)).foregroundStyle(Palette.leafInk))
+                    .rotationEffect(.degrees(-8))
+            } else {
+                Circle().strokeBorder(Palette.line2, lineWidth: 2).background(Circle().fill(Palette.card)).frame(width: 26, height: 26)
+            }
+        }
+        .frame(width: 32, height: 32)
+    }
+}
+
+/// 清单仍是系统 List（键盘上下、真实点击选择照旧），只是不画系统选中底色：选中由行卡片自己的嫩绿底和绿边表达，文字一直是深色。
+/// 侧栏样式的系统选中底色是材质，深色字在上面看不清，截图里还会成黑块。
+struct HighlightOff: NSViewRepresentable {
+    final class Hook: NSView {
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); apply() }
+        func apply() {
+            var next: NSView? = superview
+            while let v = next {
+                if let table = v as? NSTableView {
+                    if table.selectionHighlightStyle != .none { table.selectionHighlightStyle = .none }
+                    if table.backgroundColor != .clear { table.backgroundColor = .clear }
+                    return
+                }
+                next = v.superview
+            }
+        }
+    }
+    func makeNSView(context: Context) -> Hook { Hook() }
+    func updateNSView(_ view: Hook, context: Context) { view.apply() }
+}
+
+// MARK: 主工作台：顶栏（孩子 / 日期 / 补录 / 网页版）是窗口内容里的真实按钮；左栏清单 + 右栏所选事项详情（两栏，不另加导航栏）。
 
 struct WorkspaceView: View {
     @ObservedObject var store: WorkspaceStore
 
     var body: some View {
-        VStack(spacing: 0) {
-            HeaderBar(store: store)
-            Divider()
-            NavigationSplitView {
-                SubjectList(store: store)
-                    .navigationSplitViewColumnWidth(min: 320, ideal: 400, max: 520)
-            } detail: {
-                Inspector(store: store)
+        GeometryReader { geo in
+            let compact = geo.size.width < 1180
+            VStack(spacing: 0) {
+                HeaderBar(store: store, compact: compact)
+                HStack(spacing: 0) {
+                    SubjectList(store: store).frame(width: compact ? 340 : 400)
+                    Rectangle().fill(Palette.line).frame(width: 1)
+                    Inspector(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .background(Palette.paper)
@@ -218,76 +398,59 @@ struct WorkspaceView: View {
 
 struct HeaderBar: View {
     @ObservedObject var store: WorkspaceStore
+    var compact = false
 
     var body: some View {
-        HStack(spacing: 10) {
-            Label("一起成长", systemImage: "leaf").font(Palette.rounded.weight(.bold)).foregroundStyle(Palette.leafInk)
-            HStack(spacing: 2) {
+        HStack(spacing: compact ? 8 : 12) {
+            Group {
+                if compact { Image(systemName: "leaf").accessibilityLabel("一起成长") } else { Label("一起成长", systemImage: "leaf") }
+            }
+            .font(Palette.round(15, .bold)).foregroundStyle(Palette.leafInk)
+            HStack(spacing: 3) {
                 ForEach(Array((store.view?.children ?? []).enumerated()), id: \.element.id) { index, c in
                     let on = c.id == store.childID
                     Button { store.change(child: c.id) } label: {
-                        Text(c.name).font(Palette.rounded.weight(.semibold)).frame(minWidth: 64, minHeight: 32).contentShape(Rectangle())
+                        Text(c.name).font(Palette.round(14)).lineLimit(1).fixedSize().padding(.horizontal, 12).frame(minWidth: 64, minHeight: Palette.hit).contentShape(Capsule())
                     }
-                    .buttonStyle(.plain).padding(.horizontal, 6)
+                    .buttonStyle(.plain)
                     .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(on ? Palette.card : Color.clear))
+                    .background(Capsule().fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
                     .accessibilityAddTraits(on ? .isSelected : [])
                     .help("只看\(c.name)（⌘\(index + 1)）")
                     .probe("child-" + c.id, text: c.name + (on ? " 当前" : ""))
                 }
             }
-            .padding(3).background(RoundedRectangle(cornerRadius: 12).fill(Palette.wood))
+            .padding(3).background(Capsule().fill(Palette.wood))
             Spacer(minLength: 8)
-            Button { store.shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 32, height: 32).contentShape(Rectangle()) }
-                .buttonStyle(.plain).accessibilityLabel("前一天").help("前一天 ⌘[").probe("day-prev")
+            Button { store.shift(-1) } label: { Image(systemName: "chevron.left").font(.system(size: 15, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Circle()) }
+                .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("前一天").help("前一天 ⌘[").probe("day-prev")
             VStack(spacing: 1) {
-                Text(store.dayTitle).font(Palette.rounded.weight(.bold)).foregroundStyle(Palette.ink)
-                Text(store.daySub).font(.caption).foregroundStyle(Palette.ink2)
+                Text(store.dayTitle).font(Palette.round(17, .bold)).foregroundStyle(Palette.ink)
+                Text(store.daySub).font(.system(size: 12)).foregroundStyle(Palette.ink2).lineLimit(1)
             }
-            .frame(minWidth: 150).accessibilityElement(children: .combine)
+            .frame(minWidth: compact ? 120 : 150).accessibilityElement(children: .combine)
             .probe("day-title", text: store.day + " " + store.daySub)
-            Button { store.shift(1) } label: { Image(systemName: "chevron.right").frame(width: 32, height: 32).contentShape(Rectangle()) }
-                .buttonStyle(.plain).accessibilityLabel("后一天").help("后一天 ⌘]").probe("day-next")
-            Button("回到今天") { store.change(day: store.view?.today ?? "") }
+            Button { store.shift(1) } label: { Image(systemName: "chevron.right").font(.system(size: 15, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Circle()) }
+                .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("后一天").help("后一天 ⌘]").probe("day-next")
+            Button(compact ? "今天" : "回到今天") { store.change(day: store.view?.today ?? "") }
+                .buttonStyle(GroveButtonStyle(kind: .quiet))
                 .disabled(store.view == nil || store.day == store.view?.today).help("回到今天 ⌘T").probe("day-today")
             Spacer(minLength: 8)
-            Button { store.sheetDirty = false; store.sheet = .oral } label: { Label("补录口头作业", systemImage: "plus") }
-                .buttonStyle(.borderedProminent).tint(Palette.leaf).foregroundStyle(Palette.leafInk)
+            Button { store.sheetDirty = false; store.sheet = .oral } label: { Label(compact ? "补录" : "补录口头作业", systemImage: "plus") }
+                .buttonStyle(GroveButtonStyle(kind: .primary))
                 .disabled(store.current == nil).help("补录孩子口头转述的作业 ⌘N").probe("oral-new")
-            Button { store.openWebTools("", "") } label: { Label("网页版工具", systemImage: "square.grid.2x2") }
-                .help("日历、学校消息、打印、设置等其他功能 ⌘E").probe("web-tools")
+            Button { store.openWebTools("", "") } label: { Label(compact ? "网页版" : "网页版工具", systemImage: "square.grid.2x2") }
+                .buttonStyle(GroveButtonStyle())
+                .help("日历、学校消息、打印、设置等其他功能 ⌘E；网页上方有“← 返回清单”").probe("web-tools")
         }
-        .padding(.horizontal, 16).padding(.vertical, 8)
-        .background(Palette.desk.opacity(0.55))
-    }
-}
-
-struct WoodTag: View {
-    let text: String
-    var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(Palette.woodInk.opacity(0.35)).frame(width: 6, height: 6)
-            Text(text).font(Palette.rounded.weight(.bold)).foregroundStyle(Palette.woodInk)
-        }
-        .padding(.horizontal, 10).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Palette.wood))
-        .accessibilityElement(children: .combine)
-    }
-}
-
-struct Badge: View {
-    let text: String
-    var tone: Color = Palette.wood
-    var ink: Color = Palette.woodInk
-    var body: some View {
-        Text(text).font(.callout.weight(.semibold)).foregroundStyle(ink)
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(Capsule().fill(tone))
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 11)
+        .background(Palette.paper2)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
     }
 }
 
 func factTone(_ f: DayFact) -> (Color, Color) {
-    f.state == "next_morning" || f.state == "overdue" ? (Palette.coral, Palette.coralInk) : f.known ? (Palette.wood, Palette.woodInk) : (Palette.paper, Palette.ink2)
+    f.state == "next_morning" || f.state == "overdue" ? (Palette.coral, Palette.coralInk) : f.known ? (Palette.wood, Palette.woodInk) : (Palette.paper2, Palette.ink2)
 }
 
 func factWords(_ f: DayFact) -> String {
@@ -302,25 +465,31 @@ struct SubjectList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Picker("清单", selection: $store.mode) { ForEach(ListMode.allCases) { Text(label($0)).tag($0) } }
-                .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 12).padding(.top, 10).probe("list-mode")
+            modeSwitch.padding(.horizontal, 14).padding(.top, 14)
             VStack(alignment: .leading, spacing: 2) {
-                Text(store.mode == .today ? "当天清单" : store.mode.rawValue).font(.system(.title2, design: .rounded).weight(.bold)).foregroundStyle(Palette.ink)
-                Text(store.summary).font(.callout).foregroundStyle(Palette.ink2).probe("list-summary", text: store.summary)
-            }.padding(.horizontal, 14).padding(.vertical, 8)
+                Text(store.mode == .today ? "当天清单" : store.mode.rawValue).font(Palette.round(21, .bold)).foregroundStyle(Palette.ink)
+                Text(store.summary).font(.system(size: 14)).foregroundStyle(Palette.ink2).probe("list-summary", text: store.summary)
+            }.padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 6)
             if store.loginRequired {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("需要先登录家庭账号。点下面的按钮会打开登录窗口，登录成功后窗口自动关闭、清单随即更新；填写中的内容不会丢。").foregroundStyle(Palette.coralInk)
-                    Button("登录家庭账号") { store.openLogin() }.buttonStyle(.borderedProminent).tint(Palette.leaf).foregroundStyle(Palette.leafInk).probe("login-open")
-                }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Palette.coral).probe("login-needed", text: "需要登录")
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("需要先登录家庭账号。点下面的按钮会打开登录窗口，登录成功后窗口自动关闭、清单随即更新；填写中的内容不会丢。").font(Palette.body).foregroundStyle(Palette.coralInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("登录家庭账号") { store.openLogin() }.buttonStyle(GroveButtonStyle(kind: .primary)).probe("login-open")
+                }
+                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.coral))
+                .padding(.horizontal, 14).padding(.vertical, 6).probe("login-needed", text: "需要登录")
             } else if !store.error.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(store.error).foregroundStyle(Palette.coralInk).probe("load-error", text: store.error)
-                    Button("重试") { Task { await store.load() } }.probe("load-retry")
-                }.padding(12).frame(maxWidth: .infinity, alignment: .leading).background(Palette.coral)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(store.error).font(Palette.body).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).probe("load-error", text: store.error)
+                    Button("重试") { Task { await store.load() } }.buttonStyle(GroveButtonStyle()).probe("load-retry")
+                }
+                .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.coral))
+                .padding(.horizontal, 14).padding(.vertical, 6)
             }
             if let text = store.current?.source_error, !text.isEmpty {
-                Text(text).font(.callout).foregroundStyle(Palette.coralInk).padding(10)
+                Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18).padding(.vertical, 6)
             }
             if store.mode == .wrong { WrongList(store: store) } else { itemList }
         }
@@ -336,19 +505,41 @@ struct SubjectList: View {
         }
     }
 
+    /// 当天 / 已办 / 错题订正：原型的木色分段，每段 44pt 高，选中段是卡片色和绿字。
+    var modeSwitch: some View {
+        HStack(spacing: 3) {
+            ForEach(ListMode.allCases) { m in
+                let on = store.mode == m
+                Button { store.mode = m } label: {
+                    Text(label(m)).font(Palette.round(14)).frame(maxWidth: .infinity, minHeight: Palette.hit).contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
+                .background(Capsule().fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .probe("mode-" + m.id, text: label(m))
+            }
+        }
+        .padding(3).background(Capsule().fill(Palette.wood))
+        .probe("list-mode")
+    }
+
     var itemList: some View {
         List(selection: Binding(get: { store.selection }, set: { store.select($0) })) {
             ForEach(store.groups, id: \.subject) { group in
                 Section {
-                    ForEach(group.items) { item in ItemRow(item: item, selected: store.selection == item.id).tag(item.id).probe("row-" + item.id, text: item.title) }
+                    ForEach(group.items) { item in
+                        ItemRow(item: item, selected: store.selection == item.id).tag(item.id).probe("row-" + item.id, text: item.title)
+                            .listRowSeparator(.hidden)
+                    }
                 } header: {
-                    HStack { WoodTag(text: group.subject); Text("\(group.items.count) 项").foregroundStyle(Palette.ink2) }
+                    WoodTag(text: group.subject, count: "\(group.items.count) 项").padding(.top, 8).padding(.bottom, 2)
                         .probe("subject-" + group.subject)
                 }
             }
             if store.groups.isEmpty && store.current != nil {
                 Text(store.mode == .done ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
-                    .foregroundStyle(Palette.ink2).probe("list-empty")
+                    .font(Palette.body).foregroundStyle(Palette.ink2).probe("list-empty")
             }
         }
         .listStyle(.sidebar)
@@ -357,33 +548,43 @@ struct SubjectList: View {
     }
 }
 
+/// 清单一行是一张卡片（原型 .row）：做什么、完整完成标准、完成/交回日、出处与已有进展；选中是嫩绿底加绿边，文字保持深色。
 struct ItemRow: View {
     let item: DayItem
     var selected = false
-    /// 选中时用系统层级色（随系统选中高亮自动变浅色），没选中时用工作台配色。
-    func ink(_ color: Color, _ level: HierarchicalShapeStyle) -> AnyShapeStyle { selected ? AnyShapeStyle(level) : AnyShapeStyle(color) }
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: item.closed ? "leaf.fill" : "circle").foregroundStyle(ink(item.closed ? Palette.leafInk : Palette.ink2, .secondary))
-                .font(.title3).padding(.top, 2).accessibilityHidden(true)
+        HStack(alignment: .top, spacing: 8) {
+            LeafMark(closed: item.closed).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.title).font(Palette.rounded.weight(.semibold)).foregroundStyle(ink(Palette.ink, .primary)).lineLimit(2)
-                if let first = item.lines.first { Text(item.lines.joined(separator: "；")).font(.callout).foregroundStyle(ink(Palette.ink2, .secondary)).lineLimit(2).help(first) }
-                else { Text("完成标准未提供，待补充").font(.callout).foregroundStyle(ink(Palette.coralInk, .primary)) }
-                HStack(spacing: 6) {
-                    if !item.whenLabel.isEmpty { Badge(text: item.whenLabel, tone: Palette.paper, ink: Palette.ink2) }
+                Text(item.title).font(Palette.round(15, .bold)).foregroundStyle(item.closed ? Palette.ink2 : Palette.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let first = item.lines.first {
+                    // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
+                    Text(item.lines.joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
+                } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
+                FlowRow(spacing: 6, lineSpacing: 4) {
+                    if !item.whenLabel.isEmpty { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
                     ForEach(item.facts.filter { $0.role == "due" || $0.role == "complete" }, id: \.self) { f in
                         let (tone, ink) = factTone(f)
                         Badge(text: factWords(f), tone: tone, ink: ink)
                     }
                     if item.pending_review { Badge(text: "待核对", tone: Palette.coral, ink: Palette.coralInk) }
                 }
+                .padding(.top, 2)
                 let meta = [item.source, item.progress.map(progressWords) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
-                if !meta.isEmpty { Text(meta).font(.caption).foregroundStyle(ink(Palette.ink2, .secondary)).lineLimit(1) }
+                if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
             }
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 5)
+        .padding(EdgeInsets(top: 10, leading: 6, bottom: 12, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(selected ? Palette.leaf50 : Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(selected ? Palette.leaf400 : Palette.line, lineWidth: selected ? 1.5 : 1))
+        .padding(.vertical, 4)
+        .background(HighlightOff())
         .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -394,28 +595,32 @@ struct WrongList: View {
             ForEach(store.wrongGroups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { r in
-                        HStack(alignment: .top) {
+                        HStack(alignment: .center, spacing: 8) {
                             VStack(alignment: .leading, spacing: 4) {
-                                Text(r.title).font(Palette.rounded.weight(.semibold)).foregroundStyle(Palette.ink)
-                                Text(r.day).font(.caption).foregroundStyle(Palette.ink2)
+                                Text(r.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                                Text(r.day).font(Palette.small).foregroundStyle(Palette.ink2)
                             }
-                            Spacer()
-                            Badge(text: r.state ?? "待订正", tone: r.state == "待订正" ? Palette.coral : Palette.leaf.opacity(0.5),
+                            Spacer(minLength: 6)
+                            Badge(text: r.state ?? "待订正", tone: r.state == "待订正" ? Palette.coral : Palette.leaf100,
                                   ink: r.state == "待订正" ? Palette.coralInk : Palette.leafInk)
                             Button("记订正") { store.sheet = .correction(r); store.sheetDirty = false }
-                                .probe("wrong-correct-\(r.id)")
+                                .buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(r.id)")
                         }
+                        .padding(EdgeInsets(top: 8, leading: 12, bottom: 10, trailing: 10))
+                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
+                        .padding(.vertical, 4)
+                        .listRowSeparator(.hidden)
                         .probe("wrong-\(r.id)", text: r.title + " " + (r.state ?? ""))
                     }
-                } header: { WoodTag(text: group.subject) }
+                } header: { WoodTag(text: group.subject).padding(.top, 8).padding(.bottom, 2) }
             }
-            if store.wrongGroups.isEmpty && store.current != nil { Text("还没有记下的错题。").foregroundStyle(Palette.ink2) }
+            if store.wrongGroups.isEmpty && store.current != nil { Text("还没有记下的错题。").font(Palette.body).foregroundStyle(Palette.ink2) }
         }
         .listStyle(.sidebar).scrollContentBackground(.hidden).probe("wrong-list")
     }
 }
 
-// MARK: 所选事项详情：出处 → 要做什么与完成标准 → 日期 → 资料与打印 → 反馈、错题与订正（同一份作业）。
+// MARK: 所选事项详情：出处（老师与发布时间）与标题 → 完成日/交回日等行动日期卡片 → 要做什么与完成标准 → 资料与打印 → 反馈、错题与订正（同一份作业）。
 
 struct Inspector: View {
     @ObservedObject var store: WorkspaceStore
@@ -427,155 +632,225 @@ struct Inspector: View {
                 VStack(spacing: 10) {
                     Image(systemName: "leaf").font(.largeTitle).foregroundStyle(Palette.leafInk)
                     Text(store.current != nil ? "从左边选一项，查看要做什么、资料和反馈。" : store.loginRequired ? "登录后显示清单。"
-                         : store.loading || store.error.isEmpty ? "正在读取清单…" : "还没读到所选孩子这一天的清单，可在左边重试。").foregroundStyle(Palette.ink2)
+                         : store.loading || store.error.isEmpty ? "正在读取清单…" : "还没读到所选孩子这一天的清单，可在左边重试。").font(Palette.body).foregroundStyle(Palette.ink2)
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
             }
         }
     }
 
+    func header(_ title: String, _ symbol: String) -> some View {
+        Label(title, systemImage: symbol).font(Palette.round(17, .bold)).foregroundStyle(Palette.ink)
+    }
+
+    func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) { content() }
+            .padding(EdgeInsets(top: 14, leading: 18, bottom: 16, trailing: 18)).frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 6, x: 0, y: 3))
+    }
+
     func section<Content: View>(_ title: String, _ symbol: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(title, systemImage: symbol).font(Palette.rounded.weight(.bold)).foregroundStyle(Palette.ink)
-            content()
-        }
-        .padding(14).frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 14).fill(Palette.card))
-        .overlay(RoundedRectangle(cornerRadius: 14).stroke(Palette.desk, lineWidth: 1))
+        VStack(alignment: .leading, spacing: 10) { header(title, symbol); card(content) }
     }
 
     func detail(_ item: DayItem) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 10) {
-                    WoodTag(text: item.subject)
-                    if !item.source.isEmpty { Label(item.source + " 发布", systemImage: "bubble.left").font(.callout).foregroundStyle(Palette.ink2).probe("detail-publisher", text: item.source) }
-                    if !(item.publications ?? []).isEmpty || item.origin == "school" {
-                        Button("看原消息") { store.openWebTools(item.webID, "original") }.help("在网页版打开同一项的原消息与原件").probe("original-message")
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    FlowRow(spacing: 10, lineSpacing: 6) {
+                        WoodTag(text: item.subject)
+                        // 发布是老师旁的次要出处（原型 .d-source）：老师与完整发布时间一行小字，不占日期卡；原值照写，未知如实写。
+                        if let words = item.publishWords {
+                            Label(words, systemImage: "bubble.left").font(Palette.small).foregroundStyle(Palette.ink2).frame(minHeight: 26)
+                                .probe("detail-publisher", text: words)
+                        }
+                        if !(item.publications ?? []).isEmpty || item.origin == "school" {
+                            Button { store.openWebTools(item.webID, "original") } label: { Label("看原消息", systemImage: "text.bubble") }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet)).help("在网页版打开同一项的原消息与原件").probe("original-message")
+                        }
+                        Text("\(store.childName) · \(item.origin_label)" + (item.origin == "oral" ? "（老师日期未录入就保持未知）" : "")).font(Palette.small).foregroundStyle(Palette.ink2).frame(minHeight: 26)
                     }
-                    Spacer()
-                    Text("\(store.childName) · \(item.origin_label)").font(.callout).foregroundStyle(Palette.ink2)
-                }
-                Text(item.title).font(.system(.title2, design: .rounded).weight(.bold)).foregroundStyle(Palette.ink)
-                    .textSelection(.enabled).probe("detail-title", text: item.title)
-                section("要做什么与完成标准", "checkmark") {
-                    if item.lines.isEmpty { Text("完成标准未提供，待补充").foregroundStyle(Palette.coralInk).probe("detail-no-standard") }
-                    ForEach(Array(item.lines.enumerated()), id: \.offset) { _, line in Text("· " + line).foregroundStyle(Palette.ink).textSelection(.enabled) }
-                    if !item.complete_words.isEmpty { Text("完成要求：" + item.complete_words).foregroundStyle(Palette.ink2) }
-                    if item.pending_review { Text("这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。").font(.callout).foregroundStyle(Palette.coralInk) }
-                }
-                section("日期", "calendar") {
-                    if !item.whenLabel.isEmpty { Text("这一项\(item.whenLabel)，不算这一天要交的作业。").font(.callout).foregroundStyle(Palette.ink2).probe("detail-when", text: item.whenLabel) }
-                    ForEach(item.facts, id: \.self) { f in
-                        HStack(alignment: .firstTextBaseline) {
-                            Text(f.label).foregroundStyle(Palette.ink2).frame(width: 96, alignment: .leading)
-                            Text((f.today == true ? "今天 " : "") + f.value)
-                                .foregroundStyle(!f.known ? Palette.ink2 : f.state == "next_morning" || f.state == "overdue" ? Palette.coralInk : Palette.ink)
-                                .italic(!f.known)
-                            if f.state == "next_morning" { Badge(text: "明天", tone: Palette.coral, ink: Palette.coralInk) }
-                            if f.state == "overdue" { Badge(text: "已逾期", tone: Palette.coral, ink: Palette.coralInk) }
-                        }.accessibilityElement(children: .combine).probe("fact-" + f.role, text: factWords(f))
+                    Text(item.title).font(Palette.round(26, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled).probe("detail-title", text: item.title)
+                    if !item.whenLabel.isEmpty {
+                        Text("这一项\(item.whenLabel)，不算这一天要交的作业。").font(Palette.body).foregroundStyle(Palette.ink2).probe("detail-when", text: item.whenLabel)
                     }
-                    Text("出处：" + item.origin_label + (item.origin == "oral" ? "（老师日期未录入就保持未知）" : "")).font(.callout).foregroundStyle(Palette.ink2)
+                }
+                if !item.actionFacts.isEmpty { facts(item) }
+                section("要做什么与完成标准", "checklist") {
+                    if item.lines.isEmpty { Text("完成标准未提供，待补充").font(Palette.body).foregroundStyle(Palette.coralInk).probe("detail-no-standard") }
+                    ForEach(Array(item.lines.enumerated()), id: \.offset) { _, line in
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Image(systemName: "leaf.fill").font(.system(size: 11)).foregroundStyle(Palette.leaf400).accessibilityHidden(true)
+                            Text(line).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                    }
+                    if !item.complete_words.isEmpty { Text("完成要求：" + item.complete_words).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                    if item.pending_review {
+                        Text("这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。").font(Palette.small).foregroundStyle(Palette.coralInk)
+                    }
                 }
                 if !item.task_id.isEmpty { materials(item) }
                 feedback(item)
             }
-            .padding(20).frame(maxWidth: 760, alignment: .leading)
+            .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 40)
+            .frame(maxWidth: 860, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Palette.paper)
         .probe("inspector")
     }
 
+    /// 主要日期卡只放完成、交回等真实行动日期（发布时间在标题上方的出处小字里）：每条写出原值；未知如实写，不猜；明天交、已逾期用珊瑚色。
+    func facts(_ item: DayItem) -> some View {
+        // 原型 .d-facts：最多三张等宽并排，多出来的换到下一行；每条行动事实都保留，不凑卡。
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10, alignment: .topLeading), count: max(1, min(item.actionFacts.count, 3))), alignment: .leading, spacing: 10) {
+            ForEach(item.actionFacts, id: \.self) { f in factCard(f) }
+        }
+    }
+
+    func factIcon(_ role: String) -> String { ["complete": "clock", "due": "tray.and.arrow.up", "published": "bubble.left", "publish": "bubble.left"][role] ?? "calendar" }
+
+    func factCard(_ f: DayFact) -> some View {
+        let urgent = f.state == "next_morning" || f.state == "overdue"
+        return VStack(alignment: .leading, spacing: 4) {
+            Label(f.label, systemImage: factIcon(f.role)).font(.system(size: 12.5)).foregroundStyle(Palette.ink2)
+            Text((f.today == true ? "今天 " : "") + f.value).font(Palette.round(15, .bold))
+                .foregroundStyle(!f.known ? Palette.ink2 : urgent ? Palette.coralInk : Palette.ink).italic(!f.known)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            if f.state == "next_morning" { Badge(text: "明天", tone: Palette.coral, ink: Palette.coralInk) }
+            if f.state == "overdue" { Badge(text: "已逾期", tone: Palette.coral, ink: Palette.coralInk) }
+        }
+        .padding(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14)).frame(maxWidth: .infinity, minHeight: 74, alignment: .topLeading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 6, x: 0, y: 3))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(urgent ? Palette.coral400 : Color.clear, lineWidth: 1))
+        .accessibilityElement(children: .combine).probe("fact-" + f.role, text: factWords(f))
+    }
+
     func materialTone(_ m: Material) -> (Color, Color) {
         switch m.state {
-        case "ready": return (Palette.leaf.opacity(0.45), Palette.leafInk)
+        case "ready": return (Palette.leaf100, Palette.leaf700)
         case "unread", "error": return (Palette.coral, Palette.coralInk)
+        case "pending": return (Palette.paper2, Palette.ink2)
         default: return (Palette.wood, Palette.woodInk)
         }
     }
 
+    /// 资料卡（原型 .mat）：用途和状态分开写——用途牌、文件名、服务端给的状态；有提要就写提要，看不清的只说原因，不猜内容。
+    func materialCard(_ m: Material) -> some View {
+        let unread = m.state == "unread" || m.state == "error"
+        let (tone, ink) = materialTone(m)
+        let parent = m.roleLabel.contains("家长")
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(m.roleLabel).font(Palette.round(14, .bold)).foregroundStyle(parent ? Palette.woodInk : Palette.ink)
+                    .padding(.horizontal, 10).padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(parent ? Palette.wood : Palette.paper2)).fixedSize()
+                Text(m.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.middle).help(m.name)
+                Spacer(minLength: 8)
+                Badge(text: m.stateLabel, tone: tone, ink: ink, dashed: unread)
+            }
+            if !m.summary.isEmpty {
+                Text(m.summary).font(.system(size: 14)).foregroundStyle(Palette.ink).lineSpacing(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+            if !m.unclear.isEmpty { Text("看不清：" + m.unclear.joined(separator: "；") + "。请看原件。").font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
+            if m.state != "ready", m.state != "saved", !m.explanation.isEmpty {
+                Text(m.explanation).font(Palette.small).foregroundStyle(m.state == "pending" ? Palette.ink2 : Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+            }
+            Button { store.openDocument(store.client.url("/upload/" + m.id), m.name) } label: { Label("打开原件", systemImage: "eye") }
+                .buttonStyle(GroveButtonStyle()).probe("material-open-" + m.id)
+        }
+        .padding(EdgeInsets(top: 14, leading: 16, bottom: 16, trailing: 16)).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(unread ? Palette.paper : Palette.card).shadow(color: unread ? Color.clear : Palette.cardShadow, radius: 6, x: 0, y: 3))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(unread ? Palette.line2 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).inset(by: 5).strokeBorder(m.state == "ready" ? Palette.leaf100 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])).allowsHitTesting(false))
+        .probe("material-" + m.id, text: m.stateLabel + " " + m.name + " " + m.summary)
+    }
+
     func materials(_ item: DayItem) -> some View {
         let state = store.materials[item.task_id] ?? MaterialState()
-        return section("资料与打印", "doc.text") {
-            if !state.loaded { Text("正在读取资料…").foregroundStyle(Palette.ink2) }
+        return VStack(alignment: .leading, spacing: 10) {
+            header("资料与打印", "doc.text")
+            if !state.loaded { Text("正在读取资料…").font(Palette.body).foregroundStyle(Palette.ink2) }
             if !state.error.isEmpty {
-                Text(state.error).foregroundStyle(Palette.coralInk)
-                Button("重新读取资料") { Task { await store.loadMaterials(item) } }.probe("material-retry")
-            }
-            if state.loaded && state.files.isEmpty && state.error.isEmpty { Text("这一项没有已保存的原件。").foregroundStyle(Palette.ink2).probe("material-none") }
-            ForEach(state.files) { m in
-                let (tone, ink) = materialTone(m)
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Badge(text: m.stateLabel, tone: tone, ink: ink)
-                        Text(m.name).foregroundStyle(Palette.ink).lineLimit(1)
-                        Spacer()
-                        Button("打开") { store.openDocument(store.client.url("/upload/" + m.id), m.name) }.probe("material-open-" + m.id)
-                    }
-                    Text(m.roleLabel).font(.caption).foregroundStyle(Palette.ink2)
-                    if !m.summary.isEmpty { Text(m.summary).foregroundStyle(Palette.ink).lineLimit(3).textSelection(.enabled) }
-                    if !m.unclear.isEmpty { Text("看不清：" + m.unclear.joined(separator: "；") + "。请看原件。").font(.callout).foregroundStyle(Palette.coralInk) }
-                    if m.state != "ready", m.state != "saved", !m.explanation.isEmpty { Text(m.explanation).font(.callout).foregroundStyle(m.state == "pending" ? Palette.ink2 : Palette.coralInk) }
+                card {
+                    Text(state.error).font(Palette.body).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                    Button("重新读取资料") { Task { await store.loadMaterials(item) } }.buttonStyle(GroveButtonStyle()).probe("material-retry")
                 }
-                .padding(8)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(style: StrokeStyle(lineWidth: 1, dash: m.state == "unread" || m.state == "error" ? [4] : [])).foregroundStyle(m.state == "unread" || m.state == "error" ? Palette.coralInk : Palette.desk))
-                .probe("material-" + m.id, text: m.stateLabel + " " + m.name + " " + m.summary)
             }
+            if state.loaded && state.files.isEmpty && state.error.isEmpty { Text("这一项没有已保存的原件。").font(Palette.body).foregroundStyle(Palette.ink2).probe("material-none") }
+            ForEach(state.files) { m in materialCard(m) }
             if !state.gap.isEmpty {
-                Text("尚未读清：" + state.gap).foregroundStyle(Palette.coralInk).padding(8)
-                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(style: StrokeStyle(lineWidth: 1, dash: [4])).foregroundStyle(Palette.coralInk))
+                Text("尚未读清：" + state.gap).font(Palette.body).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                    .padding(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16)).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.paper))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.coral400, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
                     .probe("material-gap")
             }
             if item.category == "homework" {
-                HStack {
-                    Button { store.openWebTools(item.task_id, "print-original") } label: { Label("打印原卷", systemImage: "printer") }.probe("print-original")
-                    Button { store.openWebTools(item.task_id, "print-reference") } label: { Label("打印家长参考", systemImage: "printer") }.probe("print-reference")
+                FlowRow(spacing: 10, lineSpacing: 8) {
+                    Button { store.openWebTools(item.task_id, "print-original") } label: { Label("打印原卷", systemImage: "printer") }
+                        .buttonStyle(GroveButtonStyle(kind: .primary)).probe("print-original")
+                    Button { store.openWebTools(item.task_id, "print-reference") } label: { Label("打印家长参考", systemImage: "printer") }
+                        .buttonStyle(GroveButtonStyle()).probe("print-reference")
                 }
-                Text("在网页版这份作业的打印确认里打开：先核对依据和所选资料，确认后才排队打印。").font(.caption).foregroundStyle(Palette.ink2)
+                .padding(.top, 2)
+                Text("在网页版这份作业的打印确认里打开：先核对依据和所选资料，确认后才排队打印。").font(Palette.small).foregroundStyle(Palette.ink2)
             }
         }
     }
 
     func feedback(_ item: DayItem) -> some View {
         section("反馈、错题与订正", "pencil") {
-            if let note = item.same_affair?.note, !note.isEmpty { Text(note).foregroundStyle(Palette.ink2).probe("same-affair-note") }
-            if item.task_id.isEmpty { Text("这一项还不是正式事项，确认后才能记反馈。").foregroundStyle(Palette.ink2) }
+            if let note = item.same_affair?.note, !note.isEmpty { Text(note).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("same-affair-note") }
+            if item.task_id.isEmpty { Text("这一项还不是正式事项，确认后才能记反馈。").font(Palette.body).foregroundStyle(Palette.ink2) }
             if let p = item.progress, !progressWords(p).isEmpty {
-                HStack {
-                    Text("已有进展：" + progressWords(p)).font(.callout).foregroundStyle(Palette.ink2).probe("detail-progress", text: progressWords(p))
-                    Spacer()
+                FlowRow(spacing: 10, lineSpacing: 6) {
+                    Text("已有进展：" + progressWords(p)).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).frame(minHeight: Palette.hit)
+                        .probe("detail-progress", text: progressWords(p))
                     if p.wrong + p.clues + p.retries + p.history > 0 {
-                        Button("看错题诊断与再试") { store.openWebTools(item.task_id, "history") }.probe("history-web")
+                        Button("看错题诊断与再试") { store.openWebTools(item.task_id, "history") }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("history-web")
                     }
                 }
-            }
-            ForEach(item.records) { r in
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack { Badge(text: r.followup_kind.isEmpty ? "反馈" : r.followup_kind); Text(r.created.prefix(16).replacingOccurrences(of: "T", with: " ")).font(.caption).foregroundStyle(Palette.ink2)
-                        if !r.attachments.isEmpty { Label("\(r.attachments.count)", systemImage: "camera").font(.caption).foregroundStyle(Palette.ink2) } }
-                    if let v = r.retry { RetryLines(v: v, note: r.note).probe("retry-\(r.id)", text: v.lines.map { $0.joined(separator: "：") }.joined(separator: "\n") + "\n下一步 " + v.next) }
-                    else { Text(r.note.isEmpty ? r.title : r.note).foregroundStyle(Palette.ink).textSelection(.enabled) }
-                    if r.note_truncated && (r.retry?.show_note ?? true) { Text("（较长，完整内容在网页版记录中）").font(.caption).foregroundStyle(Palette.ink2) }
-                    Button("记一道错题") { store.sheet = .wrong(item, r); store.sheetDirty = false }.probe("wrong-new-\(r.id)")
-                }.padding(10).background(RoundedRectangle(cornerRadius: 10).fill(Palette.paper)).probe("record-\(r.id)", text: r.note)
-            }
-            ForEach(item.wrong) { w in
-                HStack {
-                    Text(w.title).foregroundStyle(Palette.ink)
-                    Spacer()
-                    Badge(text: w.state ?? "待订正", tone: w.state == "待订正" ? Palette.coral : Palette.leaf.opacity(0.5), ink: w.state == "待订正" ? Palette.coralInk : Palette.leafInk)
-                    Button("记订正") { store.sheet = .correction(w); store.sheetDirty = false }.probe("wrong-correct-\(w.id)")
-                }.accessibilityElement(children: .contain).probe("detail-wrong-\(w.id)", text: w.title + " " + (w.state ?? ""))
             }
             if !item.task_id.isEmpty {
-                HStack {
+                FlowRow(spacing: 10, lineSpacing: 8) {
                     Button { store.sheet = .feedback(item); store.sheetDirty = false } label: { Label("写文字反馈", systemImage: "square.and.pencil") }
-                        .buttonStyle(.borderedProminent).tint(Palette.leaf).foregroundStyle(Palette.leafInk).probe("feedback-new")
+                        .buttonStyle(GroveButtonStyle(kind: .primary)).probe("feedback-new")
                     if item.category == "homework" {
-                        Button { store.openWebTools(item.task_id, "check") } label: { Label("交作答照片检查", systemImage: "camera") }.probe("check-web")
+                        Button { store.openWebTools(item.task_id, "check") } label: { Label("交作答照片检查", systemImage: "camera") }
+                            .buttonStyle(GroveButtonStyle()).probe("check-web")
                     }
                 }
-                Text("文字反馈在这里写，照片可加可不加，不调用 AI，不自动标已办或判错；照片检查在网页版同一份作业里进行。").font(.caption).foregroundStyle(Palette.ink2)
+                Text("文字反馈在这里写，照片可加可不加，不调用 AI，不自动标已办或判错；照片检查在网页版同一份作业里进行。").font(Palette.small).foregroundStyle(Palette.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(item.records) { r in
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Badge(text: r.followup_kind.isEmpty ? "反馈" : r.followup_kind)
+                        Text(r.created.prefix(16).replacingOccurrences(of: "T", with: " ")).font(Palette.small).foregroundStyle(Palette.ink2)
+                        if !r.attachments.isEmpty { Label("\(r.attachments.count)", systemImage: "camera").font(Palette.small).foregroundStyle(Palette.ink2) }
+                        Spacer(minLength: 8)
+                        Button("记一道错题") { store.sheet = .wrong(item, r); store.sheetDirty = false }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("wrong-new-\(r.id)")
+                    }
+                    if let v = r.retry { RetryLines(v: v, note: r.note).probe("retry-\(r.id)", text: v.lines.map { $0.joined(separator: "：") }.joined(separator: "\n") + "\n下一步 " + v.next) }
+                    else { Text(r.note.isEmpty ? r.title : r.note).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
+                    if r.note_truncated && (r.retry?.show_note ?? true) { Text("（较长，完整内容在网页版记录中）").font(Palette.small).foregroundStyle(Palette.ink2) }
+                }
+                .padding(EdgeInsets(top: 6, leading: 12, bottom: 12, trailing: 6)).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.paper))
+                .probe("record-\(r.id)", text: r.note)
+            }
+            ForEach(item.wrong) { w in
+                HStack(spacing: 10) {
+                    Text(w.title).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Badge(text: w.state ?? "待订正", tone: w.state == "待订正" ? Palette.coral : Palette.leaf100, ink: w.state == "待订正" ? Palette.coralInk : Palette.leafInk)
+                    Button("记订正") { store.sheet = .correction(w); store.sheetDirty = false }.buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(w.id)")
+                }
+                .padding(EdgeInsets(top: 6, leading: 12, bottom: 9, trailing: 8))
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(w.state == "待订正" ? Palette.paper : Palette.leaf50))
+                .accessibilityElement(children: .contain).probe("detail-wrong-\(w.id)", text: w.title + " " + (w.state ?? ""))
             }
         }
     }

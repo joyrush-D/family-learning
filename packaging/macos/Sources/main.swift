@@ -188,10 +188,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     var loginBaseline = ""        // 打开登录窗口时已有的登录 cookie；换成新的才算登录完成
     var observingCookies = false
     // 主界面是原生工作台；网页只在家长打开“网页版工具”、原件或照片检查时载入。测试默认沿用原网页验收，声明 native 才验原生工作台。
-    var surface = smoke ? (environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native" ? "native" : "web") : "native"
+    var surface = smoke ? (environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native" ? "native" : "web") : "native" { didSet { updateBackBar(); updateMinWidth() } }
     var workspace: WorkspaceStore?
     var workspaceHost: NSHostingController<WorkspaceView>?
     var container: NSView?
+    // 网页版工具上方的原生“← 返回清单”条：在网页内容之外，不受网页路由、载入失败或登录页影响；只在从工作台打开网页版时显示。
+    let backBar = NSView()
+    let backButton = NSButton(title: "", target: nil, action: nil)
+    var backBarHeight: NSLayoutConstraint?
     var nativeRan = false
     var attempts = 0
     var mainLoads = 0
@@ -326,6 +330,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         w.title = "一起成长"
         w.minSize = NSSize(width: 360, height: 560)
+        // 标题栏和工作台顶栏、网页上方的返回条同一种纸面色（原型 --paper-2），不再是一条白边。
+        w.titlebarAppearsTransparent = true
+        w.backgroundColor = NSColor(srgbRed: 0xF4 / 255, green: 0xED / 255, blue: 0xDB / 255, alpha: 1)
         w.delegate = self
         w.isReleasedWhenClosed = false
         if !smoke { w.setFrameAutosaveName("FamilyDesktopMain") }
@@ -334,6 +341,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         web.uiDelegate = self
         web.translatesAutoresizingMaskIntoConstraints = false
         let container = NSView()
+        buildBackBar()
+        container.addSubview(backBar)
         container.addSubview(web)
         statusView.orientation = .vertical
         statusView.alignment = .centerX
@@ -375,7 +384,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         container.addSubview(setupView)
         NSLayoutConstraint.activate([
             web.leadingAnchor.constraint(equalTo: container.leadingAnchor), web.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            web.topAnchor.constraint(equalTo: container.topAnchor), web.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            backBar.leadingAnchor.constraint(equalTo: container.leadingAnchor), backBar.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            backBar.topAnchor.constraint(equalTo: container.topAnchor),
+            web.topAnchor.constraint(equalTo: backBar.bottomAnchor), web.bottomAnchor.constraint(equalTo: container.bottomAnchor),
             statusView.centerXAnchor.constraint(equalTo: container.centerXAnchor), statusView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             statusView.widthAnchor.constraint(lessThanOrEqualTo: container.widthAnchor, constant: -32),
             setupView.centerXAnchor.constraint(equalTo: container.centerXAnchor), setupView.centerYAnchor.constraint(equalTo: container.centerYAnchor),
@@ -527,7 +538,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(updateBackend) { return !backendBusy && backendState == "update_available" }
         if item.action == #selector(uninstallBackend) { return !backendBusy && ["update_available", "current"].contains(backendState) }
-        if item.action == #selector(menuWorkbench) { return surface == "web" && config.policy != nil && webView?.isHidden == false }
+        // 网页正在载入或载入失败（网页隐藏、显示状态页）时也能回工作台：从工作台打开的网页版始终有回去的路。
+        if item.action == #selector(menuWorkbench) { return surface == "web" && config.policy != nil && (webView?.isHidden == false || workspace != nil) }
         if [#selector(menuPrintOriginal), #selector(menuPrintReference)].contains(item.action) { return nativeVisible && workspace?.sheet == nil && workspace?.selected?.task_id.isEmpty == false }
         // 补录只记在已读到的所选孩子这一天；切换孩子、前后一天、重读在读失败时照常可用（已知孩子可切回、可重试）。
         if item.action == #selector(menuOral) { return nativeVisible && workspace?.sheet == nil && workspace?.current != nil }
@@ -872,12 +884,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
     func snapshot(_ name: String) async {
         guard smoke, let dir = environment["FAMILY_DESKTOP_TEST_SNAPSHOT_DIR"], let window, let view = window.contentView else { return }
         var image: NSImage?
-        if let web = webView, !web.isHidden { image = try? await web.takeSnapshot(configuration: nil) }
+        // 回到工作台后网页视图仍在原容器里且未隐藏：只有当前显示的是网页时才取网页快照，否则取窗口里实际显示的原生内容。
+        if let web = webView, !web.isHidden, surface == "web", window.contentView === container { image = try? await web.takeSnapshot(configuration: nil) }
         else if let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
             view.cacheDisplay(in: view.bounds, to: rep); let i = NSImage(size: view.bounds.size); i.addRepresentation(rep); image = i
         }
         guard let tiff = image?.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return }
         try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + ".png"))
+        // 另存窗口服务器合成后的本窗口实际画面（含标题栏、材质与系统选中底色），用来核对视图缓存截图是否失真；只取本 App 自己的窗口。
+        if let shot = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]),
+           let real = NSBitmapImageRep(cgImage: shot).representation(using: .png, properties: [:]) {
+            try? real.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + "-window.png"))
+        }
     }
 
     func sleep(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
@@ -981,6 +999,7 @@ extension AppDelegate {
     var nativeVisible: Bool { surface == "native" && window?.contentViewController is NSHostingController<WorkspaceView> }
 
     func restoreContainer() {
+        defer { updateMinWidth() }
         guard let window, let container, window.contentView !== container else { return }
         let frame = window.frame
         window.contentViewController = nil
@@ -1008,7 +1027,13 @@ extension AppDelegate {
         if !observingCookies { observingCookies = true; configuration.websiteDataStore.httpCookieStore.add(self) }
         surface = "native"
         TestTargets.enabled = smoke && environment["FAMILY_DESKTOP_TEST_SURFACE"] == "native"
-        let frame = window.frame
+        // 左清单和右详情固定并排：从历史保存的小窗口启动、或网页版被缩到手机宽度再回来时，先把窗口放宽到工作台可用宽度
+        // （留在屏幕可见范围里），清单不会挤掉详情；孩子、日期和所选事项都在同一个工作台里，不受窗口大小影响。
+        var frame = window.frame
+        if frame.width < AppDelegate.workbenchMinWidth {
+            frame.size.width = AppDelegate.workbenchMinWidth
+            if let screen = (window.screen ?? NSScreen.main)?.visibleFrame { frame.origin.x = max(screen.minX, min(frame.origin.x, screen.maxX - frame.width)) }
+        }
         if let shown = window.contentViewController as? NSHostingController<WorkspaceView> {
             // 工作台已显示在这个窗口里（例如重新读取）：只把视图换成这份清单，不替换窗口内容控制器——替换后真实点击清单行不再选中。
             shown.rootView = WorkspaceView(store: store)
@@ -1021,6 +1046,8 @@ extension AppDelegate {
             window.contentViewController = host
             window.setFrame(frame, display: true)
         }
+        if window.frame != frame { window.setFrame(frame, display: true) }
+        updateMinWidth()
         window.toolbarStyle = .unified
         window.appearance = NSAppearance(named: .aqua)  // 工作台配色只设计了浅色
         window.subtitle = ""
@@ -1145,7 +1172,96 @@ extension AppDelegate {
     @objc func menuWorkbench() {
         guard let policy = config.policy else { return }
         guard let web = webView, surface == "web" else { return showWorkspace(policy) }
-        unsaved(web) { dirty in if !dirty || self.confirmDiscard("回到工作台") { self.showWorkspace(policy) } }
+        unsaved(web) { dirty in
+            if !dirty || self.confirmDiscard("回到工作台") { self.showWorkspace(policy) } else { emit(["state": "workbench_kept_unsaved"]) }
+        }
+    }
+
+    /// 网页上方的“← 返回清单”：和菜单“回到原生工作台”（⌘0）同一条路——网页自己的未保存判断（草稿、保存中、回执不明）先问，
+    /// 默认“继续编辑”留在原页；网页没载入、载入失败或停在别处时没有可判断的同源页面，直接回工作台。不发任何写入；
+    /// 孩子、日期和所选事项由同一个工作台保留。
+    @objc func backToList() {
+        emit(["state": "web_back_clicked", "web_visible": webView?.isHidden == false])
+        menuWorkbench()
+    }
+
+    /// 返回条只跟“从工作台打开的网页版”：有工作台、有服务地址、当前是网页面（包括网页载入中、载入失败时的状态页）。
+    /// 原生工作台是固定并排的左清单（340）和右详情：窄于这个宽度时清单会挤掉详情。网页版仍可缩到手机宽度 360。
+    static let workbenchMinWidth: CGFloat = 900
+
+    /// 最小宽度跟着当前显示的面：显示原生工作台时不小于 900；网页版（含载入中、失败时的状态页）仍是 360。
+    /// 更换窗口内容（工作台控制器、网页容器）后系统会重设记下的最小尺寸，所以每次换完再设一次；拖动时另由 windowWillResize 把关。
+    func updateMinWidth() {
+        guard let window else { return }
+        let width: CGFloat = surface == "native" && workspace != nil ? AppDelegate.workbenchMinWidth : 360
+        window.minSize = NSSize(width: width, height: 560)
+        window.contentMinSize = NSSize(width: width, height: 500)
+    }
+
+    /// 家长拖动窗口边缘时：显示原生工作台就不窄于可用宽度；网页版照常可缩到 360。
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard sender === window, surface == "native", sender.contentViewController is NSHostingController<WorkspaceView> else { return frameSize }
+        return NSSize(width: max(frameSize.width, AppDelegate.workbenchMinWidth), height: frameSize.height)
+    }
+
+    func updateBackBar() {
+        let show = surface == "web" && workspace != nil && config.policy != nil
+        backBar.isHidden = !show
+        backBarHeight?.constant = show ? 60 : 0
+    }
+
+    func buildBackBar() {
+        func rgb(_ hex: Int) -> NSColor { NSColor(srgbRed: CGFloat(hex >> 16 & 0xFF) / 255, green: CGFloat(hex >> 8 & 0xFF) / 255, blue: CGFloat(hex & 0xFF) / 255, alpha: 1) }
+        let rounded = NSFont.systemFont(ofSize: 15, weight: .semibold)
+        backBar.wantsLayer = true
+        backBar.layer?.backgroundColor = rgb(0xF4EDDB).cgColor
+        backBar.translatesAutoresizingMaskIntoConstraints = false
+        backButton.target = self
+        backButton.action = #selector(backToList)
+        backButton.isBordered = false
+        backButton.wantsLayer = true
+        backButton.layer?.cornerRadius = 22
+        backButton.layer?.backgroundColor = rgb(0xE3F1D0).cgColor
+        backButton.layer?.borderWidth = 1.5
+        backButton.layer?.borderColor = rgb(0x86BE59).cgColor
+        backButton.attributedTitle = NSAttributedString(string: "←  返回清单", attributes: [
+            .font: NSFont(descriptor: rounded.fontDescriptor.withDesign(.rounded) ?? rounded.fontDescriptor, size: 15) ?? rounded, .foregroundColor: rgb(0x1F4A1C)])
+        backButton.setAccessibilityIdentifier("web-back")
+        backButton.setAccessibilityLabel("返回清单")
+        backButton.toolTip = "回到原生每日清单（⌘0）；网页里有未保存的内容会先问"
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        let note = NSTextField(labelWithString: "网页版工具 · 回清单后孩子、日期和所选事项不变")
+        note.font = .systemFont(ofSize: 13)
+        note.textColor = rgb(0x665A48)
+        note.lineBreakMode = .byTruncatingTail
+        note.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        note.translatesAutoresizingMaskIntoConstraints = false
+        let rule = NSView()
+        rule.wantsLayer = true
+        rule.layer?.backgroundColor = rgb(0xE7DDC8).cgColor
+        rule.translatesAutoresizingMaskIntoConstraints = false
+        [backButton, note, rule].forEach(backBar.addSubview)
+        if smoke {
+            // 测试定位：和工作台控件一样登记一个不接收点击的锚点（hitTest 为 nil），测试在它的位置投递真实鼠标事件，由按钮自己处理。
+            let anchor = ProbeAnchor()
+            anchor.translatesAutoresizingMaskIntoConstraints = false
+            backButton.addSubview(anchor)
+            NSLayoutConstraint.activate([anchor.leadingAnchor.constraint(equalTo: backButton.leadingAnchor), anchor.trailingAnchor.constraint(equalTo: backButton.trailingAnchor),
+                                         anchor.topAnchor.constraint(equalTo: backButton.topAnchor), anchor.bottomAnchor.constraint(equalTo: backButton.bottomAnchor)])
+            TestTargets.register(anchor, "web-back", "返回清单")
+        }
+        let height = backBar.heightAnchor.constraint(equalToConstant: 0)
+        backBarHeight = height
+        NSLayoutConstraint.activate([
+            height,
+            backButton.leadingAnchor.constraint(equalTo: backBar.leadingAnchor, constant: 16), backButton.centerYAnchor.constraint(equalTo: backBar.centerYAnchor),
+            backButton.heightAnchor.constraint(equalToConstant: 44), backButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 136),
+            note.leadingAnchor.constraint(equalTo: backButton.trailingAnchor, constant: 14), note.centerYAnchor.constraint(equalTo: backBar.centerYAnchor),
+            note.trailingAnchor.constraint(lessThanOrEqualTo: backBar.trailingAnchor, constant: -16),
+            rule.leadingAnchor.constraint(equalTo: backBar.leadingAnchor), rule.trailingAnchor.constraint(equalTo: backBar.trailingAnchor),
+            rule.bottomAnchor.constraint(equalTo: backBar.bottomAnchor), rule.heightAnchor.constraint(equalToConstant: 1),
+        ])
+        backBar.isHidden = true
     }
 
     func workspaceLoaded() {
@@ -1191,6 +1307,7 @@ extension AppDelegate {
 
     /// 控件不在可见区域时，像滚轮一样让它所在的真实滚动视图滚到那里（不调用工作台自己的任何动作）。
     func reveal(_ id: String) async -> Bool {
+        if TestTargets.live(id) == nil, id.hasPrefix("row-") || id.hasPrefix("wrong-") { return await revealUnbuiltRow(id) }
         guard let (view, _) = TestTargets.live(id), !onScreen(view) else { return false }
         var moved = view.scrollToVisible(view.bounds)
         if !moved, let scroll = view.enclosingScrollView, let doc = scroll.documentView {
@@ -1201,6 +1318,24 @@ extension AppDelegate {
         }
         if moved { await sleep(0.5) }
         return moved
+    }
+
+    /// 系统列表只为可见区附近的行建视图：要点的行在下面还没建出来时，像家长往下翻一样用表格公开的“显露这一行”逐行往下
+    /// （以表格行数为上限），直到这一行真的建进列表；不调用工作台的选择、不改选中，之后仍是真实点击。
+    func revealUnbuiltRow(_ id: String) async -> Bool {
+        for table in testWindows().flatMap({ tables(in: $0.contentView) }) {
+            for index in 0..<min(table.numberOfRows, 200) {
+                table.scrollRowToVisible(index); await sleep(0.12)
+                if TestTargets.live(id) != nil { await sleep(0.3); return true }
+            }
+        }
+        return false
+    }
+
+    func tables(in view: NSView?) -> [NSTableView] {
+        guard let view, !view.isHidden else { return [] }
+        if let table = view as? NSTableView { return [table] }
+        return view.subviews.flatMap { tables(in: $0) }
     }
 
     /// 控件中心在它所在滚动视图的可见区域内，也在窗口内容里。
@@ -1228,8 +1363,8 @@ extension AppDelegate {
     }
 
     func click(_ id: String, contains: String = "") async -> [String: Any] {
-        let scrolled = await reveal(id)
-        guard let node = find(id, contains: contains) else { return ["ok": false, "error": "control not found", "id": id] }
+        let unbuilt = TestTargets.live(id) == nil, scrolled = await reveal(id)
+        guard let node = find(id, contains: contains) else { return ["ok": false, "error": "control not found", "id": id, "unbuilt_row": unbuilt] }
         var center = NSPoint(x: node.frame.midX, y: node.frame.midY), row = -1
         var rowTable: NSTableView?
         // 列表里的一行：用表格自己的那一行（锚点所在的那一行）的位置；先让表格自己滚到这一行，再点这一行的中间。
@@ -1312,7 +1447,7 @@ extension AppDelegate {
             }
         }
         return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
-                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
+                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
     }
 
     func key(_ chars: String, _ modifiers: [String], code: UInt16 = 0) async {
@@ -1440,6 +1575,12 @@ extension AppDelegate {
             let reply = try? await URLSession(configuration: .ephemeral).data(from: origin.url.appendingPathComponent(String(path.dropFirst())))
             return ["ok": (reply?.1 as? HTTPURLResponse)?.statusCode == 200, "path": path]
         case "discard_next": testDiscardNext = true; return ["ok": true]
+        case "saved_frame":
+            // 像 App 从历史保存的窗口框启动：系统按保存的框直接设窗口（不经最小尺寸和拖动判断）。
+            guard let window else { return ["ok": false] }
+            var f = window.frame; f.size.width = CGFloat(step["frame_width"] as? Double ?? 360)
+            window.setFrame(f, display: true); await sleep(0.5)
+            return ["ok": true, "window_width": Double(window.frame.width)]
         case "reopen":
             // 像重新打开 App 一样：丢掉内存里的清单，从后台重新读同一天。
             guard let policy = config.policy, let keep = workspace?.selection, let child = workspace?.childID, let day = workspace?.day else { return ["ok": false, "error": "nothing open"] }
@@ -1482,7 +1623,8 @@ extension AppDelegate {
         case "state":
             let s = workspace
             return ["ok": true, "child": s?.childID ?? "", "day": s?.day ?? "", "selection": s?.selection ?? "", "error": s?.error ?? "",
-                    "login_required": s?.loginRequired == true, "summary": s?.summary ?? "", "surface": surface, "web_url": webView?.url?.absoluteString ?? "",
+                    "login_required": s?.loginRequired == true, "summary": s?.summary ?? "", "surface": surface, "window_width": Double(window?.frame.width ?? 0), "min_width": Double(window?.minSize.width ?? 0), "content_min_width": Double(window?.contentMinSize.width ?? 0),
+                    "drag_clamp": window.map { Double(windowWillResize($0, to: NSSize(width: 360, height: $0.frame.height)).width) } ?? 0, "web_url": webView?.url?.absoluteString ?? "",
                     "groups": (s?.view?.groups ?? []).map { ["subject": $0.subject, "items": $0.items.map(\.id)] },
                     "web_visible": webView?.isHidden == false && surface == "web", "native_visible": nativeVisible, "windows": NSApp.windows.filter(\.isVisible).count,
                     "login_window": loginWindow != nil, "sheet": s?.sheet?.id ?? "", "dirty": s?.hasUnsavedInput == true]
