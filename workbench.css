@@ -152,3 +152,51 @@ label input,label select,label textarea{background:var(--card);color:var(--ink);
 .filebutton{background:var(--leaf-100);color:var(--leaf-800);border-color:#86BE57;border-bottom:3px solid #5E9A3A;font-family:var(--round);font-weight:600}
 .filebutton:hover{background:var(--leaf-300);color:var(--leaf-800)}
 .filebutton:focus-within{outline:3px solid #5E9A3A;outline-offset:2px}
+
+/* 日历为纲：三入口、本周条、课表与日程、错题本、学习进展（沿 Grove tokens：木色分段、卡片、44px 点击）。 */
+.grove-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:3px;margin:0 0 10px;border-radius:999px;background:var(--wood-100)}
+.grove-tabs button{min-height:44px;border:0;border-radius:999px;background:transparent;color:var(--wood-700);font:600 15px var(--round);box-shadow:none}
+.grove-tabs button[aria-pressed="true"]{background:var(--card);color:var(--leaf-800);box-shadow:0 2px 0 #6B452033}
+.grove-week{margin:0 0 10px}
+.grove-week-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 4px}
+.grove-week-head strong{font:700 15px var(--round)}
+.grove-week-head button{min-width:44px;min-height:44px;border:0;background:transparent;font-size:22px;color:var(--ink);box-shadow:none}
+.grove-week-days{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;padding:3px;border-radius:16px;background:var(--wood-100)}
+.grove-day{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;min-width:0;min-height:56px;padding:4px 0;border:0;border-radius:12px;background:transparent;color:var(--ink);box-shadow:none}
+.grove-day span{font-size:12px;font-weight:500}
+.grove-day strong{font:700 17px var(--round)}
+.grove-day em{display:flex;align-items:center;gap:3px;height:13px;font-style:normal;font-size:11px;font-weight:600;color:var(--leaf-800)}
+.grove-day em i{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--leaf-300)}
+.grove-day.is-today{box-shadow:inset 0 0 0 1.5px var(--leaf-300)}
+.grove-day.is-on{background:var(--card);color:var(--leaf-800);box-shadow:0 2px 0 #6B452033}
+.grove-plans{display:grid;gap:8px;margin:0 0 12px}
+.grove-plans-none{margin:0 0 10px}
+.grove-lessons,.grove-plan{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 12px}
+.grove-lessons-title{margin:0 0 6px;font:700 15px var(--round)}
+.grove-lessons ol{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
+.grove-lessons li{display:inline-flex;gap:6px;align-items:baseline;padding:4px 8px;border-radius:9px;background:var(--wood-100);font-size:14px}
+.grove-lessons li span{font-size:12px;font-weight:700;color:var(--wood-700)}
+.grove-plan{display:flex;gap:12px;align-items:flex-start}
+.grove-plan strong{display:block;font:700 15px var(--round)}
+.grove-clock{flex:0 0 96px;font-weight:700;font-size:14px;color:var(--leaf-800)}
+.grove-clock.is-unknown{color:var(--ink-2);font-weight:600}
+.grove-wrong{justify-content:space-between}
+.grove-wrong-body{min-width:0;flex:1}
+.grove-wrong-body p{margin:0 0 4px}
+.grove-wrong-side{display:flex;flex-direction:column;align-items:flex-end;gap:8px}
+.grove-wrong-side button,.grove-learning .grove-actions button{min-height:44px}
+.grove-wrong-side .grove-chip{flex:none;white-space:nowrap}
+.grove-learning{margin:0 0 10px}
+.grove-learning-head{display:flex;justify-content:space-between;gap:8px;align-items:baseline;margin:0 0 6px}
+.grove-learning-head strong{font:700 16px var(--round)}
+.grove-evidence{display:grid;gap:4px;margin:8px 0}
+.grove-evidence div{display:grid;grid-template-columns:88px minmax(0,1fr);gap:8px}
+.grove-evidence dt{font-size:13px;font-weight:700;color:var(--wood-700)}
+.grove-evidence dd{margin:0;font-size:14px;overflow-wrap:anywhere}
+.grove-next{margin:6px 0;color:var(--leaf-800);font-size:14px}
+.grove-course{background:var(--wood-100)}
+.grove-course-title{margin:0 0 6px;font-size:13px;font-weight:700;color:var(--wood-700)}
+.grove[data-tab="wrong"],.grove[data-tab="learning"]{grid-template-columns:minmax(0,880px)}
+.grove[data-tab="wrong"] .grove-detail,.grove[data-tab="learning"] .grove-detail{display:none}
+@media (max-width:899px){.grove-evidence div{grid-template-columns:76px minmax(0,1fr)}.grove-clock{flex-basis:84px}.grove-wrong{flex-direction:column}.grove-wrong-side{flex-direction:row;flex-wrap:wrap;align-items:center}}
+@media (max-width:899px){.grove-week-days{gap:1px;padding:2px}}

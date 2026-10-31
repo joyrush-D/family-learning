@@ -65,6 +65,7 @@
 !/test_agenda.py
 !/test_calendar.py
 !/test_calendar_ics.py
+!/test_calendar_learning.py
 !/calendar.js
 !/workbench.css
 !/test_native_workspace.py
@@ -74,7 +75,9 @@
 !/test_native_context.py
 !/test_native_context.swift
 !/test_native_topic_journey.py
+!/test_native_calendar_learning.py
 !/test_calendar_ui.js
+!/test_calendar_learning_ui.cjs
 
 !/startup.js
 !/test_startup_ui.cjs

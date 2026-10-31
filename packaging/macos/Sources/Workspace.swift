@@ -35,7 +35,8 @@ enum Palette {
     static let hit: CGFloat = 44
 }
 
-enum ListMode: String, CaseIterable, Identifiable { case today = "当天", done = "已办", wrong = "错题订正"; var id: String { rawValue } }
+/// 三个主入口：日历（本周与所选日，日历内保留“待办/已办”切换）、错题本、学习进展。
+enum ListMode: String, CaseIterable, Identifiable { case calendar = "日历", wrong = "错题本", learning = "学习进展"; var id: String { rawValue } }
 
 enum SheetKind: Identifiable {
     case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord)
@@ -57,7 +58,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var loading = false
     @Published var error = ""
     @Published var loginRequired = false
-    @Published var mode: ListMode = .today
+    @Published var mode: ListMode = .calendar
+    @Published var showDone = false
     @Published var selection: String?
     @Published var sheet: SheetKind?
     @Published var materials: [String: MaterialState] = [:]
@@ -82,7 +84,25 @@ final class WorkspaceStore: ObservableObject {
         return v
     }
     var childName: String { current?.child_name ?? "" }
-    var groups: [ItemGroup] { mode == .done ? (current?.closed ?? []) : (current?.groups ?? []) }
+    var groups: [ItemGroup] { showDone ? (current?.closed ?? []) : (current?.groups ?? []) }
+
+    /// 所选日所在的周一至周日。数量只取同一孩子最近一次读回的 week（服务端同一口径）；换了孩子或还没读到时不显示数量，不当 0。
+    var weekDays: [WeekDay] {
+        guard let base = WorkspaceStore.date(day.isEmpty ? (view?.today ?? "") : day) else { return [] }
+        var cal = Calendar(identifier: .gregorian); cal.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+        let back = (cal.component(.weekday, from: base) + 5) % 7
+        let known = (view.map { childID.isEmpty || $0.child_id == childID } ?? false) ? (view?.week ?? []) : []
+        return (0..<7).compactMap { n in
+            guard let d = cal.date(byAdding: .day, value: n - back, to: base) else { return nil }
+            let text = WorkspaceStore.text(d)
+            return known.first { $0.day == text } ?? WeekDay(day: text, open: 0, today: 0, overdue: 0, closed: 0, schedule: nil)
+        }
+    }
+    var weekTitle: String {
+        let days = weekDays.map(\.day)
+        guard let a = days.first, let b = days.last else { return "" }
+        return WorkspaceStore.short(a) + " – " + WorkspaceStore.short(b)
+    }
     var wrongGroups: [WrongGroup] { current?.wrong ?? [] }
     var allItems: [DayItem] { (current?.groups ?? []).flatMap(\.items) + (current?.closed ?? []).flatMap(\.items) }
     var selected: DayItem? { allItems.first { $0.id == selection } }
@@ -148,11 +168,15 @@ final class WorkspaceStore: ObservableObject {
     var summary: String {
         guard let v = current else { return loading ? "正在读取…" : "" }
         switch mode {
-        case .done: return "已办 \(v.counts["closed"] ?? 0) 项"
         case .wrong:
             let all = v.wrong.flatMap(\.items)
             return "错题 \(all.count) 道 · 待订正 \(all.filter { ($0.state ?? "待订正") == "待订正" }.count)"
-        case .today:
+        case .learning:
+            guard let l = v.learning else { return "这一版后台还没有提供学习进展" }
+            let n = l.subjects.reduce(0) { $0 + $1.evidence.count }
+            return n == 0 ? "按科目看原记录与知识点线索" : "原错题 \(n) 道 · 线索不等于掌握"
+        case .calendar:
+            if showDone { return "已办 \(v.counts["closed"] ?? 0) 项" }
             var parts = ["共 \(v.counts["open"] ?? 0) 项", "今天要做 \(v.counts["today"] ?? 0)"]
             for (key, label) in [("later", "以后安排"), ("overdue", "已过期限"), ("earlier", "之前安排"), ("unknown", "日期未写明")] {
                 if let n = v.counts[key], n > 0 { parts.append("\(label) \(n)") }
@@ -167,6 +191,14 @@ final class WorkspaceStore: ObservableObject {
     }
     static func date(_ text: String) -> Date? { formatter().date(from: text) }
     static func text(_ date: Date) -> String { formatter().string(from: date) }
+    static func short(_ text: String) -> String { pattern(text, "M月d日") }
+    static func weekday(_ text: String) -> String { pattern(text, "EEE") }
+    static func dayNumber(_ text: String) -> String { pattern(text, "d") }
+    static func pattern(_ text: String, _ format: String) -> String {
+        guard let d = date(text) else { return text }
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "zh_CN")
+        f.timeZone = TimeZone(secondsFromGMT: 8 * 3600); f.dateFormat = format; return f.string(from: d)
+    }
     static func spoken(_ text: String) -> String {
         guard let d = date(text) else { return text }
         let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "zh_CN")
@@ -384,9 +416,14 @@ struct WorkspaceView: View {
             VStack(spacing: 0) {
                 HeaderBar(store: store, compact: compact)
                 HStack(spacing: 0) {
-                    SubjectList(store: store).frame(width: compact ? 340 : 400)
-                    Rectangle().fill(Palette.line).frame(width: 1)
-                    Inspector(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    if store.mode == .calendar {
+                        SubjectList(store: store).frame(width: compact ? 340 : 400)
+                        Rectangle().fill(Palette.line).frame(width: 1)
+                        Inspector(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        // 错题本与学习进展没有右侧详情：整宽阅读，行宽有上限。
+                        SubjectList(store: store).frame(maxWidth: 900).frame(maxWidth: .infinity)
+                    }
                 }
             }
         }
@@ -441,7 +478,7 @@ struct HeaderBar: View {
                 .disabled(store.current == nil).help("补录孩子口头转述的作业 ⌘N").probe("oral-new")
             Button { store.openWebTools("", "") } label: { Label(compact ? "网页版" : "网页版工具", systemImage: "square.grid.2x2") }
                 .buttonStyle(GroveButtonStyle())
-                .help("日历、学校消息、打印、设置等其他功能 ⌘E；网页上方有“← 返回清单”").probe("web-tools")
+                .help("学校消息、打印、设置，以及日历编辑与课表导入 ⌘E；网页上方有“← 返回清单”").probe("web-tools")
         }
         .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 11)
         .background(Palette.paper2)
@@ -465,11 +502,16 @@ struct SubjectList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            modeSwitch.padding(.horizontal, 14).padding(.top, 14)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(store.mode == .today ? "当天清单" : store.mode.rawValue).font(Palette.round(21, .bold)).foregroundStyle(Palette.ink)
-                Text(store.summary).font(.system(size: 14)).foregroundStyle(Palette.ink2).probe("list-summary", text: store.summary)
-            }.padding(.horizontal, 18).padding(.top, 12).padding(.bottom, 6)
+            modeSwitch.frame(maxWidth: 520).padding(.horizontal, 14).padding(.top, 14)
+            if store.mode == .calendar { WeekStrip(store: store).padding(.horizontal, 14).padding(.top, 8) }
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.mode == .calendar ? (store.showDone ? "这一天已办" : "当天清单") : store.mode.rawValue).font(Palette.round(21, .bold)).foregroundStyle(Palette.ink)
+                    Text(store.summary).font(.system(size: 14)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("list-summary", text: store.summary)
+                }
+                Spacer(minLength: 4)
+                if store.mode == .calendar { doneSwitch }
+            }.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 6)
             if store.loginRequired {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("需要先登录家庭账号。点下面的按钮会打开登录窗口，登录成功后窗口自动关闭、清单随即更新；填写中的内容不会丢。").font(Palette.body).foregroundStyle(Palette.coralInk)
@@ -491,7 +533,11 @@ struct SubjectList: View {
             if let text = store.current?.source_error, !text.isEmpty {
                 Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18).padding(.vertical, 6)
             }
-            if store.mode == .wrong { WrongList(store: store) } else { itemList }
+            switch store.mode {
+            case .calendar: itemList
+            case .wrong: WrongList(store: store)
+            case .learning: LearningList(store: store)
+            }
         }
         .background(Palette.paper)
     }
@@ -499,13 +545,51 @@ struct SubjectList: View {
     func label(_ mode: ListMode) -> String {
         guard let v = store.current else { return mode.rawValue }
         switch mode {
-        case .today: return "当天 \(v.counts["open"] ?? 0)"
-        case .done: return "已办 \(v.counts["closed"] ?? 0)"
-        case .wrong: return "错题 \(v.wrong.flatMap(\.items).count)"
+        case .calendar: return "日历"
+        case .wrong: let n = v.wrong.flatMap(\.items).count; return n > 0 ? "错题本 \(n)" : "错题本"
+        case .learning: return "学习进展"
         }
     }
 
-    /// 当天 / 已办 / 错题订正：原型的木色分段，每段 44pt 高，选中段是卡片色和绿字。
+    /// 日历内保留原来的“待办 / 已办”切换（同一份服务端 groups/closed），每段 44pt。
+    var doneSwitch: some View {
+        HStack(spacing: 3) {
+            ForEach([false, true], id: \.self) { done in
+                let on = store.showDone == done, n = store.current?.counts[done ? "closed" : "open"] ?? 0
+                let text = (done ? "已办" : "待办") + (n > 0 ? " \(n)" : "")
+                Button { store.showDone = done } label: {
+                    Text(text).font(Palette.round(13)).padding(.horizontal, 10).frame(minWidth: 58, minHeight: Palette.hit).contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
+                .background(Capsule().fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .probe(done ? "mode-已办" : "mode-当天", text: text)
+            }
+        }
+        .padding(3).background(Capsule().fill(Palette.wood))
+    }
+
+    /// 所选日的课表节次与日程，排在按科事项之前；读不到时如实说明，不当作没课。
+    @ViewBuilder var scheduleSection: some View {
+        if let text = store.current?.schedule_error, !text.isEmpty {
+            Section {
+                Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                    .listRowSeparator(.hidden).probe("schedule-error", text: text)
+            } header: { WoodTag(text: "课表与日程").padding(.top, 8).padding(.bottom, 2) }
+        } else if let s = store.current?.schedule, !(s.lessons.isEmpty && s.plans.isEmpty) {
+            Section {
+                ForEach(s.lessons) { t in LessonCard(table: t).listRowSeparator(.hidden) }
+                ForEach(s.plans) { p in PlanRow(plan: p).listRowSeparator(.hidden) }
+                if s.cancelled > 0 { Text("另有 \(s.cancelled) 项安排已取消，未列出。").font(Palette.small).foregroundStyle(Palette.ink2).listRowSeparator(.hidden) }
+            } header: {
+                WoodTag(text: "课表与日程", count: "\(s.lessons.reduce(0) { $0 + $1.sessions.count } + s.plans.count) 项").padding(.top, 8).padding(.bottom, 2)
+                    .probe("schedule-head")
+            }
+        }
+    }
+
+    /// 日历 / 错题本 / 学习进展：原型的木色分段，每段 44pt 高，选中段是卡片色和绿字。
     var modeSwitch: some View {
         HStack(spacing: 3) {
             ForEach(ListMode.allCases) { m in
@@ -526,6 +610,7 @@ struct SubjectList: View {
 
     var itemList: some View {
         List(selection: Binding(get: { store.selection }, set: { store.select($0) })) {
+            if !store.showDone { scheduleSection }
             ForEach(store.groups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { item in
@@ -538,7 +623,7 @@ struct SubjectList: View {
                 }
             }
             if store.groups.isEmpty && store.current != nil {
-                Text(store.mode == .done ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
+                Text(store.showDone ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
                     .font(Palette.body).foregroundStyle(Palette.ink2).probe("list-empty")
             }
         }
@@ -569,6 +654,7 @@ struct ItemRow: View {
                         let (tone, ink) = factTone(f)
                         Badge(text: factWords(f), tone: tone, ink: ink)
                     }
+                    ForEach(item.times ?? [], id: \.self) { t in Badge(text: "日程 " + planClock(t.start_time, t.end_time), tone: Palette.leaf100, ink: Palette.leafInk) }
                     if item.pending_review { Badge(text: "待核对", tone: Palette.coral, ink: Palette.coralInk) }
                 }
                 .padding(.top, 2)
@@ -595,16 +681,28 @@ struct WrongList: View {
             ForEach(store.wrongGroups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { r in
-                        HStack(alignment: .center, spacing: 8) {
+                        HStack(alignment: .top, spacing: 8) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(r.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
-                                Text(r.day).font(Palette.small).foregroundStyle(Palette.ink2)
+                                if !r.note.isEmpty {
+                                    Text(r.note + (r.note_truncated ? "…（原记录更长，回原作业看全文）" : "")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Text([r.day, r.task_title.map { "原作业：" + $0 } ?? "未关联原作业"].filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
                             }
                             Spacer(minLength: 6)
-                            Badge(text: r.state ?? "待订正", tone: r.state == "待订正" ? Palette.coral : Palette.leaf100,
-                                  ink: r.state == "待订正" ? Palette.coralInk : Palette.leafInk)
-                            Button("记订正") { store.sheet = .correction(r); store.sheetDirty = false }
-                                .buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(r.id)")
+                            VStack(alignment: .trailing, spacing: 6) {
+                                Badge(text: r.state ?? "待订正", tone: r.state == "待订正" ? Palette.coral : Palette.leaf100,
+                                      ink: r.state == "待订正" ? Palette.coralInk : Palette.leafInk)
+                                HStack(spacing: 6) {
+                                    if let task = r.task_id, !task.isEmpty {
+                                        Button("回原作业") { store.openWebTools(task, "history") }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("wrong-task-\(r.id)")
+                                    }
+                                    Button("记订正") { store.sheet = .correction(r); store.sheetDirty = false }
+                                        .buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(r.id)")
+                                }
+                            }
                         }
                         .padding(EdgeInsets(top: 8, leading: 12, bottom: 10, trailing: 10))
                         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
@@ -617,6 +715,205 @@ struct WrongList: View {
             if store.wrongGroups.isEmpty && store.current != nil { Text("还没有记下的错题。").font(Palette.body).foregroundStyle(Palette.ink2) }
         }
         .listStyle(.sidebar).scrollContentBackground(.hidden).probe("wrong-list")
+    }
+}
+
+func planClock(_ start: String, _ end: String) -> String { start.isEmpty ? "时间未写明" : end.isEmpty ? start : start + "–" + end }
+
+/// 本周一至周日：每天一格（星期、日期、与单日同口径的“当天要做”数量、有课表或日程时一个小点），点哪天看哪天。
+struct WeekStrip: View {
+    @ObservedObject var store: WorkspaceStore
+    var body: some View {
+        VStack(spacing: 4) {
+            HStack(spacing: 2) {
+                Text(store.weekTitle).font(Palette.round(14, .bold)).foregroundStyle(Palette.ink).probe("week-title", text: store.weekTitle)
+                Spacer(minLength: 4)
+                Button { store.shift(-7) } label: { Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Rectangle()) }
+                    .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("前一周").help("前一周").probe("week-prev")
+                Button { store.shift(7) } label: { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Rectangle()) }
+                    .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("后一周").help("后一周").probe("week-next")
+            }
+            HStack(spacing: 3) {
+                ForEach(store.weekDays, id: \.day) { d in
+                    let on = d.day == store.day, isToday = d.day == store.view?.today
+                    let words = (d.today > 0 ? "当天要做\(d.today)项" : "") + ((d.schedule ?? 0) > 0 ? " 有课表或日程" : "")
+                    Button { store.change(day: d.day) } label: {
+                        VStack(spacing: 1) {
+                            Text(isToday ? "今天" : WorkspaceStore.weekday(d.day)).font(.system(size: 11.5, weight: isToday ? .bold : .medium))
+                            Text(WorkspaceStore.dayNumber(d.day)).font(Palette.round(17, .bold))
+                            HStack(spacing: 3) {
+                                if d.today > 0 { Text("\(d.today)项").font(.system(size: 10.5, weight: .semibold)) }
+                                if (d.schedule ?? 0) > 0 { Circle().fill(Palette.leaf400).frame(width: 5, height: 5) }
+                            }.frame(height: 13)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 56).contentShape(RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(on ? Palette.leafInk : Palette.ink)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isToday && !on ? Palette.leaf400 : Color.clear, lineWidth: 1.5))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(WorkspaceStore.spoken(d.day) + (words.isEmpty ? "" : "，" + words))
+                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                    .probe("week-" + d.day, text: d.day + (on ? " 所选" : "") + " " + words)
+                }
+            }
+            .padding(3).background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Palette.wood))
+        }
+    }
+}
+
+/// 课表的一天：节次与课程原文，不写钟点。
+struct LessonCard: View {
+    let table: LessonTable
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(table.title).font(Palette.round(14, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+            FlowRow(spacing: 6, lineSpacing: 6) {
+                ForEach(table.sessions, id: \.self) { s in
+                    HStack(spacing: 5) {
+                        Text(s.slot).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.woodInk)
+                        Text(s.title).font(Palette.small).foregroundStyle(Palette.ink)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5).background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.paper2))
+                }
+            }
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+        .probe("lessons-" + table.id, text: table.sessions.map { $0.slot + " " + $0.title }.joined(separator: " "))
+    }
+}
+
+/// 一条日程：钟点（没写就说没写）、名称、地点与来源；关联事项不在本孩子当天清单时如实写“未合并”。
+struct PlanRow: View {
+    let plan: PlanItem
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(planClock(plan.start_time, plan.end_time)).font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(plan.start_time.isEmpty ? Palette.ink2 : Palette.leafInk).frame(width: 92, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(plan.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                let meta = [plan.location, plan.status == "tentative" ? "待确认" : "", plan.repeat ? "重复安排" : "", plan.shared ? "几个孩子共同" : "",
+                            plan.source.isEmpty ? "" : "学校来源"].filter { !$0.isEmpty }.joined(separator: " · ")
+                if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                if let text = plan.unmerged { Text(text).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+        .padding(.vertical, 3)
+        .accessibilityElement(children: .combine)
+        .probe("plan-" + plan.id, text: planClock(plan.start_time, plan.end_time) + " " + plan.title)
+    }
+}
+
+/// 学习进展：按科目，先孩子表现（每道原错题的知识点、诊断与再试日期、帮助/独立、当前或历史依据、下一步与原作业），
+/// 再单列课程记录（原出处，不是孩子表现）。没有记录就说没有，不当 0 掌握。
+struct LearningList: View {
+    @ObservedObject var store: WorkspaceStore
+    var body: some View {
+        List {
+            if let l = store.current?.learning {
+                if !l.pack.installed {
+                    Text("数学知识包未安装或版本不符：原错题、订正和清单照常可用，暂不能做知识点诊断。").font(Palette.small).foregroundStyle(Palette.ink2)
+                        .fixedSize(horizontal: false, vertical: true).listRowSeparator(.hidden).probe("learning-pack", text: "知识包未安装")
+                }
+                ForEach(l.subjects, id: \.subject) { s in
+                    Section {
+                        ForEach(s.evidence) { e in LearningCard(store: store, entry: e).listRowSeparator(.hidden) }
+                        if !s.course.isEmpty { CourseCard(entries: s.course).listRowSeparator(.hidden) }
+                    } header: {
+                        WoodTag(text: s.subject, count: s.evidence.isEmpty ? "" : "\(s.evidence.count) 道原错题").padding(.top, 8).padding(.bottom, 2)
+                            .probe("learning-subject-" + s.subject)
+                    }
+                }
+                if l.subjects.isEmpty {
+                    Text("还没有可核对的学习记录。记下错题或课程记录后，这里按科目列出原记录与知识点线索。").font(Palette.body).foregroundStyle(Palette.ink2)
+                        .fixedSize(horizontal: false, vertical: true).probe("learning-empty")
+                }
+            } else if store.current != nil {
+                Text("这一版后台还没有提供学习进展；原错题仍在错题本。").font(Palette.body).foregroundStyle(Palette.ink2)
+            }
+        }
+        .listStyle(.sidebar).scrollContentBackground(.hidden).probe("learning-list")
+    }
+}
+
+struct LearningCard: View {
+    @ObservedObject var store: WorkspaceStore
+    let entry: LearningEntry
+    /// A linked topic is not a diagnosis: it says so and waits for one; a diagnosis keeps its current/history label.
+    private func topicLabel(_ t: LearningTopic) -> String {
+        let current = t.basis == "current"
+        if t.state == "linked" { return (current ? "已关联 " : "历史关联 ") + t.name + (current ? " · 待诊断" : "") }
+        return (current ? "知识点 " : "历史 ") + t.name
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(entry.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Badge(text: entry.state ?? "待订正", tone: entry.state == "待订正" ? Palette.coral : Palette.leaf100, ink: entry.state == "待订正" ? Palette.coralInk : Palette.leafInk)
+            }
+            if let topics = entry.topics, !topics.isEmpty {
+                FlowRow(spacing: 6, lineSpacing: 4) {
+                    ForEach(topics, id: \.self) { t in
+                        Badge(text: topicLabel(t), tone: t.basis == "current" && t.state != "linked" ? Palette.leaf100 : Palette.paper2,
+                              ink: t.basis == "current" && t.state != "linked" ? Palette.leafInk : Palette.ink2)
+                    }
+                }
+            }
+            ForEach(Array((entry.lines ?? []).enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .top, spacing: 8) {
+                    Text(line.first ?? "").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.woodInk).frame(width: 78, alignment: .leading)
+                    Text(line.count > 1 ? line[1] : "").font(Palette.small).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            if let task = entry.task_title, !task.isEmpty {
+                Text("原作业：" + task).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+            }
+            if let next = entry.next, !next.isEmpty {
+                Text("下一步：" + next).font(Palette.small).foregroundStyle(Palette.leafInk).fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                if let task = entry.task_id, !task.isEmpty {
+                    Button("回原作业") { store.openWebTools(task, "history") }.buttonStyle(GroveButtonStyle()).probe("learning-task-\(entry.record_id)")
+                }
+                Button("看原错题") { store.mode = .wrong }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("learning-wrong-\(entry.record_id)")
+            }
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+        .padding(.vertical, 4)
+        .probe("learning-\(entry.record_id)", text: entry.title + " " + (entry.topics ?? []).map(\.name).joined(separator: " ") + " " + (entry.lines ?? []).map { $0.joined(separator: " ") }.joined(separator: " "))
+    }
+}
+
+/// 课程记录：老师/学校讲到哪里等原记录，保原出处；只列出，不推断老师身份、不当孩子表现。
+struct CourseCard: View {
+    let entries: [LearningEntry]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("课程记录（安排与进度，不是孩子表现）").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.woodInk)
+            ForEach(entries) { c in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(c.title).font(Palette.round(14, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                    if !c.note.isEmpty { Text(c.note).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                    Text(c.day + " · 出处：" + (c.source ?? "未写明")).font(.system(size: 12)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                }.probe("course-\(c.record_id)", text: c.title)
+            }
+        }
+        .padding(12).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.paper2))
+        .padding(.vertical, 4)
     }
 }
 

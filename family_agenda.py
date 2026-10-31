@@ -1052,9 +1052,12 @@ def snapshot(app,start,end):
                 if not row['task_id']:
                     items.append(dict(entry,agenda=dict(category='homework',published_on='',due_on='',scheduled_on=row['day'],**subject_fields(row['title'],saved=row['subject'])),
                         closed=row['result']=='完成' and entry['result_actor']=='parent',closed_on=row['day']))
-        plans=[]
+        plans=[];plan_error=''
         if 'calendar_events' in tables:
-            saved=family_calendar.Store.saved_rows(c,ids)
+            # A saved calendar row that cannot be verified leaves only the plans out (the calendar's own read reports it);
+            # tasks, school items and study items are still returned, so one bad row never takes the list down.
+            try: saved=family_calendar.Store.saved_rows(c,ids)
+            except family_calendar.CalendarError: saved=[];plan_error='日程记录暂时无法核对，未列入；事项清单不受影响。'
             parents={e['id']:e for e in saved if not e['occurrence']}
             for event in saved:
                 if any(child not in ids for child in event['child_ids']):continue
@@ -1067,7 +1070,7 @@ def snapshot(app,start,end):
     for offset in range(count):
         day=(first+dt.timedelta(days=offset)).isoformat()
         agenda.extend(dict(item,day=day) for item in items if visible_on(item,day))
-    return dict(agenda=agenda,study=study,inbox=items+plans)
+    return dict(agenda=agenda,study=study,inbox=items+plans,**({'plan_error':plan_error} if plan_error else {}))
 
 
 # One child's one day, read once on the server for every client (the web home and the Mac workbench): the same selection,
@@ -1208,6 +1211,9 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         later = sorted(followups.get(r['id'], []), key=lambda f: (f.get('created') or '', f['id']))
         row = _record_row(r); row['followups'] = [_record_row(f) for f in later]
         row['state'] = {'订正': '已订正', '复测': '已复测', '独立复测': '已复测'}[later[-1]['followup_kind']] if later else '待订正'
+        # The original homework only through the record's explicit link, and only a task of this same child.
+        task = by_task.get(r.get('linked_task_id') or '')
+        if task and task.get('child') == child['name']: row.update(task_id=task['id'], task_title=task.get('title', ''))
         return row
 
     def row(x):
