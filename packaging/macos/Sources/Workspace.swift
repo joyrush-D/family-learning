@@ -39,13 +39,14 @@ enum Palette {
 enum ListMode: String, CaseIterable, Identifiable { case calendar = "日历", wrong = "错题本", learning = "学习进展"; var id: String { rawValue } }
 
 enum SheetKind: Identifiable {
-    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord)
+    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong
     var id: String {
         switch self {
         case .feedback(let i): return "feedback-" + i.id
         case .oral: return "oral"
         case .wrong(let i, let r): return "wrong-\(i.id)-\(r.id)"
         case .correction(let r): return "correction-\(r.id)"
+        case .addWrong: return "wrong-add"
         }
     }
 }
@@ -64,6 +65,12 @@ final class WorkspaceStore: ObservableObject {
     @Published var sheet: SheetKind?
     @Published var materials: [String: MaterialState] = [:]
     @Published var notice = ""
+    /// 错题本 / 学习进展里选中的那一道原错题：按记录编号，不按标题或数组第一个猜；换孩子时清空。
+    @Published var record: Int?
+    /// “回原作业”要在日历里选中的原作业：不在正看的这一天时，先换到原错题记下的那一天，再按作业编号选中。
+    var pendingTask: String?
+    /// 知识点与练习：同一道原错题（记录编号、孩子编号）的知识点面板。
+    var openTopic: (Int, String) -> Void = { _, _ in }
     var sheetDirty = false
     let client: WorkspaceClient
     var openDocument: (URL, String) -> Void = { _, _ in }
@@ -106,6 +113,21 @@ final class WorkspaceStore: ObservableObject {
     var wrongGroups: [WrongGroup] { current?.wrong ?? [] }
     var allItems: [DayItem] { (current?.groups ?? []).flatMap(\.items) + (current?.closed ?? []).flatMap(\.items) }
     var selected: DayItem? { allItems.first { $0.id == selection } }
+    var wrongItems: [SavedRecord] { wrongGroups.flatMap(\.items) }
+    var selectedRecord: SavedRecord? { record.flatMap { id in wrongItems.first { $0.id == id } } }
+    func learning(for id: Int) -> LearningEntry? { current?.learning?.subjects.flatMap(\.evidence).first { $0.record_id == id } }
+
+    /// 从学习进展或日历详情打开错题本里的那一道（同一个编号），右栏随即是它的原题、订正与知识点练习。
+    func showRecord(_ id: Int) { mode = .wrong; record = id }
+
+    /// 回到同一份原作业：在日历里按作业编号选中；它不在正看的这一天（以前的作业、已办）时，换到原错题记下的那天再选。
+    func backToTask(_ task: String, day recordDay: String) {
+        guard !task.isEmpty else { return }
+        if let item = allItems.first(where: { $0.task_id == task }) { mode = .calendar; showDone = item.closed; select(item.id); return }
+        guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
+        mode = .calendar; pendingTask = task
+        change(day: recordDay.isEmpty ? day : recordDay)
+    }
 
     func load(keepSelection: Bool = true) async {
         sequence += 1
@@ -116,6 +138,12 @@ final class WorkspaceStore: ObservableObject {
             guard mine == sequence else { return }
             view = fresh; childID = fresh.child_id; day = fresh.day; error = ""; loginRequired = false
             if !keepSelection || !allItems.contains(where: { $0.id == selection }) { selection = nil }
+            if let task = pendingTask {
+                pendingTask = nil
+                if let item = allItems.first(where: { $0.task_id == task }) { showDone = item.closed; selection = item.id }
+                else { notice = "原作业不在这一天的清单里；原错题和订正仍在错题本。" }
+            }
+            if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
             if let item = selected, !item.task_id.isEmpty { await loadMaterials(item) }
         } catch {
             guard mine == sequence else { return }
@@ -143,7 +171,7 @@ final class WorkspaceStore: ObservableObject {
     func change(child: String? = nil, day newDay: String? = nil) {
         guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
         sheet = nil; sheetDirty = false; notice = ""
-        if let child, child != childID { childID = child; selection = nil; materials = [:] }
+        if let child, child != childID { childID = child; selection = nil; materials = [:]; record = nil; pendingTask = nil }
         if let newDay { day = newDay; selection = selection }
         Task { await load() }
     }
@@ -415,15 +443,13 @@ struct WorkspaceView: View {
             let compact = geo.size.width < 1180
             VStack(spacing: 0) {
                 HeaderBar(store: store, compact: compact)
+                // 三个入口同一个外壳：左栏同宽、位置不动，右栏是所选那一项（日历的事项，错题本/学习进展的那一道原错题）。
                 HStack(spacing: 0) {
-                    if store.mode == .calendar {
-                        SubjectList(store: store).frame(width: compact ? 340 : 400)
-                        Rectangle().fill(Palette.line).frame(width: 1)
-                        Inspector(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        // 错题本与学习进展没有右侧详情：整宽阅读，行宽有上限。
-                        SubjectList(store: store).frame(maxWidth: 900).frame(maxWidth: .infinity)
-                    }
+                    SubjectList(store: store).frame(width: compact ? 340 : 400)
+                    Rectangle().fill(Palette.line).frame(width: 1)
+                    Group {
+                        if store.mode == .calendar { Inspector(store: store) } else { RecordDetail(store: store) }
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
         }
@@ -529,6 +555,19 @@ struct SubjectList: View {
                 .padding(14).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.coral))
                 .padding(.horizontal, 14).padding(.vertical, 6)
+            }
+            // 保存成功、回原作业找不到等结果的一句话：直接显示在清单上方，可收起；换孩子/日期时清空。
+            if !store.notice.isEmpty {
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: "info.circle").foregroundStyle(Palette.leafInk).frame(minHeight: 22)
+                    Text(store.notice).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                        .probe("workspace-notice", text: store.notice)
+                    Button { store.notice = "" } label: { Image(systemName: "xmark").frame(width: 28, height: 28) }
+                        .buttonStyle(.plain).foregroundStyle(Palette.ink2).help("收起这条提示").probe("notice-dismiss")
+                }
+                .padding(EdgeInsets(top: 10, leading: 14, bottom: 10, trailing: 8)).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.leaf100))
+                .padding(.horizontal, 14).padding(.vertical, 4)
             }
             if let text = store.current?.source_error, !text.isEmpty {
                 Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18).padding(.vertical, 6)
@@ -674,47 +713,222 @@ struct ItemRow: View {
     }
 }
 
+/// 错题本：左栏是可选中的错题（按编号），右栏是所选那一道；空本和有错题时都能直接记一道。
 struct WrongList: View {
     @ObservedObject var store: WorkspaceStore
     var body: some View {
-        List {
+        List(selection: Binding(get: { store.record }, set: { store.record = $0 })) {
+            if store.current != nil { addRow.listRowSeparator(.hidden) }
             ForEach(store.wrongGroups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { r in
-                        HStack(alignment: .top, spacing: 8) {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(r.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
-                                if !r.note.isEmpty {
-                                    Text(r.note + (r.note_truncated ? "…（原记录更长，回原作业看全文）" : "")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                                Text([r.day, r.task_title.map { "原作业：" + $0 } ?? "未关联原作业"].filter { !$0.isEmpty }.joined(separator: " · "))
-                                    .font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
-                            }
-                            Spacer(minLength: 6)
-                            VStack(alignment: .trailing, spacing: 6) {
-                                Badge(text: r.state ?? "待订正", tone: r.state == "待订正" ? Palette.coral : Palette.leaf100,
-                                      ink: r.state == "待订正" ? Palette.coralInk : Palette.leafInk)
-                                HStack(spacing: 6) {
-                                    if let task = r.task_id, !task.isEmpty {
-                                        Button("回原作业") { store.openWebTools(task, "history") }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("wrong-task-\(r.id)")
-                                    }
-                                    Button("记订正") { store.sheet = .correction(r); store.sheetDirty = false }
-                                        .buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(r.id)")
-                                }
-                            }
-                        }
-                        .padding(EdgeInsets(top: 8, leading: 12, bottom: 10, trailing: 10))
-                        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
-                        .padding(.vertical, 4)
-                        .listRowSeparator(.hidden)
-                        .probe("wrong-\(r.id)", text: r.title + " " + (r.state ?? ""))
+                        WrongRow(record: r, selected: store.record == r.id).tag(r.id).probe("wrong-row-\(r.id)", text: r.title + " " + (r.state ?? ""))
+                            .listRowSeparator(.hidden)
                     }
-                } header: { WoodTag(text: group.subject).padding(.top, 8).padding(.bottom, 2) }
+                } header: { WoodTag(text: group.subject, count: "\(group.items.count) 道").padding(.top, 8).padding(.bottom, 2) }
             }
-            if store.wrongGroups.isEmpty && store.current != nil { Text("还没有记下的错题。").font(Palette.body).foregroundStyle(Palette.ink2) }
         }
         .listStyle(.sidebar).scrollContentBackground(.hidden).probe("wrong-list")
+    }
+
+    /// 作业里的错题从那一项的反馈记（挂在同一份作业下）；没有原作业的题在这里用照片单独记，不新建作业或反馈。
+    var addRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if store.wrongGroups.isEmpty {
+                Text("还没有记下的错题。").font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).probe("wrong-empty")
+                Text("作业里的错题：在日历里选那一项，写反馈后点“记一道错题”。没有原作业的题，用下面的按钮拍照记下。")
+                    .font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+            }
+            Button { store.sheet = .addWrong; store.sheetDirty = false } label: { Label("记一道错题（没有原作业）", systemImage: "plus") }
+                .buttonStyle(GroveButtonStyle(kind: store.wrongGroups.isEmpty ? .primary : .secondary)).probe("wrong-add")
+        }
+        .padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+func stateBadge(_ state: String?) -> Badge {
+    let s = state ?? "待订正"
+    return Badge(text: s, tone: s == "待订正" ? Palette.coral : Palette.leaf100, ink: s == "待订正" ? Palette.coralInk : Palette.leafInk)
+}
+
+/// 错题本一行：题目、原记录开头两行、记下的日子与原作业（或未关联）；选中同日历行：嫩绿底加绿边。操作都在右栏。
+struct WrongRow: View {
+    let record: SavedRecord
+    var selected = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(record.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                stateBadge(record.state)
+            }
+            if !record.note.isEmpty {
+                Text(record.note.replacingOccurrences(of: "\n", with: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text([record.day, record.task_title.map { "原作业：" + $0 } ?? "未关联原作业"].filter { !$0.isEmpty }.joined(separator: " · "))
+                .font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(selected ? Palette.leaf50 : Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(selected ? Palette.leaf400 : Palette.line, lineWidth: selected ? 1.5 : 1))
+        .padding(.vertical, 4)
+        .background(HighlightOff())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+func topicWords(_ t: LearningTopic) -> String {
+    let current = t.basis == "current"
+    if t.state == "linked" { return (current ? "已关联 " : "历史关联 ") + t.name + (current ? " · 待诊断" : "") }
+    return (current ? "知识点 " : "历史 ") + t.name
+}
+
+/// 错题本与学习进展的右栏：所选那一道原错题——原题与作答、知识点与练习、订正与原作业；和日历右栏同一位置、同一宽度。
+struct RecordDetail: View {
+    @ObservedObject var store: WorkspaceStore
+    /// 较长原记录：按编号只读取同一条记录的完整原文（GET /api/record/history/编号 的 current），不改记录。
+    @State var full: [Int: String] = [:]
+    @State var fullError: [Int: String] = [:]
+    @State var fullBusy = false
+
+    func readFull(_ id: Int) async {
+        fullBusy = true; fullError[id] = nil
+        do {
+            let data = try await store.client.get("/api/record/history/\(id)")
+            let current = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["current"] as? [String: Any]
+            if let note = current?["note"] as? String, current?["id"] as? Int == id { full[id] = note }
+            else { fullError[id] = "完整原记录暂时读不到，记录未更改；可以重试。" }
+        } catch { fullError[id] = (error as? WorkspaceError)?.text ?? "完整原记录暂时读不到，记录未更改；可以重试。" }
+        fullBusy = false
+    }
+    var body: some View {
+        Group {
+            if let r = store.selectedRecord { detail(r) }
+            else {
+                VStack(spacing: 10) {
+                    Image(systemName: "leaf").font(.largeTitle).foregroundStyle(Palette.leafInk)
+                    Text(store.current == nil ? (store.loading || store.error.isEmpty ? "正在读取…" : "还没读到所选孩子的记录，可在左边重试。")
+                         : store.wrongItems.isEmpty ? "还没有错题。可在左边记一道，或在日历里那一项的反馈下记。" : "从左边选一道错题，查看原题、订正和知识点练习。")
+                        .font(Palette.body).foregroundStyle(Palette.ink2).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 32)
+                        .probe("record-placeholder")
+                }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
+            }
+        }
+    }
+
+    func card<Content: View>(_ title: String, _ symbol: String, @ViewBuilder _ content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: symbol).font(Palette.round(17, .bold)).foregroundStyle(Palette.ink)
+            VStack(alignment: .leading, spacing: 10) { content() }
+                .padding(EdgeInsets(top: 14, leading: 18, bottom: 16, trailing: 18)).frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 6, x: 0, y: 3))
+        }
+    }
+
+    /// 知识点练习只有数学知识包；知识包缺失或科目不符时写明原因，原题与订正照常。
+    func practiceGap(_ r: SavedRecord) -> String {
+        guard let l = store.current?.learning else { return "这一版后台还没有提供知识点练习；原题与订正照常可用。" }
+        if !l.pack.installed { return "数学知识包未安装或版本不符：原题与订正照常可用，暂不能做知识点练习。" }
+        if r.subject.isEmpty { return "这道错题没写科目，不会被猜成数学：知识点练习目前只有数学知识包。原题、原图和订正照常可用；以后记数学错题时科目写“数学”，就能做知识点练习。" }
+        if !r.subject.contains("数学") { return "知识点练习目前只有数学知识包；\(r.subject)的错题照常记订正。" }
+        return ""
+    }
+
+    func detail(_ r: SavedRecord) -> some View {
+        let entry = store.learning(for: r.id)
+        let taskWords = r.task_title.map { "原作业：" + $0 } ?? "未关联原作业（单独记下的错题）"
+        let gap = practiceGap(r)
+        let note = full[r.id] ?? r.note
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    FlowRow(spacing: 10, lineSpacing: 6) {
+                        WoodTag(text: r.subject.isEmpty ? WorkspaceStore.unknown : r.subject)
+                        stateBadge(r.state)
+                        Text("\(store.childName) · 记于 \(r.day)").font(Palette.small).foregroundStyle(Palette.ink2).frame(minHeight: 26)
+                    }
+                    Text(r.title).font(Palette.round(26, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    FlowRow(spacing: 10, lineSpacing: 6) {
+                        Text(taskWords).font(Palette.body).foregroundStyle(Palette.ink2).frame(minHeight: Palette.hit)
+                        if let task = r.task_id, !task.isEmpty {
+                            Button { store.backToTask(task, day: r.day) } label: { Label("回原作业", systemImage: "arrow.uturn.left") }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet)).help("回到日历，选中同一份原作业").probe("record-task-\(r.id)")
+                        }
+                    }
+                }
+                .probe("wrong-detail-\(r.id)", text: r.title + " " + taskWords + " " + r.note)
+                card("原题与作答", "doc.text") {
+                    if note.isEmpty { Text("原记录没有写题面和作答。").font(Palette.body).foregroundStyle(Palette.ink2) }
+                    ForEach(Array(note.split(separator: "\n").enumerated()), id: \.offset) { _, line in
+                        Text(String(line)).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    }
+                    if r.note_truncated && full[r.id] == nil {
+                        FlowRow(spacing: 10, lineSpacing: 6) {
+                            Text("原记录更长，这里只显示前一部分。").font(Palette.small).foregroundStyle(Palette.ink2).frame(minHeight: Palette.hit)
+                            Button { Task { await readFull(r.id) } } label: { Label(fullBusy ? "正在读取…" : "读完整原记录", systemImage: "text.justify.left") }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet)).disabled(fullBusy).help("只读取这一条记录的完整原文，不改记录").probe("record-full-\(r.id)")
+                        }
+                        if let e = fullError[r.id] { Text(e).font(Palette.small).foregroundStyle(Palette.coralInk).probe("record-full-error", text: e) }
+                    }
+                    if !r.attachments.isEmpty {
+                        // 原图逐张可开：同源 /upload/编号，与资料“打开原件”同一个窗口和登录；原图不重做、不经模型。
+                        FlowRow(spacing: 8, lineSpacing: 6) {
+                            ForEach(Array(r.attachments.enumerated()), id: \.offset) { n, id in
+                                Button { store.openDocument(store.client.url("/upload/" + id), r.title + (r.attachments.count > 1 ? " · 原图 \(n + 1)" : " · 原图")) } label: {
+                                    Label(r.attachments.count > 1 ? "看原图 \(n + 1)" : "看原图", systemImage: "photo")
+                                }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet)).help("另开窗口看原样保留的原图").probe("record-original-\(r.id)-\(n)")
+                            }
+                            Text("原图 \(r.attachments.count) 张，原样保留").font(Palette.small).foregroundStyle(Palette.ink2).frame(minHeight: Palette.hit)
+                        }
+                    }
+                }
+                card("知识点与练习", "leaf") {
+                    if let topics = entry?.topics, !topics.isEmpty {
+                        FlowRow(spacing: 6, lineSpacing: 4) {
+                            ForEach(topics, id: \.self) { t in
+                                Badge(text: topicWords(t), tone: t.basis == "current" && t.state != "linked" ? Palette.leaf100 : Palette.paper2,
+                                      ink: t.basis == "current" && t.state != "linked" ? Palette.leafInk : Palette.ink2)
+                            }
+                        }
+                    }
+                    ForEach(Array((entry?.lines ?? []).enumerated()), id: \.offset) { _, line in
+                        HStack(alignment: .top, spacing: 8) {
+                            Text(line.first ?? "").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.woodInk).frame(width: 78, alignment: .leading)
+                            Text(line.count > 1 ? line[1] : "").font(Palette.small).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    if let next = entry?.next, !next.isEmpty { Text("下一步：" + next).font(Palette.small).foregroundStyle(Palette.leafInk).fixedSize(horizontal: false, vertical: true) }
+                    if gap.isEmpty {
+                        Button { store.openTopic(r.id, store.childID) } label: { Label("知识点与练习", systemImage: "leaf") }
+                            .buttonStyle(GroveButtonStyle(kind: .primary)).probe("record-topic-\(r.id)")
+                        Text("就这一道原错题：确认知识点，做诊断小题、看说明，再做一道没见过的新题；结果存回这道错题。一次做对不等于掌握。")
+                            .font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                    } else { Text(gap).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("record-topic-gap-\(r.id)", text: gap) }
+                }
+                card("订正", "pencil") {
+                    if (r.followups ?? []).isEmpty { Text("还没有订正记录。").font(Palette.small).foregroundStyle(Palette.ink2) }
+                    ForEach(r.followups ?? []) { f in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 8) {
+                                Badge(text: f.followup_kind.isEmpty ? "跟进" : f.followup_kind)
+                                Text(f.created.prefix(16).replacingOccurrences(of: "T", with: " ")).font(Palette.small).foregroundStyle(Palette.ink2)
+                            }
+                            Text(f.note.isEmpty ? f.title : f.note).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        }
+                    }
+                    Button("记订正") { store.sheet = .correction(r); store.sheetDirty = false }.buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(r.id)")
+                }
+            }
+            .padding(.horizontal, 32).padding(.top, 24).padding(.bottom, 40)
+            .frame(maxWidth: 860, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Palette.paper)
+        .probe("record-detail")
     }
 }
 
@@ -818,7 +1032,7 @@ struct PlanRow: View {
 struct LearningList: View {
     @ObservedObject var store: WorkspaceStore
     var body: some View {
-        List {
+        List(selection: Binding(get: { store.record }, set: { store.record = $0 })) {
             if let l = store.current?.learning {
                 if !l.pack.installed {
                     Text("数学知识包未安装或版本不符：原错题、订正和清单照常可用，暂不能做知识点诊断。").font(Palette.small).foregroundStyle(Palette.ink2)
@@ -826,7 +1040,7 @@ struct LearningList: View {
                 }
                 ForEach(l.subjects, id: \.subject) { s in
                     Section {
-                        ForEach(s.evidence) { e in LearningCard(store: store, entry: e).listRowSeparator(.hidden) }
+                        ForEach(s.evidence) { e in LearningCard(store: store, entry: e).tag(e.record_id).listRowSeparator(.hidden) }
                         if !s.course.isEmpty { CourseCard(entries: s.course).listRowSeparator(.hidden) }
                     } header: {
                         WoodTag(text: s.subject, count: s.evidence.isEmpty ? "" : "\(s.evidence.count) 道原错题").padding(.top, 8).padding(.bottom, 2)
@@ -849,11 +1063,7 @@ struct LearningCard: View {
     @ObservedObject var store: WorkspaceStore
     let entry: LearningEntry
     /// A linked topic is not a diagnosis: it says so and waits for one; a diagnosis keeps its current/history label.
-    private func topicLabel(_ t: LearningTopic) -> String {
-        let current = t.basis == "current"
-        if t.state == "linked" { return (current ? "已关联 " : "历史关联 ") + t.name + (current ? " · 待诊断" : "") }
-        return (current ? "知识点 " : "历史 ") + t.name
-    }
+    private func topicLabel(_ t: LearningTopic) -> String { topicWords(t) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -882,11 +1092,12 @@ struct LearningCard: View {
             if let next = entry.next, !next.isEmpty {
                 Text("下一步：" + next).font(Palette.small).foregroundStyle(Palette.leafInk).fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 8) {
+            // 都按这道原错题的编号：看原错题选中错题本里的同一道；回原作业在日历里选中同一份作业。
+            FlowRow(spacing: 8, lineSpacing: 6) {
+                Button("看原错题") { store.showRecord(entry.record_id) }.buttonStyle(GroveButtonStyle()).probe("learning-wrong-\(entry.record_id)")
                 if let task = entry.task_id, !task.isEmpty {
-                    Button("回原作业") { store.openWebTools(task, "history") }.buttonStyle(GroveButtonStyle()).probe("learning-task-\(entry.record_id)")
+                    Button("回原作业") { store.backToTask(task, day: entry.day) }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("learning-task-\(entry.record_id)")
                 }
-                Button("看原错题") { store.mode = .wrong }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("learning-wrong-\(entry.record_id)")
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -1143,6 +1354,7 @@ struct Inspector: View {
                     Text(w.title).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 8)
                     Badge(text: w.state ?? "待订正", tone: w.state == "待订正" ? Palette.coral : Palette.leaf100, ink: w.state == "待订正" ? Palette.coralInk : Palette.leafInk)
+                    Button("在错题本看") { store.showRecord(w.id) }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("detail-wrong-open-\(w.id)")
                     Button("记订正") { store.sheet = .correction(w); store.sheetDirty = false }.buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(w.id)")
                 }
                 .padding(EdgeInsets(top: 6, leading: 12, bottom: 9, trailing: 8))
@@ -1164,6 +1376,7 @@ struct SheetHost: View {
         case .oral: OralSheet(store: store)
         case .wrong(let item, let record): WrongSheet(store: store, item: item, record: record)
         case .correction(let record): CorrectionSheet(store: store, record: record)
+        case .addWrong: WrongAddSheet(store: store)
         }
     }
 }
@@ -1231,9 +1444,11 @@ extension WorkspaceStore {
     func finish(_ outcome: PostOutcome, _ save: SaveState, done: String) async {
         save.busy = false
         switch outcome {
-        case .saved:
+        case .saved(let object):
             save.login = false
             sheetDirty = false; sheet = nil; notice = done
+            // 记下的错题：错题本选中回执里的同一条记录编号（不按标题或第一条猜）；回执没有编号时不改选中。
+            if let id = ((object["saved"] as? [[String: Any]])?.first?["id"] as? NSNumber)?.intValue { record = id }
             await load()
         case .unknown(let text):
             save.unknown = true; save.login = false; save.message = text
@@ -1324,12 +1539,16 @@ struct WrongSheet: View {
     @StateObject var save = SaveState()
     @State var label = ""
     @State var reason = ""
+    @State var text = ""
+    @State var answer = ""
 
     var body: some View {
         SheetFrame(store: store, save: save, title: "记一道错题", context: "\(store.childName) · \(item.subject) · 来自 \(record.created.prefix(16)) 的反馈",
-                   dirty: !label.isEmpty || !reason.isEmpty, canSave: !label.trimmingCharacters(in: .whitespaces).isEmpty, saveTitle: "保存错题", onSave: submit) {
+                   dirty: !label.isEmpty || !reason.isEmpty || !text.isEmpty || !answer.isEmpty, canSave: !label.trimmingCharacters(in: .whitespaces).isEmpty, saveTitle: "保存错题", onSave: submit) {
             Section {
                 TextField("哪一题（必填）", text: $label).probe("wrong-label")
+                TextField("题面（可不填）", text: $text).probe("wrong-text")
+                TextField("孩子原答（可不填）", text: $answer).probe("wrong-answer")
                 LabeledContent("原因（可不填）") { TextEditor(text: $reason).multilineTextAlignment(.leading).frame(minHeight: 70).probe("wrong-reason").accessibilityLabel("原因") }
             }
         }
@@ -1339,7 +1558,7 @@ struct WrongSheet: View {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         let subject = [WorkspaceStore.general, WorkspaceStore.unknown].contains(item.subject) ? "" : item.subject
         let body: [String: Any] = ["child": store.childName, "day": store.view?.today ?? store.day, "subject": subject, "request_key": save.key,
-                                   "items": [["label": label, "note": reason]], "task_id": record.task_id ?? item.task_id,
+                                   "items": [["label": label, "note": reason, "text": text, "answer": answer]], "task_id": record.task_id ?? item.task_id,
                                    "feedback_record_id": record.id, "feedback_created": record.created]
         Task { await store.finish(await store.client.post("/api/wrong/save", body), save, done: "错题已记在同一份作业下。") }
     }
@@ -1368,6 +1587,74 @@ struct CorrectionSheet: View {
                                    "title": (kind + "：" + record.title).prefix(200).description, "subject": record.subject, "note": note,
                                    "related_record_id": record.id, "followup_kind": kind, "request_key": save.key]
         Task { await store.finish(await store.client.post("/api/record", body), save, done: "已记下\(kind)。") }
+    }
+}
+
+/// 没有原作业的一道错题：孩子、科目和题目写明，照片是原件（现有错题保存在没有原作业时要求一张原图，原样保留）；
+/// 不新建作业或反馈。保存走原有错题保存与同一提交标识的防重复。
+struct WrongAddSheet: View {
+    @ObservedObject var store: WorkspaceStore
+    @StateObject var save = SaveState()
+    @State var subject = ""
+    @State var label = ""
+    @State var text = ""
+    @State var answer = ""
+    @State var correction = ""
+    @State var photos: [URL] = []
+    @State var uploaded: [String: String] = [:]
+    @State var picking = false
+
+    var body: some View {
+        SheetFrame(store: store, save: save, title: "记一道错题", context: "\(store.childName) · 没有原作业（不会新建作业或反馈）",
+                   dirty: !(subject + label + text + answer + correction).isEmpty || !photos.isEmpty,
+                   canSave: !label.trimmingCharacters(in: .whitespaces).isEmpty && !photos.isEmpty, saveTitle: "保存错题", onSave: submit) {
+            Section {
+                TextField("科目（可不填）", text: $subject).probe("wrong-add-subject")
+                TextField("哪一题（必填）", text: $label).probe("wrong-add-label")
+                TextField("题面（可不填）", text: $text).probe("wrong-add-text")
+                TextField("孩子原答（可不填）", text: $answer).probe("wrong-add-answer")
+                TextField("订正 / 正确做法（可不填）", text: $correction).probe("wrong-add-correction")
+            }
+            Section("这道题的照片（必选，原图原样保留）") {
+                if photos.isEmpty { Text("没有原作业时，需要一张这道题的照片作原件。").font(.caption).foregroundStyle(Palette.ink2) }
+                ForEach(photos, id: \.self) { url in Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).probe("wrong-add-photo-name", text: url.lastPathComponent) }
+                Button(photos.isEmpty ? "选择照片…" : "换一张照片…") { pick() }.probe("wrong-add-photo")
+            }
+        }
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.image], allowsMultipleSelection: false) { picked($0) }
+    }
+
+    func pick() {
+        if TestTargets.enabled, !workspaceTestPicks.isEmpty {
+            let next = workspaceTestPicks.removeFirst()
+            return picked(next.map { .success($0) } ?? .failure(CocoaError(.userCancelled)))
+        }
+        picking = true
+    }
+
+    func picked(_ result: Result<[URL], Error>) { if case .success(let urls) = result, let first = urls.first { photos = [first] } }
+
+    func submit() {
+        save.busy = true; save.message = ""; save.conflict = false; save.login = false
+        Task {
+            guard let url = photos.first else { save.busy = false; return }
+            var id = uploaded[url.path] ?? ""
+            if id.isEmpty {
+                let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+                guard let data = try? Data(contentsOf: url) else { save.busy = false; save.message = "读不到所选照片，未保存；输入已保留。"; return }
+                switch await store.client.upload(data, name: url.lastPathComponent) {
+                case .saved(let reply):
+                    guard let got = (reply["attachment"] as? [String: Any])?["id"] as? String else { save.busy = false; save.message = "照片没有保存成功，未保存错题；可以重试。"; return }
+                    uploaded[url.path] = got; id = got
+                case let other: await store.finish(other, save, done: ""); return
+                }
+            }
+            let today = store.view?.today ?? store.day
+            let day = store.day.isEmpty || store.day > today ? today : store.day
+            let body: [String: Any] = ["child": store.childName, "day": day, "subject": subject.trimmingCharacters(in: .whitespaces), "request_key": save.key,
+                                       "items": [["attachment": id, "label": label, "text": text, "answer": answer, "correction": correction]]]
+            await store.finish(await store.client.post("/api/wrong/save", body), save, done: "错题已记进错题本。")
+        }
     }
 }
 

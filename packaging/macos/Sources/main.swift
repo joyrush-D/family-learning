@@ -817,9 +817,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
         guard smoke else { return }
         let hold = Double(environment["FAMILY_DESKTOP_SMOKE_HOLD"] ?? "") ?? 0
         DispatchQueue.main.asyncAfter(deadline: .now() + hold) {
-            emit(["state": "exiting", "main_frame_loads": self.mainLoads])
+            // 实测：步骤结束时若还开着弹出层，这里的 NSApp.terminate 不会结束进程（qa-cand1、qa-r2tests 各等满 300 秒）。
+            // 如实记下退出时还开着哪个弹出层；测试结束（含中途失败）已批准退出，先像“取消”一样收起再退出——步骤失败照旧由各步回执记录。
+            let open = self.workspace?.sheet?.id ?? ""
+            emit(["state": "exiting", "main_frame_loads": self.mainLoads, "sheet_open": open])
             self.quitApproved = true
-            NSApp.terminate(nil)
+            if !open.isEmpty { self.workspace?.sheetDirty = false; self.workspace?.sheet = nil }
+            DispatchQueue.main.asyncAfter(deadline: .now() + (open.isEmpty ? 0 : 1)) { NSApp.terminate(nil) }
         }
     }
 
@@ -1018,6 +1022,7 @@ extension AppDelegate {
             let store = WorkspaceStore(client: client)
             store.openDocument = { [weak self] url, name in self?.openDocument(url, name) }
             store.openWebTools = { [weak self] task, intent in self?.openWebTools(task, intent) }
+            store.openTopic = { [weak self] record, child in self?.openRecordTopic(record, child) }
             store.openLogin = { [weak self] in self?.openLogin() }
             store.confirmDiscard = { [weak self] action in self?.confirmDiscard(action) ?? false }
             store.onLoaded = { [weak self] in self?.workspaceLoaded() }
@@ -1057,13 +1062,22 @@ extension AppDelegate {
     /// 网页版工具（日历、学校消息、照片检查、打印确认等原功能）在同一窗口打开；指定作业时打开同一份原作业，并带上意图
     /// （print-original 打印原卷、print-reference 打印家长参考、check 照片检查、original 原消息、history 错题诊断与再试）：
     /// 网页只打开对应的原流程，确认、依据核对和防重复照旧，不会自动打印或保存。
-    static let webIntents: Set<String> = ["", "print-original", "print-reference", "check", "original", "history"]
-    func openWebTools(_ task: String, _ intent: String = "") {
+    static let webIntents: Set<String> = ["", "print-original", "print-reference", "check", "original", "history", "topic"]
+
+    /// 知识点与练习：同一道原错题（记录编号、孩子编号）在网页版的专门面板里打开——原题、原答、原作业与原有的知识点诊断/
+    /// 新题再试，不进整站历史页去找；网页上方“← 返回清单”/⌘0 回到同一工作台，孩子、日期和所选错题都保留。
+    func openRecordTopic(_ record: Int, _ child: String) {
+        let id = child.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_."))) ?? ""
+        guard record > 0, !id.isEmpty else { return }
+        openWebTools("", "topic", fragment: "wrong=\(record)&child=" + id + "&do=topic")
+    }
+
+    func openWebTools(_ task: String, _ intent: String = "", fragment: String? = nil) {
         guard let policy = config.policy, let web = webView, AppDelegate.webIntents.contains(intent) else { return }
         guard workspace?.hasUnsavedInput != true || confirmDiscard("打开网页版") else { return }
         workspace?.sheet = nil; workspace?.sheetDirty = false
         var c = URLComponents(url: policy.origin.url, resolvingAgainstBaseURL: false)!
-        if !task.isEmpty {
+        if let fragment { c.percentEncodedFragment = fragment } else if !task.isEmpty {
             let id = task.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_."))) ?? ""
             c.percentEncodedFragment = "task=" + id + (intent.isEmpty ? "" : "&do=" + intent)
         }
@@ -1620,9 +1634,45 @@ extension AppDelegate {
                     "guarded_quit_reply": lastQuitReply.map { $0 ? "terminate" : "cancelled" } ?? "none",
                     "window_open_after_quit": self.window === window && window.isVisible,
                     "still_dirty": workspace?.hasUnsavedInput == true]
+        case "set_frame":
+            // 仅 --smoke-test：把测试窗口放到声明的非居中位置与大小，之后各步核对窗口框不被工作台改动。
+            guard let window, let f = step["frame"] as? [Double], f.count == 4 else { return ["ok": false, "error": "frame needs [x,y,w,h]"] }
+            window.setFrame(NSRect(x: f[0], y: f[1], width: f[2], height: f[3]), display: true); await sleep(0.8)
+            let w = window.frame
+            return ["ok": true, "window_frame": [Double(w.minX), Double(w.minY), Double(w.width), Double(w.height)]]
+        case "frame":
+            // 实际窗口框与所列控件的屏幕位置（辅助功能框），只读。
+            guard let window else { return ["ok": false] }
+            await sleep(0.5)
+            let w = window.frame, all = nodes()
+            var anchors: [String: [Double]] = [:]
+            for id in step["ids"] as? [String] ?? [] {
+                if let n = all.first(where: { $0.id == id && $0.frame.width > 0 }) { anchors[id] = [Double(n.frame.minX), Double(n.frame.minY), Double(n.frame.width), Double(n.frame.height)] }
+                else if let (a, _) = TestTargets.live(id), let aw = a.window {
+                    let r = aw.convertToScreen(a.convert(a.bounds, to: nil)); anchors[id] = [Double(r.minX), Double(r.minY), Double(r.width), Double(r.height)]
+                }
+            }
+            return ["ok": true, "mode": workspace?.mode.rawValue ?? "", "window_frame": [Double(w.minX), Double(w.minY), Double(w.width), Double(w.height)], "anchors": anchors]
+        case "documents":
+            // 原件窗口（openDocument 另开的同源窗口）：读回它实际载入的地址与页面类型，不新增入口。
+            var docs: [[String: Any]] = []
+            for w in popups where w !== loginWindow {
+                guard let web = w.contentView as? WKWebView else { continue }
+                let start = Date()
+                while (web.isLoading || web.url == nil) && Date().timeIntervalSince(start) < 8 { await sleep(0.2) }
+                let page = try? await web.evaluateJavaScript("JSON.stringify({type:document.contentType,width:document.images[0]?document.images[0].naturalWidth:0})") as? String
+                docs.append(["title": w.title, "path": web.url?.path ?? "", "visible": w.isVisible, "key": w.isKeyWindow, "page": page ?? ""])
+            }
+            return ["ok": !docs.isEmpty, "documents": docs]
+        case "close_document":
+            // 与原件窗口的关闭按钮同一路径（performClose → windowShouldClose），不是鼠标点击。
+            guard let w = popups.last(where: { $0 !== loginWindow }) else { return ["ok": false, "error": "no document window"] }
+            w.performClose(nil); await sleep(0.6)
+            return ["ok": !w.isVisible && !popups.contains { $0 === w }, "left": popups.count]
         case "state":
             let s = workspace
-            return ["ok": true, "child": s?.childID ?? "", "day": s?.day ?? "", "selection": s?.selection ?? "", "error": s?.error ?? "",
+            return ["ok": true, "child": s?.childID ?? "", "day": s?.day ?? "", "selection": s?.selection ?? "", "error": s?.error ?? "", "mode": s?.mode.rawValue ?? "", "record": s?.record ?? 0, "notice": s?.notice ?? "",
+                    "window_frame": window.map { [Double($0.frame.minX), Double($0.frame.minY), Double($0.frame.width), Double($0.frame.height)] } ?? [],
                     "login_required": s?.loginRequired == true, "summary": s?.summary ?? "", "surface": surface, "window_width": Double(window?.frame.width ?? 0), "min_width": Double(window?.minSize.width ?? 0), "content_min_width": Double(window?.contentMinSize.width ?? 0),
                     "drag_clamp": window.map { Double(windowWillResize($0, to: NSSize(width: 360, height: $0.frame.height)).width) } ?? 0, "web_url": webView?.url?.absoluteString ?? "",
                     "groups": (s?.view?.groups ?? []).map { ["subject": $0.subject, "items": $0.items.map(\.id)] },

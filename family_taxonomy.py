@@ -9,7 +9,7 @@ summarize/replay），本模块不选题、不判题、不推断掌握：只核�
 每道题显示前先登记“已出示”；同孩历次诊断的出示/作答/说明/再试痕迹跨诊断、跨更正保留，独立新题只认从没见过的题。
 原错题更正后，旧诊断里DeepTutor已判定的作答经原repair_question(void)作废（组件不可用时记“待作废”）。
 家庭SQLite是唯一主数据；上游“掌握/推断掌握”只作本轮线索原样留存，不写成孩子掌握事实。"""
-import hashlib, json, os, re, sqlite3, time
+import hashlib, json, os, re, sqlite3, time, unicodedata
 from pathlib import Path
 
 import family_deeptutor
@@ -86,17 +86,76 @@ def math_topics(topics):
     return [t for t in topics if str(t.get('id', '')).startswith('cnm_') and t.get('subject') in (None, '', 'math')]
 
 
-def search(topics, query, limit=8):
-    """按名称、册章核对；唯一才给confirmable候选，歧义列候选，无匹配回原材料，不猜。"""
-    words = [w for w in str(query or '').split() if w]
-    if not words: return {'status': 'unclear', 'candidates': []}
-    hits = [t for t in math_topics(topics) if all(w in f"{t.get('name','')} {t.get('chapter','')}" for w in words)]
-    exact = [t for t in hits if t.get('name') == ' '.join(words)]
-    chosen = exact if len(exact) == 1 else hits
+# 查找只为让家长找到候选：标点与空格当分隔，“的/与/和/及/其/之”可省，字母全半角与大小写不计。
+SEP = re.compile(r'[^\w]+')
+STOP = re.compile(r'[的与和及其之]')
+CN_DIGITS = '一二三四五六七八九'
+HIGH_SCHOOL = (10, 11, 12, 13, 14)  # 原包高中按教材册（高一、高二必修，选必一至三）分，不按入学年级推哪一册
+
+
+def _norm(text):
+    return STOP.sub('', SEP.sub('', unicodedata.normalize('NFKC', str(text or '')).lower()))
+
+
+def _covers(word, text):
+    """整词在text里，或能切成每段至少两个字、各段都在text里（“有理数加法”=“有理数”+“加法”，家长不必加空格）。"""
+    if word in text: return True
+    ok = [True] + [False] * len(word)
+    for i in range(len(word) - 1):
+        if not ok[i] or word[i:i + 2] not in text: continue
+        for j in range(i + 2, len(word) + 1):
+            if word[i:j] not in text: break
+            ok[j] = True
+    return ok[-1]
+
+
+def _tier(words, name, both):
+    """名称整词>名称分段>名称或册章整词>名称或册章分段；都不中就不是候选。"""
+    for k, (text, whole) in enumerate(((name, True), (name, False), (both, True), (both, False)), 1):
+        if all(w in text if whole else _covers(w, text) for w in words): return k
+    return None
+
+
+def child_grades(text):
+    """只读家长写明的年级，不按年龄推：七年级/初一/7年级→(7,)，初中→七至九，高中按原包教材册全列；认不出就空。"""
+    s = re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(text or '')))
+    num = lambda c: int(c) if c.isdigit() else CN_DIGITS.index(c) + 1
+    if re.search(r'高[一二三123]|高中', s): return HIGH_SCHOOL
+    m = re.search(r'初中?([一二三123])', s)
+    if m: return (6 + num(m.group(1)),)
+    if '初中' in s: return (7, 8, 9)
+    m = re.search(r'([一二三四五六七八九1-9])年级', s)
+    return (num(m.group(1)),) if m else ()
+
+
+def grade_label(grade, topics=()):
+    """原包的年级字段：一至九年级按年级称呼，高中用原包册名（高一、选必一……）。"""
+    if 1 <= grade <= 9: return CN_DIGITS[grade - 1] + '年级'
+    return next((str(t.get('chapter')).split(' ')[0] for t in topics if t.get('grade') == grade and t.get('chapter')), '') or f'第{grade}册'
+
+
+def search(topics, query, limit=8, child_grades=(), grade=None):
+    """按名称、册章核对家长的日常说法；唯一才给confirmable候选，歧义列候选，无匹配回原材料，不猜。
+    孩子写明的年级只把同年级排前，其他年级（可能是先修）照样列出、可按年级看；只是候选，要家长点“就是这个”。"""
+    words = [w for w in (STOP.sub('', x) for x in SEP.split(unicodedata.normalize('NFKC', str(query or '')).lower())) if w]
+    empty = {'status': 'unclear', 'candidates': [], 'total': 0, 'groups': [], 'grade': grade, 'review_status': REVIEW_STATUS}
+    if not words: return empty
+    own = tuple(g for g in child_grades or () if type(g) is int)
+    hits = []
+    for k, t in enumerate(math_topics(topics)):
+        name = _norm(t.get('name')); tier = _tier(words, name, name + '\0' + _norm(t.get('chapter')))
+        if tier: hits.append((tier, t.get('grade') not in own, k, t))
+    found = [h[3] for h in sorted(hits, key=lambda h: h[:3])]
+    count = {}
+    for t in found:
+        if type(t.get('grade')) is int: count[t['grade']] = count.get(t['grade'], 0) + 1
+    groups = [{'grade': g, 'label': grade_label(g, found), 'count': count[g], 'child': g in own} for g in sorted(count, key=lambda g: (g not in own, g))]
+    if grade is not None: found = [t for t in found if t.get('grade') == grade]
+    exact = [t for t in found if t.get('name') == ' '.join(str(query or '').split())]
+    chosen = exact if len(exact) == 1 else found
     status = 'none' if not chosen else 'unique' if len(chosen) == 1 else 'ambiguous'
     keep = ('id', 'name', 'grade', 'semester', 'chapter', 'mastery_criteria')
-    return {'status': status, 'candidates': [{k: t.get(k) for k in keep} for t in chosen[:limit]], 'total': len(chosen),
-            'review_status': REVIEW_STATUS}
+    return dict(empty, status=status, candidates=[{k: t.get(k) for k in keep} for t in chosen[:limit]], total=len(chosen), groups=groups)
 
 
 def closure(pack, topic_id):
@@ -361,11 +420,16 @@ def _base(obj):
 
 
 def search_record(app, obj, root=None):
-    _fields(obj, ('child_id', 'record_id', 'query'), ('child_id', 'record_id', 'query'))
-    with app.connect() as c: record = wrong_record(app, c, obj['child_id'], obj['record_id'])
+    _fields(obj, ('child_id', 'record_id', 'query', 'grade'), ('child_id', 'record_id', 'query'))
+    grade = obj.get('grade')
+    if not isinstance(obj['query'], str) or grade is not None and (type(grade) is not int or not 1 <= grade <= 30):
+        raise TaxonomyError('请求字段不正确', 'bad_request')
+    with app.connect() as c:
+        record = wrong_record(app, c, obj['child_id'], obj['record_id'])
+        own = child_grades(next((p.get('grade') for p in app.profiles(c) if p['id'] == obj['child_id']), ''))
     if record['subject'] and '数学' not in record['subject']:
         return {'status': 'none', 'candidates': [], 'total': 0, 'message': '固定知识包只覆盖数学；这道错题请回原题和原材料核对'}
-    return search(load_pack(root)['topics'], str(obj['query'])[:60])
+    return dict(search(load_pack(root)['topics'], obj['query'][:60], child_grades=own, grade=grade), child_grades=list(own))
 
 
 def link_record(app, obj, root=None):
