@@ -1172,6 +1172,95 @@ def new_task(obj, connection=None):
             family_task_focus.save(SimpleNamespace(**globals()),dict(id=task['id'],version=0,request_key='new-task-'+(key or secrets.token_hex(16)),mode='next',next_action=advice,waiting_for='',review_on='',box=box,category=category,due_on=family_agenda.date(task['due'])),connection=c)
     return task
 
+def quick_add_task(obj):
+    """快速添加作业：从简单文本自动识别科目和截止日期"""
+    child=clean(obj,'child',100)
+    text=clean(obj,'text',300)
+    due_hint=clean(obj,'due',20) or 'today'
+    if not text: raise ValueError('请输入作业内容')
+    
+    # 处理截止日期
+    today=dt.date.today()
+    if due_hint=='today':
+        due_date=today
+    elif due_hint=='tomorrow':
+        due_date=today+dt.timedelta(days=1)
+    else:
+        try:
+            due_date=dt.date.fromisoformat(due_hint)
+        except (ValueError,TypeError):
+            due_date=today
+    
+    # 创建任务
+    task_obj={
+        'child':child,
+        'title':text,
+        'due':due_date.isoformat(),
+        'category':'homework',
+        'source':'快速添加',
+        'action':'',
+        'request_key':secrets.token_hex(16)
+    }
+    
+    return new_task(task_obj)
+
+def quick_task_wrong(task_id,obj):
+    """从作业快速记录错题：自动关联到任务"""
+    with connect() as c:
+        c.execute('BEGIN IMMEDIATE')
+        # 验证任务存在
+        task=next((t for t in tasks(c) if t['id']==task_id),None)
+        if not task: raise ValueError('作业不存在，请刷新')
+        
+        # 创建简单的错题记录
+        child_name=task['child']
+        note=clean(obj,'note',2000) or '作业错题'
+        
+        # 使用save_record创建关联到任务的记录
+        record_obj={
+            'child':child_name,
+            'note':note,
+            'source':f'事项:{task_id}',
+            'followup_kind':'',
+            'attachments':[],
+            'request_key':secrets.token_hex(16)
+        }
+        
+        # 保存记录（这会自动关联到任务）
+        record_id=save_record_impl(c,record_obj)
+        
+        # 返回记录和任务信息
+        return dict(ok=True,record_id=record_id,task_id=task_id,child=child_name)
+
+def save_record_impl(c,obj):
+    """内部实现：保存记录并返回record_id"""
+    child=clean(obj,'child',100)
+    note=clean(obj,'note',2000)
+    source=clean(obj,'source',200) or ''
+    followup_kind=clean(obj,'followup_kind',40) or ''
+    attachments=obj.get('attachments',[])
+    
+    if not isinstance(attachments,list): raise ValueError('附件列表格式不正确')
+    
+    names=child_names(c)
+    if child not in names: raise ValueError('请选择孩子')
+    child_name=names[child]
+    
+    # 创建记录
+    record_id=c.execute('SELECT COALESCE(MAX(id),0)+1 FROM records').fetchone()[0]
+    now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat()
+    
+    c.execute('''INSERT INTO records (id,child,note,source,followup_kind,attachments,created,linked_task_id,linked_task_at)
+                 VALUES (?,?,?,?,?,?,?,NULL,NULL)''',
+              (record_id,child_name,note,source,followup_kind,json.dumps(attachments,ensure_ascii=False),now))
+    
+    # 如果source是'事项:xxx'，自动关联
+    if source.startswith('事项:'):
+        task_id=source[3:]
+        c.execute('UPDATE records SET linked_task_id=?,linked_task_at=? WHERE id=?',(task_id,now,record_id))
+    
+    return record_id
+
 def task_status(task, update=None):
     original=task['original_status']
     return update or (original if original in (*TASK_STATUSES,'已归档') else '已归档' if '已归档' in original else '待跟进')
@@ -2868,6 +2957,13 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/record/task-create': return self.reply(200,create_record_task(obj))
             if self.path=='/api/task/new':
                 try: return self.reply(200,dict(ok=True,task=new_task(obj)))
+                except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if self.path=='/api/task/quick':
+                try: return self.reply(200,dict(ok=True,task=quick_add_task(obj)))
+                except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if path.startswith('/api/task/') and path.endswith('/quick-wrong'):
+                task_id=path.split('/')[3]
+                try: return self.reply(200,quick_task_wrong(task_id,obj))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
             if self.path=='/api/transcribe':
                 try: return self.reply(200,dict(text=transcribe_material(obj)))
