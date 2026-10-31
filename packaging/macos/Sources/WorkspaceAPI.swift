@@ -22,6 +22,8 @@ struct SavedRecord: Decodable, Hashable, Identifiable {
     let attachments: [String]
     let followup_kind: String
     let related_record_id: Int?
+    /// The task this saved record belongs to; a grouped same-affair row can show another member's record.
+    let task_id: String?
     let state: String?
     let followups: [SavedRecord]?
     let retry: RetryView?
@@ -30,7 +32,9 @@ struct SavedRecord: Decodable, Hashable, Identifiable {
 /// 已保存的新题再试：后台 family_taxonomy.retry_views 的同一份只读短视图（网页同用）；show_note 时仍显示这条记录原文。
 struct RetryView: Decodable, Hashable { let state: String; let lines: [[String]]; let status: String; let show_note: Bool; let next: String; let trace: String }
 
-struct Publication: Decodable, Hashable { let ref: String; let source_name: String; let sender: String }
+struct Publication: Decodable, Hashable { let ref: String; let source_name: String; let sender: String; let task_id: String? }
+/// A verified same affair shown as one item; the note states a completion doubt. Older servers omit it.
+struct SameAffair: Decodable, Hashable { let state: String; let task_ids: [String]?; let note: String? }
 
 /// 同一份作业已保存的进展，与网页 /api/state 的 task_progress 同一份：反馈、错题、知识点线索（不等于掌握）、独立再试、历史诊断。
 struct TaskProgress: Decodable, Hashable { let feedback: Int; let wrong: Int; let wrong_ids: [Int]?; let clues: Int; let retries: Int; let history: Int }
@@ -59,6 +63,7 @@ struct DayItem: Decodable, Hashable, Identifiable {
     let published_at: String?
     let publisher: String?
     let progress: TaskProgress?
+    let same_affair: SameAffair?
 }
 
 struct ItemGroup: Decodable, Hashable { let subject: String; let items: [DayItem] }

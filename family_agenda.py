@@ -1162,6 +1162,19 @@ def _record_row(r):
                 **({'retry': r['retry']} if r.get('retry') else {}))
 
 
+def _merged_progress(a, b):
+    """One affair's saved progress: each member's own counts added, lists joined without repeating an entry."""
+    if not a or not b: return a or b
+    out = dict(a)
+    for key, value in b.items():
+        old = out.get(key)
+        if isinstance(value, bool) or isinstance(old, bool): out[key] = old if old not in (None, '', False) else value
+        elif isinstance(value, (int, float)) and isinstance(old, (int, float)): out[key] = old + value
+        elif isinstance(value, list) and isinstance(old, list): out[key] = old + [x for x in value if x not in old]
+        elif old in (None, '', [], {}): out[key] = value
+    return out
+
+
 def day_view(inbox, tasks, records, child, day, today, wrong_source):
     """The list and each row's own facts for one child and day; closed rows that day stay findable in their own list."""
     by_task = {t['id']: t for t in tasks}
@@ -1204,7 +1217,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         lines = (task.get('action_lines') or [l.strip() for l in str(task.get('action') or '').splitlines() if l.strip()]) if task else \
             [l.strip() for l in str(x.get('body') or '').splitlines() if l.strip()][:12] if x.get('kind') == 'school' else []
         saved = sorted(feedback.get(x.get('task_id') or '', []), key=lambda r: (r.get('created') or '', r['id']))
-        notes = [wrong_row(r) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
+        notes = [dict(wrong_row(r), task_id=x['task_id']) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
         pubs = publications(a)
         return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=x.get('title', ''), subject=subject_key(a),
                     category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
@@ -1218,10 +1231,55 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                     # The task's own saved progress exactly as /api/state reads it (task_progress): feedback, linked wrong
                     # records, current-basis clues, independent new attempts and history; clues are not mastery.
                     progress=(task or {}).get('progress') or None,
-                    records=[_record_row(r) for r in saved if r.get('source') != wrong_source], wrong=notes)
+                    records=[dict(_record_row(r), task_id=x.get('task_id') or '') for r in saved if r.get('source') != wrong_source], wrong=notes)
 
-    rows = [row(x) for x in open_rows]
+    # A saved task verified as the same affair as an earlier one of this child (school_same_as) is one logical affair.
+    same = {}
+    for t in tasks:
+        root, seen = t.get('school_same_as'), {t['id']}
+        while root in by_task and root not in seen and by_task[root].get('school_same_as'):
+            seen.add(root); root = by_task[root]['school_same_as']
+        if root in by_task and root not in seen and by_task[root]['child'] == t['child']: same[t['id']] = root
+
+    def group(listed):
+        """One logical affair per verified same-affair group, decided before the open/closed split: the earliest listed task's
+        row carries every member's sources, saved records and wrong notes, each with its own task_id so every action stays
+        with that task. Differing completion is still one affair with its doubt stated; no member's own state changes."""
+        heads, order = {}, []
+        for r, closed in listed:
+            key = same.get(r['task_id'], r['task_id']) or r['id']
+            if key not in heads: heads[key] = []; order.append(key)
+            heads[key].append((r, closed))
+        open_out, closed_out = [], []
+        for key in order:
+            members = heads[key]
+            head = next((r for r, _ in members if r['task_id'] == key), members[0][0])
+            # Only a grouped row names each publication's own task; every other row keeps its exact shape.
+            if len(members) > 1: head['publications'] = [dict(p, task_id=head['task_id']) for p in head['publications']]
+            for r, _ in members:
+                if r is head: continue
+                head.setdefault('members', []).append(dict(id=r['id'], task_id=r['task_id'], title=r['title'], status=r['status'], closed=r['closed'],
+                                                         publications=r['publications'], progress=r['progress']))
+                known = {(p['ref'], p['task_id']) for p in head['publications']}
+                head['publications'] = head['publications'] + [dict(p, task_id=r['task_id']) for p in r['publications'] if (p['ref'], r['task_id']) not in known]
+                head['records'] = sorted(head['records'] + r['records'], key=lambda f: (f.get('created') or '', f['id']))
+                head['wrong'] = head['wrong'] + r['wrong']
+                head['progress'] = _merged_progress(head['progress'], r['progress'])
+            is_open = any(not closed for _, closed in members)
+            if len(members) > 1:
+                head['same_affair'] = dict(state='grouped', task_ids=[head['task_id']] + [m['task_id'] for m in head['members']])
+                head['group_progress'] = [dict(task_id=r['task_id'], progress=r['progress']) for r, _ in members if r['progress']]
+                done = [r for r, _ in members if r['closed']]
+                if done and is_open:
+                    head['same_affair'].update(state='uncertain', note='同一事项另有一份已标记“' + done[0]['status'] + '”，是否还需要再做或再交待核对；各自原状态和记录保留，不据反馈推定完成。')
+                elif len({r['status'] for r, _ in members}) > 1:
+                    head['same_affair'].update(state='uncertain', note='同一事项的几份记录状态不同，请核对；各自原状态和记录保留。')
+                if is_open and head['closed']: head['closed'] = False
+            (open_out if is_open else closed_out).append(head)
+        return open_out, closed_out
+
+    rows, closed_rows = group([(row(x), False) for x in open_rows] + [(row(x), True) for x in closed_rows])
     return dict(groups=[dict(subject=key, items=list(items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
-                closed=[dict(subject=key, items=list(items)) for key, items in subject_filed([row(x) for x in closed_rows], lambda r: r['subject'])],
+                closed=[dict(subject=key, items=list(items)) for key, items in subject_filed(closed_rows, lambda r: r['subject'])],
                 wrong=[dict(subject=key, items=list(items)) for key, items in subject_filed([wrong_row(r) for r in wrong], lambda r: SUBJECT_GENERAL if str(r.get('subject') or '').strip() == '综合' else str(r.get('subject') or '').strip())],
                 counts=dict(open=len(rows), closed=len(closed_rows), **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))

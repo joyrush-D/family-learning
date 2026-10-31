@@ -1726,6 +1726,15 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
                             '变更经过可写在task_reason。')
     JOINT_WAIVER_REJOINED = '今晚朗读《青石桥》2遍。\n读完请家长和孩子签名；后续更正：朗读不用家长签名，孩子签名仍按原要求保留。'
 
+    def _without_same_affair(self, messages, schema):
+        """The one intended request change since this freeze: the same-affair relation sentence and its 'same' change value."""
+        import copy, family_agent
+        system = messages[0]['content']
+        self.assertEqual(system.count(family_agent.SCHOOL_SAME_PROMPT), 1)
+        schema = copy.deepcopy(schema); enum = schema['properties']['proposals']['items']['properties']['task_change']['enum']
+        self.assertIn('same', enum); enum.remove('same')
+        return [dict(messages[0], content=system.replace(family_agent.SCHOOL_SAME_PROMPT, '', 1))] + list(messages[1:]), schema
+
     def _selection_request(self, evidence):
         """The one request _select sends for these fictional originals; the seam stops it before any reply is read."""
         class Sent(Exception):
@@ -1749,6 +1758,7 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
         sha = lambda text: hashlib.sha256(text.encode('utf-8')).hexdigest()
         old_sha, old_len = self.JOINT_WAIVER_SENT['system']
         messages, schema, name, timeout = self._selection_request(self.JOINT_WAIVER_EVIDENCE)
+        messages, schema = self._without_same_affair(messages, schema)
         changed = messages
         system, user = messages[0]['content'], messages[1]['content']
         self.assertEqual((name, timeout, [m['role'] for m in messages]), ('family_agent_selection', 45, ['system', 'user']))
@@ -1772,7 +1782,8 @@ class ContinuedSupplementVariantTests(unittest.TestCase):
         self.assertEqual(system.count('带waived的change'), 1)
         self.assertEqual(system.count('task_goal只写变更后最终有效的完整要求'), 1)
         # Without a bound change the same original is sent with the exact prompt it had; no other entry carries the rule.
-        messages, *_ = self._selection_request(self.JOINT_WAIVER_EVIDENCE[:1])
+        messages, schema, *_ = self._selection_request(self.JOINT_WAIVER_EVIDENCE[:1])
+        messages, schema = self._without_same_affair(messages, schema)
         self.assertEqual((sha(messages[0]['content']), len(messages[0]['content'])), (old_sha, old_len))
         self.assertEqual(json.loads(messages[1]['content'])['required_native_actions'][0]['changes'], [])
         # The transport reads this product-built bound change, and only it, as one keeping reasoning_effort.

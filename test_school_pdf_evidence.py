@@ -1159,6 +1159,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
         previous=[('candidate是本轮原件的原候选，不是整份行动清单。candidate和existing_actions的title/goal是已保存的旧文字，只用于对应编号和保留决定；其中读原件前生成的“内容未读”“请核对是否适用、准备什么、何时完成”等待核占位及原消息正文里的“内容未读”标记都是收集时状态，不是本轮原件内容或当前缺口，当前读取范围以content_incomplete和已读原件为准。','candidate是本轮原件的原候选，不是整份行动清单。'),
             ('title/goal/advice留空且state=review；已读完整原件中只是名称/标题的requirement行是已读资料，用途unknown时也按下方规则state=reference，','title/goal/advice留空且state=review，'),
             ('当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。','当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。')]
+        # The one intended same-affair rule added since these replies (asserted present once below).
+        previous=previous+[(agent.SCHOOL_SAME_PROMPT,'')]
         for case,text,expected,reply_sha,request_sha,v in self.ACTUAL_FLASH:
             with self.subTest(case):
                 probe=type(self)('runTest');probe.setUp()

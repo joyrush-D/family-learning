@@ -126,15 +126,19 @@ function taskActionHTML(t,compact=false){const f=taskFocus(t),advice=f.next_acti
 function taskActionLines(t,goal){return Array.isArray(t.action_lines)?t.action_lines:String(goal).trim()===String(t.title||'').trim()?[]:String(goal).split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
 
 // Saved evidence of this same task only: its feedback, linked wrong records, current-basis clues (not mastery) and independent new attempts.
-function taskProgressHTML(t){const p=t.progress;if(!p)return '';const parts=[];if(p.feedback)parts.push(`反馈${p.feedback}条`);if(p.wrong)parts.push(`错题${p.wrong}道`);if(p.clues)parts.push(`知识点线索${p.clues}条（不等于掌握）`);if(p.retries)parts.push(`独立再试${p.retries}次`);if(p.history)parts.push(`更正前的诊断${p.history}条作历史`);return parts.length?`<p class="small muted task-progress" data-task-progress="${esc(t.id)}">进展：${esc(parts.join(' · '))}</p>`:''}
+// One verified same affair counts every member's own saved progress (records stay with their tasks).
+function groupProgress(t){const all=sameAffairTasks(t).map(m=>m.progress).filter(Boolean);if(all.length<2)return all[0]||null;const p={...all[0]};for(const q of all.slice(1))for(const [k,v] of Object.entries(q))p[k]=typeof v==='number'&&typeof p[k]==='number'?p[k]+v:(p[k]??v);return p}
+function taskProgressHTML(t){const p=groupProgress(t);if(!p)return '';const parts=[];if(p.feedback)parts.push(`反馈${p.feedback}条`);if(p.wrong)parts.push(`错题${p.wrong}道`);if(p.clues)parts.push(`知识点线索${p.clues}条（不等于掌握）`);if(p.retries)parts.push(`独立再试${p.retries}次`);if(p.history)parts.push(`更正前的诊断${p.history}条作历史`);return parts.length?`<p class="small muted task-progress" data-task-progress="${esc(t.id)}">进展：${esc(parts.join(' · '))}</p>`:''}
 function taskHTML(t,options={}){
- const compact=options.compact===true,done=status(t)==='已完成',dismissed=taskClosed(t)&&!done,pending=pendingTask?.id===t.id,open=!taskClosed(t);
- const originals=schoolOriginalButtons(String(t.source||'').split('\n').filter(r=>r.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id,t.agenda?.category==='homework'?'查看作业原件':'原通知与原件',t.agenda?.publications,t.school_origin?t.id:'');
+ // A verified same affair whose copies differ in completion is one open affair with its doubt stated, never shown done.
+ const affair=sameAffairState(t),compact=options.compact===true,done=!affair&&status(t)==='已完成',dismissed=!affair&&taskClosed(t)&&!done,pending=pendingTask?.id===t.id,open=!!affair||!taskClosed(t);
+ const group=sameAffairTasks(t),owned=group.flatMap(m=>String(m.source||'').split('\n').filter(r=>r.startsWith('message:')).map(r=>[r,m.school_origin?m.id:'']));
+ const originals=schoolOriginalButtons(owned.map(x=>x[0]),data.children.find(c=>c.name===t.child)?.id,t.agenda?.category==='homework'?'查看作业原件':'原通知与原件',group.flatMap(m=>m.agenda?.publications||[]),Object.fromEntries([...owned].reverse()));
  const reportPending=open&&t.agenda?.category==='homework'&&t.homework_report?.needs_review;
  // ponytail: scan the family-sized record list here; index by task if rendering ever becomes measurably slow.
  const hasFeedback=data.records.some(r=>r.child===t.child&&(r.source==='事项:'+t.id||r.linked_task_id===t.id));
  const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open&&t.focus?.box!=='wish'&&t.agenda?.category==='homework'?`<button class="primary" data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:open&&t.title.includes('打印')?'<button class="primary" data-page="print">准备打印</button>':'';
- return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':reportPending?'<span class="task-dismiss-icon" aria-label="作业要求待核对，暂不能确认完成">?</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody"><div class="task-meta"><strong class="task-owner">${esc(t.child)}</strong>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div><h3>${esc(t.title)}</h3>${taskActionHTML(t,compact)}${agendaDateHTML(t.agenda||{},data.today,taskFamilyEntry(t),!t.agenda?.due_on&&t.due==='无明确截止')}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${taskProgressHTML(t)}<div class="task-actions"><div class="tasktools">${primary}${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">打印题目 / 参考</button>`:''}${reportPending?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:''}${!primary||t.agenda?.category!=='homework'?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'反馈进展'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:''}</div>${open?originals:''}<details class="task-reference task-more"><summary>详情与原通知</summary>${compact&&(taskFocus(t).next_action||t.advice)?`<div class="task-next"><span>操作建议</span><p>${esc(taskFocus(t).next_action||t.advice)}</p></div>`:''}<div class="tasktools">${open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}${open&&t.agenda?.category==='homework'?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${open?'':originals}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></div></article>`;
+ return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':reportPending?'<span class="task-dismiss-icon" aria-label="作业要求待核对，暂不能确认完成">?</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody">${affair?`<p class="small same-affair-note" role="note">${esc(affair.note)}</p>`:''}<div class="task-meta"><strong class="task-owner">${esc(t.child)}</strong>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div><h3>${esc(t.title)}</h3>${taskActionHTML(t,compact)}${agendaDateHTML(t.agenda||{},data.today,taskFamilyEntry(t),!t.agenda?.due_on&&t.due==='无明确截止')}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${taskProgressHTML(t)}<div class="task-actions"><div class="tasktools">${primary}${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">打印题目 / 参考</button>`:''}${reportPending?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:''}${!primary||t.agenda?.category!=='homework'?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'反馈进展'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:''}</div>${open?originals:''}<details class="task-reference task-more"><summary>详情与原通知</summary>${compact&&(taskFocus(t).next_action||t.advice)?`<div class="task-next"><span>操作建议</span><p>${esc(taskFocus(t).next_action||t.advice)}</p></div>`:''}<div class="tasktools">${open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}${open&&t.agenda?.category==='homework'?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${open?'':originals}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></div></article>`;
 }
 async function postTask(obj){
  const r=await apiFetch('/api/task',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...obj,expected_updated:obj.expected_updated??data.tasks.find(t=>t.id===obj.id)?.update?.updated??''})});
@@ -150,7 +154,10 @@ document.addEventListener('change',async e=>{
  if(busy){el.checked=!done;return}
  // ponytail: serialize task decisions in this page; use per-task locks if concurrent editing is needed.
  busy=true;pendingTask={id:t.id,checked:done};render();
- try{await postTask({id:t.id,status:done?'已完成':'待跟进',note:done?'家长通过清单勾选确认此事项已完成。':'家长撤销完成，继续跟进。'});toast(done?'已完成；在收集箱“已完成”中可撤销':'已恢复待跟进')}
+ // Confirming an uncertain same affair settles only its still-open copies, each under its own task; a copy already closed is not rewritten.
+ const affair=sameAffairState(t);
+ try{if(affair&&done){for(const m of affair.open)await postTask({id:m.id,status:'已完成',note:'家长通过清单勾选确认此事项已完成（同一事项另一份此前已标记，原记录保留）。'});toast('已确认完成；各份原记录保留')}
+  else{await postTask({id:t.id,status:done?'已完成':'待跟进',note:done?'家长通过清单勾选确认此事项已完成。':'家长撤销完成，继续跟进。'});toast(done?'已完成；在收集箱“已完成”中可撤销':'已恢复待跟进')}}
  catch(err){toast(err.message||'保存结果未确认，请重试核对。')}
  finally{busy=false;pendingTask=null;render()}
 });
@@ -583,7 +590,7 @@ function prepareTaskCapture(task,record=null,recentId=null){
  $('#taskFeedbackFormHeading').textContent=record?'更正这次反馈':'追加一次作答 / 反馈';
  homeworkReviewSerial++;
  taskWrongPending=null;taskFeedbackExcluded.clear();
- taskFeedbackContext={task_id:task.id,child:task.child,day:record?.day||data.today,category:record?.category||(task.agenda?.category==='todo'?'家长观察':'学习进展'),request_key:crypto.randomUUID(),record_id:record?.id,expected_created:record?.created,originals:record?.attachments||[]};
+ taskFeedbackContext={task_id:record?recordTask(record,task).id:task.id,child:task.child,day:record?.day||data.today,category:record?.category||(task.agenda?.category==='todo'?'家长观察':'学习进展'),request_key:crypto.randomUUID(),record_id:record?.id,expected_created:record?.created,originals:record?.attachments||[]};
  $('#taskFeedbackDay').value=record?.day||data.today;$('#taskForm').elements.status.value=status(task)==='已归档'?'待跟进':status(task);formVersion++;pendingIDs=[...(record?.attachments||[])];failedFiles=[];draft=null;draftVersion++;resetCareFeedback();
  $('#taskCaptureHome').append(sharedCapture);captureHint.textContent='提交作答照片、PDF或纯文字Word/TXT，可同时补充老师参考答案。每份最多20MB。';$('#draftButton').classList.add('hide');$('#draftResult').innerHTML='';$('#draftStatus').textContent='';$('#uploadStatus').textContent='';
  $('#retryUpload').classList.add('hide');$('#discardFailed').classList.add('hide');$('#taskTranscript').value=record?.transcript||'';
@@ -595,7 +602,7 @@ function prepareTaskCapture(task,record=null,recentId=null){
  if(recentId)requestAnimationFrame(()=>{if($('#taskDialog').open)$('#taskFeedbackHistory [data-homework-review="'+recentId+'"] summary')?.focus()});
 }
 function homeworkReviewOriginalId(record){const old=/^家长核对的作业批改参考；完整逐题意见见文字附件。原作答反馈 #([1-9][0-9]*)。$/.exec(record.note||'');return record.followup_kind==='作业检查'?record.related_record_id:old&&(record.attachments||[]).some(id=>data.uploads.some(a=>a.id===id&&a.mime?.startsWith('text/plain')&&a.name==='作业批改参考-'+old[1]+'.txt'))?Number(old[1]):null}
-function homeworkAnswerRecord(record,task){return !!record&&!!task&&record.child===task.child&&!record.related_record_id&&!record.followup_kind&&record.source!=='错题照片核对'&&!homeworkReviewOriginalId(record)&&(record.source==='事项:'+task.id||(!record.source.startsWith('事项:')&&record.linked_task_id===task.id))}
+function homeworkAnswerRecord(record,task){task=recordTask(record,task);/* a verified same-affair member's record is judged against its own task */return !!record&&!!task&&record.child===task.child&&!record.related_record_id&&!record.followup_kind&&record.source!=='错题照片核对'&&!homeworkReviewOriginalId(record)&&(record.source==='事项:'+task.id||(!record.source.startsWith('事项:')&&record.linked_task_id===task.id))}
 // A parent's edit to the generated text turns the counts above into the generated result, to be checked again.
 function homeworkReviewEdited(area){return area.value.trim()!==(area.dataset.generated??area.value).trim()}
 const homeworkReviewEditedStage='上方为生成时结果；完整结果已修改，需重新核定';
@@ -697,7 +704,7 @@ async function loadHomeworkBatch(panel,record,task){
  if(panel.querySelector('[data-homework-review-result] textarea')?.value.trim()&&(!panel.querySelector('[data-homework-review-result] textarea').disabled||pendingIDs.length||$('#taskForm').elements.note.value.trim()))throw Error('请先保存本批核对的检查，再选择下一批；原草稿仍保留');
  homeworkReviewBusy=true;status.textContent='正在读取完整文字原卷的题号；不调用模型…';
  try{
-  const out=await printPost('homework/catalog',{purpose:'review',task_id:task.id,record_id:record.id,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source),previous_sources:selection.filter(x=>x.role==='previous').map(x=>x.source)},30000);
+  const out=await printPost('homework/catalog',{purpose:'review',task_id:recordTask(record,task).id,record_id:record.id,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source),previous_sources:selection.filter(x=>x.role==='previous').map(x=>x.source)},30000);
   if(!panel.isConnected||!$('#taskDialog').open)return;
   if(JSON.stringify(selection)!==JSON.stringify(homeworkReviewSelection(panel))||out.created!==record.created)throw Error('原件选择或原作答已变化，请重新读取题号');
   if(!/^[a-f0-9]{64}$/.test(out.inventory_sha256)||!Array.isArray(out.questions)||!out.questions.length||out.questions.length>100||!Array.isArray(out.next_labels))throw Error('题号回执无法核对');
@@ -714,7 +721,7 @@ function finishHomeworkReview(){homeworkReviewBusy=false;for(const control of $(
 // Only a panel's latest read applies. A panel moved back after a save is the same, still connected element, so an earlier read answering
 // late, by success or failure, would redraw an older list without files saved since, drop choices made on the newer list or overwrite its state.
 const homeworkReviewSourceReads=new WeakMap(),homeworkReviewSourceKept='；原选择、作答和检查意见仍保留。';
-async function loadHomeworkReviewSources(panel,record,task){
+async function loadHomeworkReviewSources(panel,record,task){task=recordTask(record,task);
  const host=panel.querySelector('[data-homework-review-sources]'),read={},current=()=>panel.isConnected&&homeworkReviewSourceReads.get(panel)===read;
  homeworkReviewSourceReads.set(panel,read);
  try{
@@ -858,7 +865,7 @@ function savedHomeworkReviewFocus(panel,parts,nodes){
  }
  nav.hidden=!nav.childNodes.length;
 }
-async function loadSavedHomeworkReview(panel,record,task){
+async function loadSavedHomeworkReview(panel,record,task){task=recordTask(record,task);
  if(panel.dataset.loading||panel.dataset.loaded)return;panel.dataset.loading='true';const status=panel.querySelector('[data-saved-review-status]'),retry=panel.querySelector('button');retry.hidden=true;let retryable=true;status.textContent='正在读取已保存检查…';
  try{
   const response=await apiFetch('/api/print/homework/saved-review?task_id='+encodeURIComponent(task.id)+'&record_id='+record.id,{signal:AbortSignal.timeout(15000)}),out=await response.json();
@@ -871,10 +878,16 @@ async function loadSavedHomeworkReview(panel,record,task){
  }catch(error){if(panel.isConnected){status.textContent=error.message+'；已保存记录与原件保留。';retry.hidden=!retryable}}
  finally{delete panel.dataset.loading}
 }
+// A saved task verified as the same affair (school_same_as) is shown with its earliest task; each record keeps its own task for every action.
+function sameAffairTasks(task){return [task,...data.tasks.filter(t=>t.id!==task.id&&t.school_same_as===task.id&&t.child===task.child)]}
+function sameAffairState(t){const group=sameAffairTasks(t);if(group.length<2)return null;const closed=group.filter(m=>taskClosed(m)),open=group.filter(m=>!taskClosed(m));
+ return closed.length&&open.length?{open,closed,note:'同一事项另有一份已标记“'+taskStatusLabel(status(closed[0]))+'”，是否还需要再做或再交待核对；各份原状态和记录保留，不据反馈推定完成。'}:null}
+function recordTask(record,task){const own=String(record?.source||'').startsWith('事项:')?String(record.source).slice(3):record?.linked_task_id;return sameAffairTasks(task).find(t=>t.id===own)||task}
 function drawTaskFeedback(task,recentId=null){
  videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();
  drawTaskSchoolResources(task);
- const records=data.records.filter(r=>(r.source==='事项:'+task.id||r.linked_task_id===task.id)&&r.child===task.child);
+ const group=sameAffairTasks(task);
+ const records=data.records.filter(r=>group.some(t=>r.source==='事项:'+t.id||r.linked_task_id===t.id)&&r.child===task.child);
  // Saved work leads as one line in the cards' terms beside the saved task status, so the add-answer entry stays on the first screen; every card below stays complete and the line never marks the work done.
  // An ordinary saved feedback may hold the child's answer or only a teacher reference, and nothing saved tells which, so the line counts these records under the cards' own “作答 / 反馈” and never as answers or attempts.
  if(records.length){
@@ -915,7 +928,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   if(result.querySelector('textarea:not(:disabled)')?.value.trim()&&!confirm('再次检查会保留当前结果，并新增一轮复核，确定继续？'))return;
   const extra=instruction(),previousText=result.querySelector('textarea')?.value.trim()||'',serial=++homeworkReviewSerial;homeworkReviewBusy=true;button.disabled=true;status.textContent='正在检查所选作答和参考；上次结果保留…';
   try{
-   const out=await printPost('homework/draft',{purpose:'review',task_id:task.id,record_id:recordId,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source),previous_sources:selection.filter(x=>x.role==='previous').map(x=>x.source),review_instruction:extra,previous_text:previousText,previous_continuation:JSON.parse(result.dataset.continuation||'null'),...(batch?{question_batch:batch}:{})},150000);
+   const out=await printPost('homework/draft',{purpose:'review',task_id:recordTask(record,task).id,record_id:recordId,expected_created:record.created,question_sources:selection.filter(x=>x.role==='question').map(x=>x.source),reference_sources:selection.filter(x=>x.role==='reference').map(x=>x.source),previous_sources:selection.filter(x=>x.role==='previous').map(x=>x.source),review_instruction:extra,previous_text:previousText,previous_continuation:JSON.parse(result.dataset.continuation||'null'),...(batch?{question_batch:batch}:{})},150000);
    if(serial!==homeworkReviewSerial||!$('#taskDialog').open)return;
    if(JSON.stringify(selection)!==JSON.stringify(selected())||JSON.stringify(batch)!==JSON.stringify(homeworkReviewBatch(panel))||instruction()!==extra||(result.querySelector('textarea')?.value.trim()||'')!==previousText){status.textContent='资料、补充或上次意见已变化；上次结果保留，请重新检查。';return}
    if(typeof out.draft?.text!=='string'||!out.draft.text||out.draft.text.length>12000)throw Error('批改草稿回执不完整');
@@ -980,7 +993,7 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
   if(!(value('label')||value('text'))||!value('answer')||!value('correction')){status.textContent='请核对题号或题面、孩子原答和订正后再保存；未判定的题先保留在反馈中。';return}
   if(photo&&!record.attachments.includes(photo)){status.textContent='照片已变化，请重新打开原作业核对。';return}
   const framed=photo&&panel.taskWrongRegion?.upload_id===photo?panel.taskWrongRegion:null;
-  taskWrongPending={child:task.child,day:record.day,subject:record.subject||'',task_id:task.id,feedback_record_id:record.id,feedback_created:record.created,feedback_linked_at:record.linked_task_at||'',
+  taskWrongPending={child:task.child,day:record.day,subject:record.subject||'',task_id:recordTask(record,task).id,feedback_record_id:record.id,feedback_created:record.created,feedback_linked_at:record.linked_task_at||'',
    request_key:crypto.randomUUID().replaceAll('-',''),items:[{attachment:photo,label:value('label'),text:value('text'),answer:value('answer'),correction:value('correction'),note:value('note'),...(framed?{region:{x:framed.x,y:framed.y,width:framed.width,height:framed.height,natural_width:framed.natural_width,natural_height:framed.natural_height}}:{})}]};
  }
  const body=taskWrongPending,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
@@ -1121,7 +1134,7 @@ function prepareRecordVideo(record){
  if(draft&&(!task||String(task.id)!==String(draft.task_id))){f.elements.transcript_state.value='待核对';notice='<p class="note" data-video-transcript-stale>原关联或原件已变化：已填入但未保存的转写文字仍留在更正栏，并改为待核对。这段文字来自变化前的关联，请读取当前视频、明确重新转写，重新核对后再使用；旧依据不能保存到新关联，未自动保存。</p>'}
  if(!hasVideo){host.innerHTML=notice;return}
  if(!task){host.innerHTML=notice+'<p class="small muted">视频转写仅在这条记录明确关联同一孩子的事项后可用；不按科目猜测关联。</p>';return}
- recordVideoContext={record_id:record.id,task_id:task.id,child:ctx.child};host.innerHTML=notice+videoDraftPanelHTML(record);
+ recordVideoContext={record_id:record.id,task_id:recordTask(record,task).id,child:ctx.child};host.innerHTML=notice+videoDraftPanelHTML(record);
 }
 async function applyRecordVideoTranscript(recordId,index){
  const view=videoDraftViews.get(recordId),v=view?.videos?.[index],entry=videoTranscripts.get(recordId+':'+v?.upload_id),box=videoDraftPanel(recordId)?.querySelector(`[data-video-transcript="${index}"]`),ctx=recordVideoContext,f=$('#recordForm');
@@ -1899,12 +1912,13 @@ function schoolMessageIdentity(ref,childID){
  return {child_id:childID,source_id:matches[0].id,message_id:ref.slice(('message:'+matches[0].id+':').length)};
 }
 function schoolOriginalButtons(refs,childID,label='原通知与原件',publications=[],taskID=''){
- const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID)),taskAttr=taskID?` data-school-task-material="${esc(taskID)}"`:'';
+ // taskID may name each ref's own task (a verified same-affair member is read under its own task, never the group's).
+ const entries=[...new Set(refs)].filter(ref=>schoolMessageIdentity(ref,childID)),taskAttr=ref=>{const id=taskID&&typeof taskID==='object'?taskID[ref]:taskID;return id?` data-school-task-material="${esc(id)}"`:''};
  if(entries.length>1){
   const publisher=ref=>{const p=publications.find(p=>p.ref===ref);return p?(String(p.sender||'').trim()||'发布者未记录'):''},names=[...new Set(entries.map(publisher).filter(Boolean))];
-  return `<div class="toolbar school-original-group">${names.length?`<span class="school-publication-context">${names.map(esc).join('、')}</span>`:''}${entries.map((ref,i)=>{const description=(publisher(ref)?publisher(ref)+' · ':'')+'第 '+(i+1)+' 条'+label;return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}"${taskAttr} aria-label="${esc(description)}" title="${esc(description)}">原件 ${i+1}</button>`}).join('')}</div>`;
+  return `<div class="toolbar school-original-group">${names.length?`<span class="school-publication-context">${names.map(esc).join('、')}</span>`:''}${entries.map((ref,i)=>{const description=(publisher(ref)?publisher(ref)+' · ':'')+'第 '+(i+1)+' 条'+label;return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}"${taskAttr(ref)} aria-label="${esc(description)}" title="${esc(description)}">原件 ${i+1}</button>`}).join('')}</div>`;
  }
- return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}"${taskAttr}>${p?`<span class="school-publication-context">${esc(String(p.sender||'').trim()||'发布者未记录')}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
+ return entries.length?`<div class="toolbar">${entries.map((ref,i)=>{const p=publications.find(p=>p.ref===ref);return `<button data-school-original-ref="${esc(ref)}" data-school-original-child="${esc(childID)}"${taskAttr(ref)}>${p?`<span class="school-publication-context">${esc(String(p.sender||'').trim()||'发布者未记录')}</span>`:''}${entries.length===1?label:'第 '+(i+1)+' 条'+label}</button>`}).join('')}</div>`:'';
 }
 // A single original retains its old view; multiple originals keep separate local page numbers.
 function schoolPdfDocuments(material){return !material?[]:Array.isArray(material.documents)?material.documents.filter(p=>p&&typeof p==='object'):[material]}
@@ -1973,14 +1987,15 @@ function taskSchoolMaterialHTML(view){
 }
 function drawTaskSchoolResources(task){
  const root=$('#taskSchoolResources'),childID=data.children.find(c=>c.name===task.child)?.id;
- const refs=[...new Set(String(task.source||'').split('\n'))].map(ref=>schoolMessageIdentity(ref,childID)).filter(Boolean);
+ // Every verified member's own originals, each read under its own task through the same protected entry.
+ const refs=sameAffairTasks(task).flatMap(owner=>[...new Set(String(owner.source||'').split('\n'))].map(ref=>{const identity=schoolMessageIdentity(ref,childID);return identity&&{identity,owner}}).filter(Boolean));
  root.hidden=!refs.length;root.innerHTML=refs.length?'<h3>老师资料与 AI 整理</h3><p class="small muted">以下是资料整理，不是孩子作答或已完成。</p>':'';
- for(const identity of refs){
+ for(const {identity,owner} of refs){
   const row=document.createElement('section');row.className='task-school-resource';root.append(row);
   const read=async()=>{
    if(row.dataset.loading)return;row.dataset.loading='true';row.innerHTML='<p role="status">正在读取已保存的资料整理…</p>';
    try{
-    const request=task.school_origin===true?{...identity,task_id:task.id}:identity;
+    const request=owner.school_origin===true?{...identity,task_id:owner.id}:identity;
     const response=await apiFetch('/api/agent/message?'+new URLSearchParams(request),{signal:AbortSignal.timeout(12000)}),out=await response.json();
     if(!response.ok)throw Error(out.error||'资料整理暂不可读取');
     const view=verifySchoolOriginal(out,{identity});

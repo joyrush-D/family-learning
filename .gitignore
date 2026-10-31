@@ -138,6 +138,9 @@
 !/test_school_old_pending_recovery.py
 !/test_school_completion_today_ui.cjs
 !/test_school_saved_reread.py
+!/test_school_same_affair.py
+!/test_school_same_affair_ui.cjs
+!/test_school_same_affair_grove_ui.cjs
 !/test_school_saved_reread_ui.cjs
 !/test_school_parent_edited_review.py
 !/test_school_ack_originals_ui.cjs

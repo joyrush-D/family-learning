@@ -538,6 +538,7 @@ struct Inspector: View {
 
     func feedback(_ item: DayItem) -> some View {
         section("反馈、错题与订正", "pencil") {
+            if let note = item.same_affair?.note, !note.isEmpty { Text(note).foregroundStyle(Palette.ink2).probe("same-affair-note") }
             if item.task_id.isEmpty { Text("这一项还不是正式事项，确认后才能记反馈。").foregroundStyle(Palette.ink2) }
             if let p = item.progress, !progressWords(p).isEmpty {
                 HStack {
@@ -766,7 +767,7 @@ struct WrongSheet: View {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         let subject = [WorkspaceStore.general, WorkspaceStore.unknown].contains(item.subject) ? "" : item.subject
         let body: [String: Any] = ["child": store.childName, "day": store.view?.today ?? store.day, "subject": subject, "request_key": save.key,
-                                   "items": [["label": label, "note": reason]], "task_id": item.task_id,
+                                   "items": [["label": label, "note": reason]], "task_id": record.task_id ?? item.task_id,
                                    "feedback_record_id": record.id, "feedback_created": record.created]
         Task { await store.finish(await store.client.post("/api/wrong/save", body), save, done: "错题已记在同一份作业下。") }
     }
