@@ -154,7 +154,8 @@ label input,label select,label textarea{background:var(--card);color:var(--ink);
 .filebutton:focus-within{outline:3px solid #5E9A3A;outline-offset:2px}
 
 /* 日历为纲：三入口、本周条、课表与日程、错题本、学习进展（沿 Grove tokens：木色分段、卡片、44px 点击）。 */
-.grove-tabs{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:3px;margin:0 0 10px;border-radius:999px;background:var(--wood-100)}
+/* 三个入口是页内切换，不是全站导航：ui.css 手机端把每个 nav 都固定到底部，这里与老师选择一样留在页内顶部，底部只留全站导航。 */
+.grove-tabs{position:static;display:grid;grid-template-columns:repeat(3,1fr);gap:3px;padding:3px;margin:0 0 10px;border:0;border-radius:999px;background:var(--wood-100);backdrop-filter:none}
 .grove-tabs button{min-height:44px;border:0;border-radius:999px;background:transparent;color:var(--wood-700);font:600 15px var(--round);box-shadow:none}
 .grove-tabs button[aria-pressed="true"]{background:var(--card);color:var(--leaf-800);box-shadow:0 2px 0 #6B452033}
 .grove-week{margin:0 0 10px}
