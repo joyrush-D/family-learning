@@ -261,6 +261,18 @@ class BridgeTest(unittest.TestCase):
         with self.assertRaises(ft.TaxonomyError) as e: self.call(ft.start, topic_id='cnm_t2', request_id='start-request-nolink1')
         self.assertEqual(e.exception.code, 'topic_not_confirmed')
 
+    def test_search_is_read_only_candidate_discovery_with_the_stated_grade(self):
+        out = self.call(ft.search_record, query='小数的加法')
+        self.assertEqual([c['id'] for c in out['candidates']], ['cnm_t2']); self.assertEqual(out['child_grades'], [3])
+        self.assertEqual(self.tables(), set())  # 搜索不建表、不链接
+        for bad in (dict(query=7), dict(query=['小数']), dict(query='小数', grade='3'), dict(query='小数', grade=True), dict(query='小数', grade=3.0)):
+            with self.assertRaises(ft.TaxonomyError) as e: self.call(ft.search_record, **bad)
+            self.assertEqual(e.exception.status, 400, bad)
+        (app.ROOT / '家庭运行规则.md').write_text('| child-1 | 小明 | 男 | 13岁 | 未填写 |\n| child-2 | 小红 | 女 | 7岁 | 一年级 |\n')
+        self.assertEqual(self.call(ft.search_record, query='小数的加法')['child_grades'], [])  # 年级未填不按年龄猜
+        linked = self.call(ft.link_record, topic_id=out['candidates'][0]['id'], state='confirmed', request_id='link-request-search1')
+        self.assertEqual([(l['topic_id'], l['state']) for l in linked['links']], [('cnm_t2', 'confirmed')])
+
     def test_items_are_idempotent_scoped_and_ordered(self):
         d = self.started()
         self.assertEqual(self.answer(d, 1, 'cnm_t2_q1', 'cnm_t2')['diagnoses'][0]['items'][0]['verdict'], 'wrong')

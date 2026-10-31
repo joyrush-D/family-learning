@@ -152,6 +152,22 @@ function todayViewItems(){const view=data.today_view?.[currentChild()?.id];if(!A
 // dialog, its original message — where every confirmation, basis check and duplicate guard still applies. Nothing is printed or saved.
 let taskLinkPending='',taskLinkIntent='';
 {const m=/^#task=([^&]{1,100})(?:&do=(print-original|print-reference|check|original|history))?$/.exec(location.hash);if(m){taskLinkPending=decodeURIComponent(m[1]);taskLinkIntent=m[2]||''}}
+// The Mac workbench's 知识点与练习 opens one wrong question here (#wrong=<record id>&child=<child id>&do=topic): that record's own
+// words, its original task (or none) and the existing topic-diagnosis panel for exactly that record and child; nothing is saved here.
+let recordTopicPending=null;
+{const m=/^#wrong=(\d{1,12})&child=([^&]{1,100})&do=topic$/.exec(location.hash);if(m)recordTopicPending={id:Number(m[1]),child:decodeURIComponent(m[2])}}
+function revealRecordTopic(){
+ if(!recordTopicPending||!data)return;const {id,child}=recordTopicPending;recordTopicPending=null;history.replaceState(null,'',location.pathname+location.search);
+ document.querySelector('dialog.record-topic')?.remove();
+ const owner=data.children.find(c=>c.id===child),r=owner&&data.records.find(x=>x.id===id&&(x.child===owner.name||owner.aliases?.includes(x.child)));
+ const task=r?.linked_task_id&&data.tasks.find(t=>t.id===r.linked_task_id&&t.child===r.child),close='<div class="actions"><button type="button" data-record-topic-close>关闭</button></div>';
+ const d=document.createElement('dialog');d.className='record-topic';d.dataset.recordTopic=String(id);
+ d.innerHTML=r?`<header class="record-topic-head"><p class="small muted">知识点与练习 · ${esc(owner.name)} · ${esc(r.subject||'科目待定')} · 记于 ${esc(r.day)}</p><h2>${esc(r.title)}</h2><p class="small">${task?'原作业：'+esc(task.title):'未关联原作业（单独记下的错题）'}</p></header><section class="record-topic-original"><h3>原题与作答</h3><p class="source">${esc(r.note||'原记录没有写题面和作答。')}</p></section>${window.FamilyTopicDiagnosis?FamilyTopicDiagnosis.slot(r,owner.id):'<p class="error">知识点面板没有加载；原错题和订正照常可用。</p>'}${close}`:`<p class="error">读不到这道原错题（可能已删除，或不属于所选孩子）；没有改动任何记录。</p>${close}`;
+ document.body.appendChild(d);
+ const unsaved=()=>!!window.FamilyTopicDiagnosis?.hasUnsaved?.()&&!confirm('还有没提交的作答，确定关闭？');
+ d.querySelector('[data-record-topic-close]').addEventListener('click',()=>{if(!unsaved())d.close()});d.addEventListener('cancel',e=>{if(unsaved())e.preventDefault()});d.addEventListener('close',()=>d.remove());
+ d.showModal();d.querySelector('[data-topic-open]')?.click();
+}
 function revealTaskLink(){
  if(!taskLinkPending||!data)return;const id=taskLinkPending;
  if(page==='home'&&groveView()){const row=groveRows(groveView()).find(r=>r.task_id===id||r.id===id);if(row&&groveSelected!==row.id){groveSelected=row.id;groveDetailOpen=true;return render()}}
@@ -339,7 +355,7 @@ function todayTasksHTML(){
  const rows=groveRows(view);
  if(!rows.some(x=>x.id===groveSelected)){groveSelected=groveWide()?(rows[0]?.id||''):'';groveDetailOpen=false}
  const selected=rows.find(x=>x.id===groveSelected),c=view.counts||{};
- setTimeout(()=>{revealTaskLink();if(selected?.task_id&&selected.category==='homework')groveLoadMaterials(selected.task_id)});
+ setTimeout(()=>{revealTaskLink();revealRecordTopic();if(selected?.task_id&&selected.category==='homework')groveLoadMaterials(selected.task_id)});
  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);

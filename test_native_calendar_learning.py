@@ -74,14 +74,15 @@ if __name__ == '__main__':
             {'name': 'done list', 'until': 'list-summary', 'contains': '已办', 'timeout': 10},
             {'name': 'todo switch', 'click': 'mode-当天'},
             {'name': 'wrong book', 'click': 'mode-错题本'},
-            {'name': 'wrong row shown', 'until': 'wrong-' + str(w1), 'contains': '虚构加法错题 待订正', 'timeout': 15},
-            {'name': 'wrong back to task button', 'until': 'wrong-task-' + str(w1), 'timeout': 10},
+            {'name': 'wrong row shown', 'until': 'wrong-row-' + str(w1), 'contains': '虚构加法错题 待订正', 'timeout': 15},
+            {'name': 'select wrong row', 'click': 'wrong-row-' + str(w1)},
+            {'name': 'wrong back to task button', 'until': 'record-task-' + str(w1), 'timeout': 10},
             {'name': 'wrongbook-900', 'native': 'snapshot'},
             {'name': 'wrongbook-1440', 'width': 1440, 'native': 'snapshot'},
             {'name': 'start correction', 'click': 'wrong-correct-' + str(w1)},
             {'name': 'type correction', 'type': '虚构订正：(-8)+5=-3', 'into': 'correction-note'},
             {'name': 'save correction', 'click': 'sheet-save'},
-            {'name': 'corrected in wrong book', 'until': 'wrong-' + str(w1), 'contains': '已订正', 'timeout': 20},
+            {'name': 'corrected in wrong book', 'until': 'wrong-row-' + str(w1), 'contains': '已订正', 'timeout': 20},
             {'name': 'learning', 'click': 'mode-学习进展'},
             {'name': 'topic diagnosis with help', 'until': 'learning-' + str(w1), 'contains': topic + ' · 2026-10-28 · 答了2题，其中1题看过说明', 'timeout': 15},
             {'name': 'linked topic by name, pending diagnosis', 'until': 'learning-' + str(w3), 'contains': '已关联知识点 ' + topic + ' · 2026-10-29 · 家长确认关联，待诊断', 'timeout': 10},
@@ -92,13 +93,13 @@ if __name__ == '__main__':
             {'name': 'learning-1440', 'native': 'snapshot'},
             {'name': 'learning-900', 'width': 900, 'native': 'snapshot'},
             {'name': 'learning back to original task', 'click': 'learning-task-' + str(w1)},
-            {'name': 'web original task', 'native': 'state'},
+            {'name': 'same original task selected', 'native': 'state'},
             {'name': 'return to native', 'key': '0', 'modifiers': ['command']},
             {'name': 'native again', 'until': 'list-mode', 'timeout': 15},
             {'name': 'native state', 'native': 'state'},
             {'name': 'reopen', 'native': 'reopen'},
             {'name': 'reopened wrong book', 'click': 'mode-错题本'},
-            {'name': 'correction kept after reopen', 'until': 'wrong-' + str(w1), 'contains': '已订正', 'timeout': 15},
+            {'name': 'correction kept after reopen', 'until': 'wrong-row-' + str(w1), 'contains': '已订正', 'timeout': 15},
         ]
         (out / 'steps.json').write_text(json.dumps(steps, ensure_ascii=False, indent=1))
         support = out / 'support'; support.mkdir(mode=0o700); (support / 'desktop.json').write_text(json.dumps({'service_origin': origin}))
@@ -117,7 +118,9 @@ if __name__ == '__main__':
         result.update(steps_done=len(done), steps=len(steps), failed=[dict(name=x['name'], result=x.get('result')) for x in bad])
         assert code == 0 and len(done) == len(steps) and not bad, (code, len(done), len(steps), bad[:2])
         rows = {x['name']: x['result'] for x in done}
-        assert rows['web original task'].get('surface') == 'web', rows['web original task']
+        # 回原作业 selects the same original task in the native calendar (not a generic web history page).
+        same = rows['same original task selected']
+        assert same.get('surface') == 'native' and same.get('mode') == '日历' and same.get('selection') == t01, same
         assert rows['native state'].get('native_visible'), rows['native state']
         saved = get('child_id=child-1&day=2026-10-28')
         w = next(r for g in saved['wrong'] for r in g['items'] if r['id'] == w1)
@@ -131,7 +134,15 @@ if __name__ == '__main__':
         import traceback
         result['error'] = str(e)[:2000]; (out / 'FAILURE.txt').write_text(traceback.format_exc())
     finally:
-        if app is not None and app.poll() is None: app.terminate(); app.wait(timeout=10)
-        if fixture is not None and fixture.poll() is None: fixture.send_signal(signal.SIGINT); fixture.wait(timeout=10)
+        # Owned test processes only: ask first, then end them, so a hung App or a fixture held by a lingering connection can't skip RESULT.json or leave an orphan.
+        if app is not None and app.poll() is None:
+            app.terminate()
+            try: app.wait(timeout=10)
+            except subprocess.TimeoutExpired: app.kill(); app.wait(timeout=5)
+        if fixture is not None and fixture.poll() is None:
+            fixture.send_signal(signal.SIGINT)
+            try: fixture.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                fixture.kill(); fixture.wait(timeout=5); result['fixture_forced_stop'] = True
         (out / 'RESULT.json').write_text(json.dumps(result, ensure_ascii=False, indent=2) + '\n'); print(json.dumps(result, ensure_ascii=False)[:3000])
         sys.exit(0 if result['passed'] else 1)

@@ -201,3 +201,14 @@ label input,label select,label textarea{background:var(--card);color:var(--ink);
 .grove[data-tab="wrong"] .grove-detail,.grove[data-tab="learning"] .grove-detail{display:none}
 @media (max-width:899px){.grove-evidence div{grid-template-columns:76px minmax(0,1fr)}.grove-clock{flex-basis:84px}.grove-wrong{flex-direction:column}.grove-wrong-side{flex-direction:row;flex-wrap:wrap;align-items:center}}
 @media (max-width:899px){.grove-week-days{gap:1px;padding:2px}}
+/* 原生“知识点与练习”打开的那一道原错题 */
+dialog.record-topic{width:min(760px,94vw)}.record-topic-head h2{margin:4px 0 6px}.record-topic-original .source{white-space:pre-wrap;overflow-wrap:anywhere}
+/* 知识点查找与诊断：年级只排序/筛选（44px可点）；一个主操作，重新诊断退为文字按钮；来源与AI提醒一行放最后 */
+.topic-diagnosis .topic-grades{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0 2px}
+.topic-diagnosis .topic-grades button{min-height:44px;padding:6px 12px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--ink);font-size:13px;box-shadow:none}
+.topic-diagnosis .topic-grades button[aria-pressed="true"]{background:var(--leaf-800);border-color:var(--leaf-800);color:#fff}
+.topic-diagnosis .topic-found{padding-left:0;list-style:none;font-size:14px;color:var(--ink)}
+.topic-diagnosis .topic-found li{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0;padding:6px 0;border-bottom:1px solid var(--line)}
+.topic-diagnosis .topic-found li>button{flex:none;min-height:44px}
+.topic-diagnosis .topic-actions .topic-quiet{margin-left:auto;background:none;border-color:transparent;box-shadow:none;color:var(--wood-700);text-decoration:underline;text-underline-offset:3px}
+.topic-diagnosis .topic-source{margin-top:14px;padding-top:8px;border-top:1px solid var(--line);font-size:12px}
