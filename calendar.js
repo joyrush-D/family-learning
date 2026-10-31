@@ -372,7 +372,7 @@ function todayTasksHTML(){
   +(groveTab==='wrong'?`<header class="grove-list-head"><div><h1 id="groveListTitle">错题本</h1><p class="grove-summary">该孩子全部错题，按科目；订正后仍保留原题与原作业。</p></div></header><div class="grove-wrongbook">${groveWrongHTML(view)}</div></section></div>`
    :groveTab==='learning'?`<header class="grove-list-head"><div><h1 id="groveListTitle">学习进展</h1><p class="grove-summary">按科目看原错题、知识点线索与再试；线索不等于掌握。</p></div></header><div class="grove-learning-list">${groveLearningHTML(view)}</div></section></div>`
    :groveWeekHTML(view,day)
-  +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[day===data.today?day+' 今天':day,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${day===data.today?add:`<button type="button" data-grove-day="${esc(data.today)}">回到今天</button>`}</header>`
+  +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[day===data.today?day+' 今天':day,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${day===data.today?`<div class="grove-quick-add"><input type="text" placeholder="快速添加作业…" id="quickAddInput" /><button data-quick-add>添加</button></div>`:add||`<button type="button" data-grove-day="${esc(data.today)}">回到今天</button>`}</header>`
   +`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
   +groveScheduleHTML(view)
   +`<div class="today-task-groups" id="task-groups">${groups}</div>`
