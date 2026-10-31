@@ -4,7 +4,8 @@
 // child switching, the wrong book with the original task, learning evidence with topic basis and the course record apart,
 // the way back to the original task, a confirmed topic link shown by name as linked and pending diagnosis, a wrong record
 // without a task opened and corrected through the existing record entries (saved, then read again on a new page), 44px
-// targets and no sideways scroll. Waits are selector based: the page's CSP has no unsafe-eval and stays that way.
+// targets and no sideways scroll. At both widths the site nav (calendar and its timetable, inbox, more, back to the list) is clicked
+// for both children, with only that nav fixed at the bottom and the three entries in the page above the week. Waits are selector based: the page's CSP has no unsafe-eval and stays that way.
 // CALENDAR_FIXTURE_TAXONOMY_DIR=<fixed e0f931b pack> makes names the pack's own. No model, household data or login is used.
 // Usage: FAMILY_TEST_PYTHON=python3.12 PLAYWRIGHT_MODULE=/path/to/playwright [CHROMIUM_EXECUTABLE=/path] node test_calendar_learning_ui.cjs [out-dir]
 const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),{spawn}=require('node:child_process');
@@ -83,7 +84,39 @@ let T='cnm_010';const out=process.argv[2]||fs.mkdtempSync(path.join(require('nod
    await page.screenshot({path:path.join(out,`web-learning-${width}.png`),fullPage:width===360});ok('learning evidence and course record apart',{width});
    await page.locator(`[data-learning-task="${info.ids.w1}"]`).click();await page.waitForSelector('dialog[open]');
    assert.match(await page.locator('dialog[open]').innerText(),/虚构数学作业：有理数加法/);ok('back to the original task',{width});
-   await page.keyboard.press('Escape');await page.close();
+   await page.keyboard.press('Escape');await page.locator('dialog[open]').waitFor({state:'hidden'});
+   // The site nav (today, calendar, inbox, more) is the only bar fixed at the bottom; the three entries sit in the page above the week.
+   // Real clicks: Playwright does not click a button another element would receive, which is how the two 360 bars on one another showed.
+   await page.locator('[data-grove-tab="calendar"]').click();await page.locator('#groveListTitle').waitFor();
+   const bars=await page.evaluate(()=>{const R=el=>el.getBoundingClientRect(),hit=(el,x,y)=>{const r=R(el),t=document.elementFromPoint(x??r.left+r.width/2,y??r.top+r.height/2);return !!t&&el.contains(t)};
+    const site=document.querySelector('nav[aria-label="主导航"]'),tabs=document.querySelector('.grove-tabs'),first=document.querySelector('#today-courses'),s=R(site),t=R(tabs),c=R(first);
+    return {fixed:[...document.querySelectorAll('nav')].filter(n=>getComputedStyle(n).position==='fixed').map(n=>n.getAttribute('aria-label')),
+     buttons:[...site.querySelectorAll('button'),...tabs.querySelectorAll('button')].map(b=>({b:b.dataset.page||b.dataset.groveTab,hit:hit(b),h:Math.round(R(b).height)})),
+     apart:!(t.left<s.right&&s.left<t.right&&t.top<s.bottom&&s.top<t.bottom),above:t.bottom<=R(document.querySelector('.grove-week')).top+1,first:hit(first,c.left+12,c.top+12)}});
+   assert.deepEqual(bars.fixed,width===360?['主导航']:[],JSON.stringify(bars));
+   for(const b of bars.buttons)assert.ok(b.hit&&(width>900||b.h>=44),'site nav and entries receive their own clicks, 44px at 360 '+JSON.stringify(bars));
+   assert.deepEqual([bars.apart,bars.above,bars.first],[true,true,true],JSON.stringify(bars));ok('site nav alone at the bottom, the three entries in the page above the week',{width,buttons:bars.buttons});
+   if(width===360){// the top and the bottom of the real viewport: nothing sticky over the first card, the last card scrolls clear of the site nav
+    await page.screenshot({path:path.join(out,'web-nav-top-360.png')});
+    await page.evaluate(()=>window.scrollTo({top:document.documentElement.scrollHeight,behavior:'instant'}));
+    const end=await page.evaluate(()=>{const last=[...document.querySelectorAll('[data-today-task]')].pop(),r=last.getBoundingClientRect(),s=document.querySelector('nav[aria-label="主导航"]').getBoundingClientRect(),t=document.elementFromPoint(r.left+r.width/2,r.bottom-12);
+     return {clear:r.bottom<=s.top+1,hit:!!t&&last.contains(t),wide:document.documentElement.scrollWidth<=innerWidth+2,y:Math.round(scrollY)}});
+    assert.deepEqual([end.clear,end.hit,end.wide],[true,true,true],JSON.stringify(end));await page.screenshot({path:path.join(out,'web-nav-bottom-360.png')});
+    await page.evaluate(()=>window.scrollTo({top:0,behavior:'instant'}));ok('the last card scrolls clear of the site nav',{width,scrollY:end.y});
+   }
+   const go=async p=>{await page.locator(`nav[aria-label="主导航"] button[data-page="${p}"]`).click();await page.waitForSelector(`body[data-page="${p}"] nav[aria-label="主导航"] button.active[data-page="${p}"]`);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+2),true,'no sideways scroll on '+p)};
+   for(const who of ['child-1','child-2']){
+    if(who==='child-2'){await page.locator('[data-child-filter="child-2"]').click();await page.locator('#today-courses',{hasText:'乙的英语'}).waitFor()}
+    await go('calendar');const tools=page.locator('details.calendar-tools');if(!await tools.evaluate(d=>d.open))await tools.locator('summary').click();// 课表与设置
+    await tools.locator('[data-timetable-open]').click();await page.waitForSelector('#timetableDialog[open]');
+    await page.locator('#timetableDialog [data-close="timetableDialog"]').click();await page.locator('#timetableDialog').waitFor({state:'hidden'});// 稍后处理
+    if(width===360&&who==='child-1')await page.screenshot({path:path.join(out,'web-site-calendar-360.png')});
+    await go('tasks');await go('more');await go('home');await page.locator('#groveListTitle').waitFor();
+    if(who==='child-2')await page.locator('#today-courses',{hasText:'乙的英语'}).waitFor();
+    ok('site nav by real clicks: calendar and its timetable, inbox, more, back to the list',{width,child:who});
+   }
+   await page.close();
   }
   report.passed=true;
  }catch(e){report.passed=false;report.error=String(e.stack||e).slice(0,3000);process.exitCode=1}
