@@ -284,6 +284,9 @@ def tasks(connection=None):
                 if proposal:
                     task['advice']=json.loads(proposal['plan']).get('school_task',{}).get('advice','')
                     task['school_origin']=proposal['kind']=='school' and proposal['state']=='accepted' and proposal['task_id']==task['id']
+                    same=json.loads(proposal['plan']).get('school_same_task')
+                    # A verified same-affair relation of this saved task (family_agent._reconcile_school_same): display grouping only.
+                    if task['school_origin'] and isinstance(same,dict) and same.get('task_id'): task['school_same_as']=str(same['task_id'])
                     changes=json.loads(proposal['plan']).get('school_changes',[]);last=changes[-1] if changes else {};update=updates.get(task['id'],{})
                     task['school_completion_needs_review']=bool(task['school_origin'] and last.get('change') in ('update','append') and update.get('status')=='已完成' and update.get('updated','')<last.get('confirmed_at',''))
                     if task['school_origin']:
@@ -1110,8 +1113,20 @@ def homework_material_context(c,task_id,*,answer=None):
                 if not configured: raise family_agent.AgentError('学校来源无法核对')
                 source=max(configured,key=lambda s:len(s['id']))
                 refs=[dict(source_id=source['id'],message_id=task['source'][len('message:'+source['id']+':'):])]
-            linked=set()
-            for ref in refs:
+            linked=set();members=[]
+            # A verified same-affair member (school_same_as, same child, its own saved school_same_task) adds its own
+            # originals under its own canonical anchors and the same message/upload/child checks; each keeps its owner.
+            if original is not None:
+                for member in tasks(c):
+                    if member.get('school_same_as')!=task_id or member['child']!=task['child'] or not member['source'].startswith('Agent建议:'): continue
+                    try:
+                        member_origin=family_agent._school_origin(store,c,member,child['id']);member_plan=json.loads(member_origin['plan'])
+                    except (family_agent.AgentError,ValueError,TypeError,KeyError): continue
+                    if (member_plan.get('school_same_task') or {}).get('task_id')!=task_id: continue
+                    members.append((member['id'],member_origin,[dict(zip(('source_id','message_id'),e['ref'][8:].rsplit(':',1))) for e in json.loads(member_origin['evidence'])]
+                                    +list(member_plan.get('school_messages',[]))))
+            for owner,origin_row,ref_list in [(task_id,original,refs)]+members:
+             for ref in ref_list:
                 if not isinstance(ref,dict) or not {'source_id','message_id'}<=set(ref): raise family_agent.AgentError('学校来源不完整')
                 key=(ref['source_id'],ref['message_id'])
                 if key in linked: continue
@@ -1119,11 +1134,12 @@ def homework_material_context(c,task_id,*,answer=None):
                 source,message=store._message_context(c,dict(child_id=child['id'],source_id=key[0],message_id=key[1]))
                 family_media._authorized(store,c,source,message)
                 ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=? ORDER BY upload_id',key)]
-                scoped=family_agent.school_original_upload_ids(store,c,original,'message:'+key[0]+':'+key[1],ids) if original is not None else None
+                scoped=family_agent.school_original_upload_ids(store,c,origin_row,'message:'+key[0]+':'+key[1],ids) if origin_row is not None else None
                 if scoped is not None: ids=scoped
                 bindings.append([source,message,ids])
                 for ident in ids:
                     store._message_upload(c,child['id'],ident);add(ident,'school')
+                    if owner!=task_id and ident in allowed: allowed[ident].setdefault('owner_task_id',owner)
         except (family_agent.AgentError,family_print.MediaError,family_reading.ReadingError,ValueError,TypeError,KeyError):
             # Saved answer/report still work when their independent school binding is unavailable.
             allowed={ident:value for ident,value in allowed.items() if value['origin']!='school'}
@@ -2441,7 +2457,7 @@ class Handler(BaseHTTPRequestHandler):
                         states=homework_material_states(c,context)
                 except sqlite3.OperationalError:
                     return self.reply(503,dict(error='作业资料暂时无法读取；本次读取未更改任何资料',code='storage_unavailable'))
-                files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'],
+                files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'],**({'owner_task_id':value['owner_task_id']} if value.get('owner_task_id') else {}),
                             role_label=MATERIAL_ROLES.get(value['origin'],'原件（用途未注明）'),**states.get(ident,MATERIAL_SAVED))
                        for ident,value in context['allowed'].items() if value['origin']!='review_result']
                 return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},files=files,school_error=context['school_error'],print_basis=basis,task_title=context['task']['title']))

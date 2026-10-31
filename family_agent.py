@@ -85,9 +85,11 @@ reference：表格列标题/成绩符号说明、已完成汇报、一般教学�
 向群友索要课本页、照片、文件等资料的个人求助，不等于全班或本孩子的学校要求；仅提到科目、页码或活动主题也不能自动创建核对待办、学习目标或加练。批处理可跳过，已有候选归reference。若同批另有明确作业要求，应引用那条要求并保留转述身份，不能只引用求助句。
 as_of为当前日期，原发送日期不能改成今天；当前孩子/来源绑定已由家庭指定，但不代表消息每项条件均适用。只处理candidate所指这一件事，不能扩大到其他列或其他孩子。reason说明分类依据；缺具体内容时title/goal/advice可留空。"""
 TASK_BRIEF_SCHEMA['required'] += ['change','target_id']
-TASK_BRIEF_SCHEMA['properties'].update(change={'type':'string','enum':['new','append','update','cancel']},target_id={'type':'string','maxLength':80})
+TASK_BRIEF_SCHEMA['properties'].update(change={'type':'string','enum':['new','append','same','update','cancel']},target_id={'type':'string','maxLength':80})
 SCHOOL_TASK_PROMPT += '\nchange首先描述与已保存school_tasks的关系。已有保存的原事项被替换、改期、改变必做/选做或取消时，用update/cancel并review，不新增副本，不覆盖既有完成/不参加或家长反馈。target_id只选列表中明确对应的原事项；不确定或列表省略时留空，不按同科目强行匹配。若只读到更正/改期/取消、原要求缺失或未读、对象关系不唯一或可能为旧通知重发，也保留update/cancel与review；空列表或空target_id本身不能证明这是新事项。title/goal保留已读的完整变更要求，未明确保留的旧要求不补造；取消写原取消内容。'
 SCHOOL_TASK_PROMPT += '\n首次同批明确包含同孩、同源、稳定同publisher发布的完整原要求及其对应补充/更正，具体对象唯一，且没有已保存原事项时，将本批这些消息归纳成一项new，target_id为空；引用原要求、补充/更正与本项材料，保留原发布日期、更正时间及原文支持的完成日期，不把本批尚未保存的原要求写成空target_id的update。当前所需原件尚未读全时仍new但state=review，已读要求保留，reason仅列具体未读部分；所需内容和适用条件已读清才ready。同批明确取消整项行动时不能用new/ready生成执行任务，沿取消待核流程保留。仅对已保存的同源同publisher明确唯一原事项，纯增加步骤/标准的补充可选append：target_id选原事项，goal只写本条新增要求，不复制旧内容或借旧截止日；补充未声明新日期时due留空，原事项的截止由系统保持；未新增提交要求时submission留空。只补朗读/仅补教材作业在同publisher对应活动仅一项时可明确匹配；两项竞争或publisher未知则review。对已保存事项的替换、撤销、改期、必做/选做变化用update/cancel并review，不用append。归纳的每项提交、签字、数量、截止要求都必须由当前原消息或已读完整原件支持，不能从打印、签字或参考说明补造提交动作。完成时间不等于交回时间；交回对象和提交去处分开，不能把交数学本改成提交至数学本。'
+SCHOOL_SAME_PROMPT = '\n同一孩子已保存的同一件具体事项被再次提醒或转述（换说法、换渠道、由另一发布人转达）时，若对象、范围、次数、完成标准和截止都与该原事项一致，没有新增或改变要求，change填same，target_id选该原事项；goal写本条提醒的完整要求，due按本条原文和发送日换算，未写日期留空。仅同科目、相似标题或同一本书/单元/文件名不能证明是同一事项；不同题号/页码/次数、另一孩子、重新布置或再交一次的新一轮、补充新步骤（append）、更正/改期/取消（update/cancel）都不是same。不同发布人只说明谁提醒，不能认定为同一人。'
+SCHOOL_TASK_PROMPT += SCHOOL_SAME_PROMPT
 _school_fields['required'] += ['task_change','task_target_id']
 _school_fields['properties'].update(task_change=TASK_BRIEF_SCHEMA['properties']['change'],task_target_id=TASK_BRIEF_SCHEMA['properties']['target_id'])
 _school_fields['required'] += ['task_state','task_reason']
@@ -868,7 +870,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
         if len(brief['goal'])+len(submission)+6<=2000: brief['goal']+='\n提交要求：'+submission
         else: state='review';brief['reason']='要求较长，提交要求未并入正文，请核对：'+submission[:200]
     change=value.get('change','new');target=_text(value,'target_id',80)
-    if change not in ('new','append','update','cancel'): raise AgentError('学校通知变更类型无法核对')
+    if change not in ('new','append','same','update','cancel'): raise AgentError('学校通知变更类型无法核对')
     if target and not any(t['id']==target for t in school_tasks): raise AgentError('原事项不在本次可核对范围')
     if change=='new' and target:
         target='';state='review';brief['reason']='模型同时给出新增事项和原事项，请家长核对是新要求还是学校变更。'
@@ -917,6 +919,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     if pdf: brief['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
     brief['origin_basis']=_school_message_basis(evidence)
     _school_append_brief(brief,evidence,school_tasks)
+    _school_same_brief(brief,evidence,school_tasks)
     return brief
 
 
@@ -2244,7 +2247,7 @@ def _school_origin(store, c, task, child_id):
     return row
 
 
-def school_targets(app, store, child_id, connection=None, *, shared=False):
+def school_targets(app, store, child_id, connection=None, *, shared=False, evidence=None, limit=24):
     """Bounded saved tasks for the existing school model call, no new collector.
 
     With ``shared`` each target also carries the program's own proof (never shown to the model) when the very next stored
@@ -2259,7 +2262,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False):
             try:
                 canonical=_school_origin(store,c,task,child_id)
                 if isinstance(json.loads(canonical['plan']).get('school_native_action'),dict):natives.append((task['id'],canonical))
-                originals=[];publishers=set();originals_read=True
+                originals=[];publishers=set();originals_read=True;facts=[]
                 canonical_plan=json.loads(canonical['plan']);changes=canonical_plan.get('school_changes',[])
                 source_rows=[canonical]
                 for change in changes:
@@ -2277,6 +2280,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False):
                         publishers.add((source_id,_publisher(source_id,message)))
                         originals.append([quote['ref'],_hash(message)])
                         original_evidence.append(dict(message,ref=quote['ref']))
+                        facts.append(str(message.get('text') or ''))
                         originals_read=originals_read and message['kind']=='text' and not message['unread'] and bool(message['text'].strip()) and not _needs_task_details(message['text'])
                     recorded=json.loads(source_row['plan']).get('school_task',{}).get('origin_basis',{})
                     current_basis=_school_message_basis(original_evidence)
@@ -2297,11 +2301,14 @@ def school_targets(app, store, child_id, connection=None, *, shared=False):
             own_append=(last.get('change')=='append' and last.get('auto_added') is True and focus['title']==last.get('applied_title') and focus['goal']==last.get('applied_goal'))
             result.append(dict(id=task['id'],title=task['title'][:200],goal=task['action'][:400],goal_truncated=len(task['action'])>400,
                 due=task['agenda']['due_on'],status=app.task_status(task,update['status'] if update else None),source_id=source,publisher=publisher,
-                append_basis=basis,append_eligible=bool(publisher) and originals_read and requirements_kept and _school_active(store,c,canonical) and not update and not feedback and not study
+                facts='\n'.join(facts)[:4000],append_basis=basis,same_as=str((canonical_plan.get('school_same_task') or {}).get('task_id') or ''),
+                # A linked reminder adds only provenance (sources/publications); the same-affair basis ignores just that part.
+                same_basis=dict(basis,fingerprint=_hash([dict(canonical),originals,task['title'],task['action'],focus,update,feedback,study,
+                    {k:v for k,v in task['agenda'].items() if not k.startswith('publi') and 'source' not in k and 'sender' not in k}])),append_eligible=bool(publisher) and originals_read and requirements_kept and _school_active(store,c,canonical) and not update and not feedback and not study
                     and (not focus['title'] and not focus['goal'] or own_append)))
             canonicals[task['id']]=canonical
         complete=len(result)<=24
-        result=result[:24]
+        result=_school_scope(result,evidence,limit,complete)
         for task in result:
             task['targets_complete']=complete
             if shared:
@@ -2309,6 +2316,28 @@ def school_targets(app, store, child_id, connection=None, *, shared=False):
                 except (AgentError,ValueError,KeyError,TypeError):proof=None
                 if proof:task['shared_standard']=proof
         return result
+
+
+def _school_scope(result, evidence, limit=24, complete=True):
+    """The bounded target list. Recency alone hides an older original from a later reminder, so with this batch's own texts
+    every saved task of the child naming the same concrete object (named object or four own characters) comes first; that
+    evidence scope is complete, and a same-affair choice within it provable, only while it fits the window. The rest of the
+    window is the latest tasks. targets_complete (every saved task listed) keeps its meaning for append/cancel."""
+    if evidence is None: return [dict(t,same_complete=complete) for t in (result if limit is None else result[:limit])]
+    texts=[str(e or '') for e in evidence]
+    def within(t):
+        # The same guard's necessary conditions: a shared object in its own words and every object a message names.
+        own=t['title']+'\n'+t['goal'];known=_school_named_objects(own+'\n'+str(t.get('facts') or ''))
+        return any(_school_same_object(m,own) and _school_named_objects(m)<=known for m in texts)
+    scoped={t['id'] for t in result if within(t)}
+    same_complete=len(scoped)<=24
+    if limit is not None:
+        chosen=scoped if same_complete else set()
+        # The window keeps its usual (latest-first) order; only which tasks fill it changes, so a child with at most 24
+        # saved tasks sends exactly the same list as before.
+        kept=chosen|{t['id'] for t in [t for t in result if t['id'] not in chosen][:max(0,limit-len(chosen))]}
+        result=[t for t in result if t['id'] in kept]
+    return [dict(t,same_complete=same_complete) for t in result]
 
 
 def _school_late_shared(store, c, child_id, canonical, natives):
@@ -2347,9 +2376,12 @@ def _school_late_shared(store, c, child_id, canonical, natives):
     return dict(ref=standard['ref'],quote=standard['quote'],tasks=tasks,basis=_hash([listing,later,alone,tasks]))
 
 
+_SCHOOL_NAMED=re.compile(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.[a-z0-9]+|\s*[-–—~～+/&、,，和与及至到]\s*\d+)*|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》')
+
+
 def _school_named_objects(value):
     """Complete literal names; Unit 3, 30 and 3A are different objects."""
-    named=re.findall(r'unit\s*\d+(?:[_a-z][_a-z0-9]*|\.[a-z0-9]+|\s*[-–—~～+/&、,，和与及至到]\s*\d+)*|第[一二三四五六七八九十0-9]+课|《[^》]{1,40}》',value.lower())
+    named=_SCHOOL_NAMED.findall(value.lower())
     return {re.sub(r'\s+','',obj) if obj.startswith('unit') else obj for obj in named}
 
 
@@ -2452,6 +2484,279 @@ def _school_append_brief(brief, evidence, targets):
         uncertain();return
     brief['target_basis']=copy.deepcopy(selected['append_basis'])
     brief['input_basis']=_school_message_basis(evidence)
+
+
+_SCHOOL_SAME_CHANGED=re.compile(r'更正|取消|撤回|作废|改为|改成|改到|改在|改期|延期|推迟|提前|改做|换成|不用|无需|不再|选做|任选|自愿|重新布置|重新做'
+    r'|再(?:交|做|读|录|写|背|练|抄|完成)一(?:次|遍|轮)|又布置|新一轮|下一轮|另(?:一)?项|另外|第二项|还要|增加|加做|补(?:充|交|做)|只补|仅补')
+# A discourse label (补充提醒：, 温馨提醒) and a quoted title or name are not commands; the words after a label still count.
+_SCHOOL_SAME_LABEL=re.compile(r'(?:^|(?<=[。！!？?；;\n]))\s*[【\[]?(?:补充|再次|温馨|友情|重要|特别|最后|再)?提醒(?:一下|下|大家|各位(?:家长|同学)?)?[】\]]?\s*[：:，,！!。]?')
+_SCHOOL_SAME_QUOTED=re.compile(r'《[^》]{0,40}》|“[^”]{0,40}”|「[^」]{0,40}」|『[^』]{0,40}』|"[^"\n]{0,40}"')
+# Concrete steps a reminder could add; one group is one step (交 = 上传 = 带来). Words outside the groups decide nothing.
+_SCHOOL_SAME_STEPS=(r'交|上传|带来|带到|带回|发到|发给|发送',r'读',r'录音|录制|音频|录像|视频',r'签字|签名|签好字|签上',r'打印',r'拍照|照片',
+                    r'背诵|背熟|默背',r'默写',r'听写',r'抄写|抄',r'订正|改错',r'填写|填好',r'打卡',r'预习',r'复习',r'回复|接龙')
+_SCHOOL_COUNT_UNITS=r'遍|次|题|道|页|课|篇|首|段|行|单元|章|节|项|组|分钟|字|张|份|幅|本|支|件|句|天'
+_SCHOOL_CLOCK=re.compile(r'\d{4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}\s*[日号]?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|\d{1,2}\s*[日号]|\d{1,2}\s*[:：点]\s*\d{0,2}')
+
+
+def _school_counts(value):
+    """(number, unit) of every count, range or numbered part outside named objects, dates and clock times; 2 = 两 = 二."""
+    value=_SCHOOL_CLOCK.sub(' ',_SCHOOL_NAMED.sub(' ',value.lower()))
+    # An explicit numeric range states each number in it (第1-3段 = 第1、2、3段); long or reversed ranges stay as written.
+    value=re.sub(r'(\d+)\s*[-–—~～至到]\s*(\d+)',lambda m:'、'.join(str(n) for n in range(int(m[1]),int(m[2])+1)) if 0<int(m[2])-int(m[1])<=30 else m[0],value)
+    found=set()
+    for number,unit in re.findall(r'(\d+)\s*('+_SCHOOL_COUNT_UNITS+')?',value): found.add((int(number),unit))
+    for lead,word,unit in re.findall(r'(第|练习|习题)?([一二两三四五六七八九十]+)\s*('+_SCHOOL_COUNT_UNITS+')?',value):
+        if not lead and not unit: continue
+        digits='零一二三四五六七八九';word=word.replace('两','二');tens,ten,ones=word.partition('十')
+        if not ten: number=digits.index(word) if len(word)==1 else word
+        elif len(tens)<=1 and len(ones)<=1: number=(digits.index(tens) if tens else 1)*10+(digits.index(ones) if ones else 0)
+        else: number=word
+        found.add((number,unit))
+    return found
+
+
+def _school_same_spoken(text):
+    """The reminder's own instructions: quoted titles/names and discourse labels removed."""
+    return _SCHOOL_SAME_LABEL.sub(' ',_SCHOOL_SAME_QUOTED.sub(' ',text))
+
+
+def _school_same_changes(text, facts):
+    """A change, new round or extra requirement the reminder itself says; a condition the task already states is repeated."""
+    spoken=_school_same_spoken(text)
+    for match in _SCHOOL_SAME_CHANGED.finditer(spoken):
+        phrase=re.split(r'[，,。；;！!？?\n]',spoken[match.start():match.end()+8])[0]
+        if phrase not in facts: return True
+    return False
+
+
+def _school_same_due(due, target, evidence):
+    """A reminder never sets, moves or clears a date; differing or unknown timing stays for the parent."""
+    from family_agenda import sent_day
+    old=target.get('due') or '';days=[sent_day(e.get('time','')) for e in evidence]
+    if due!=old and (due or any(_SCHOOL_DATE_MENTION.search(e.get('text','')) for e in evidence)):
+        return '提醒的日期与原事项不一致或原事项没有明确截止，是否同一次待核对；原事项和提醒原文都保留。'
+    if not all(days) or old and max(days)>old:
+        return '提醒的发送日期不明或晚于原事项截止，是否新一轮待核对；原事项和提醒原文都保留。'
+    return ''
+
+
+def _school_same_brief(brief, evidence, targets):
+    """The same concrete affair reminded again links its one saved task as provenance; requirements, date and state stay.
+
+    Only the model can tell a paraphrase of the same affair apart; the program proves no more than: this child's listed,
+    fully read task; a wholly read text reminder; no change, new-round or extra requirement it says itself (labels such as
+    补充提醒 and quoted names are not commands); no step, named object, count or range the task's own words and originals do
+    not already state (两 = 2, 1-3 = 1、2、3). Subject, title, book, unit or file name alone never link; the publisher only
+    says who reminded. Dates are checked where resolved (_select) and on save; attached files only on save (same bytes).
+    """
+    if brief.get('change')!='same': return
+    def uncertain(reason='模型认为是同一事项的再次提醒，但原事项或提醒原文尚不能核对为同一件；原事项和提醒原文都保留。'):
+        brief.update(state='review',reason=reason);brief.pop('target_basis',None);brief.pop('input_basis',None);brief.pop('same_attachments',None)
+    if brief.get('state')!='ready': brief.pop('target_basis',None);brief.pop('input_basis',None);return
+    selected=next((t for t in targets if t['id']==brief.get('target_id')),None)
+    if not selected or not selected.get('append_basis') or not selected.get('same_complete',selected.get('targets_complete')) or selected.get('goal_truncated'):
+        uncertain();return
+    if not _school_same_object('\n'.join(e.get('text','') for e in evidence),selected['title']+'\n'+selected['goal']):
+        uncertain('提醒与原事项没有共同的具体对象，不能认定为同一事项；原事项和提醒原文都保留。');return
+    if selected.get('status') in ('不参加','不适用'):
+        uncertain('原事项已标为不参加或不适用，再次提醒是否改变决定待家长核对；原决定和提醒原文都保留。');return
+    texts=[];attached=False
+    for entry in evidence:
+        if (not entry.get('ref','').startswith('message:') or entry.get('kind','text')!='text' or entry.get('unread') or entry.get('content_incomplete')
+                or not entry.get('text','').strip()):
+            uncertain('提醒含未读全的内容，可能带来新要求；原事项和提醒原文都保留。');return
+        attached=attached or bool(entry.get('attachments'));texts.append(entry['text'])
+    text='\n'.join(texts);facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
+    if _school_same_changes(text,facts) or brief.get('purpose') not in ('learning','admin'):
+        uncertain('提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。');return
+    old=_school_counts(facts)
+    for value in (text,brief['title']+' '+brief['goal']):
+        if (not _school_named_objects(value).issubset(_school_named_objects(facts))
+                or any(not any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(value))):
+            uncertain('提醒中的单元、篇目、题号、页码或次数与原事项不一致，可能是另一项；原事项和提醒原文都保留。');return
+    spoken,saved=_school_same_spoken(text),_school_same_spoken(facts)
+    if any(re.search(group,spoken) and not re.search(group,saved) for group in _SCHOOL_SAME_STEPS):
+        # Same object, counts and dates, plus a clear step the task does not state: a supplement of this one affair. It is
+        # confirmed onto the same task through the existing append review (version checked), never a second affair or dropped.
+        brief.update(change='append',state='review',reason='同一事项的再次提醒另有补充要求，确认后补入原事项；原要求、安排、反馈和提醒原文都保留。')
+        brief.pop('target_basis',None);brief.pop('input_basis',None);brief.pop('same_attachments',None);return
+    # Ambiguity proof within the complete evidence scope: another listed task (not a verified member of this affair) that
+    # fits the same reminder on the same date leaves the choice to the parent.
+    group={selected['id']}|({selected['same_as']} if selected.get('same_as') else set())
+    if any(t['id'] not in group and not (t.get('same_as') and t['same_as'] in group) and (t.get('due') or '')==(selected.get('due') or '') and _school_same_peer(text,t) for t in targets):
+        uncertain('提醒同样符合另一项已保存事项，不能确定是哪一件；原事项和提醒原文都保留。');return
+    brief['target_basis']=copy.deepcopy(selected.get('same_basis') or selected['append_basis'])
+    brief['input_basis']=_school_message_basis(evidence)
+    if attached: brief['same_attachments']=True
+
+
+def _school_same_peer(text, target):
+    """Another listed task the same reminder also fits (object, named objects, counts, no change words)."""
+    facts=target['title']+'\n'+target['goal']+'\n'+str(target.get('facts') or '');old=_school_counts(facts)
+    return (target.get('status') not in ('不参加','不适用') and _school_same_object(text,target['title']+'\n'+target['goal'])
+            and not _school_same_changes(text,facts) and _school_named_objects(text)<=_school_named_objects(facts)
+            and all(any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(text)))
+
+
+def _school_same_object(text, facts):
+    """A shared concrete object: a named object (Unit 3, 第5课, 《…》) or four consecutive characters of the own words."""
+    if _school_named_objects(text) & _school_named_objects(facts): return True
+    def own(value): return re.sub(r'[^\u4e00-\u9fffa-z0-9]','',_SCHOOL_DATE_MENTION.sub(' ',_SCHOOL_SAME_LABEL.sub(' ',value.lower())))
+    text,facts=own(text),own(facts)
+    return any(text[i:i+4] in facts for i in range(len(text)-3))
+
+
+def _upload_digest(store, upload):
+    import hashlib
+    try: return hashlib.sha256((Path(store.data)/'uploads'/upload).read_bytes()).hexdigest()
+    except (OSError,ValueError,TypeError): return ''
+
+
+def _school_same_material(store, c, row, target):
+    """Files sent with a reminder: each must be the same bytes as an already-read original of the target's own item.
+
+    New, different or unread material is never certified by the relation; its row keeps its own reading state.
+    """
+    def files(item):
+        found=[]
+        for quote in json.loads(item['evidence']):
+            source_id,message_id=quote['ref'][8:].rsplit(':',1)
+            found+=[(source_id,message_id,r['upload_id']) for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source_id,message_id))]
+        return found
+    sent=files(row)
+    if not sent: return ''
+    canonical=c.execute('SELECT * FROM agent_items WHERE id=?',(target['append_basis']['canonical_id'],)).fetchone()
+    read=set()
+    for source_id,message_id,upload in files(canonical) if canonical else []:
+        source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
+        if family_media.school_evidence(store,c,source,message) is None and family_pdf_material.complete_evidence(store,c,source,message) is None: continue
+        read.add(_upload_digest(store,upload))
+    read.discard('')
+    def own_read(source_id,message_id):
+        # Already read on its own (existing material/PDF receipt): its own reading stays with its own message.
+        source,message=store._message_context(c,dict(child_id=row['child_id'],source_id=source_id,message_id=message_id))
+        return family_media.school_evidence(store,c,source,message) is not None or family_pdf_material.complete_evidence(store,c,source,message) is not None
+    if any(_upload_digest(store,upload) not in read and not own_read(source_id,message_id) for source_id,message_id,upload in sent):
+        return '提醒附带的资料是新的、不同版本或原资料尚未读清，未自动归入原事项；原事项和提醒原文都保留。'
+    return ''
+
+
+def _reconcile_school_same(app, store, now, budget):
+    """Already saved repeats of one affair (S07), revisited by the ordinary tick within its existing call budget.
+
+    At most one bounded re-reading per tick, through the same school selection call: a later saved task's own originals
+    against this child's other listed tasks (the same ≤24 window). Only a later task the program cannot already tell apart
+    from an earlier one is asked, once per unchanged basis (job fingerprint). A verified same relation is kept on the later
+    task's own item (school_same_task) and only groups the shared day list; no task, record, status, focus or original moves.
+    """
+    used=failed=0
+    if budget<1: return dict(used=0,failed=0)
+    with store._db() as c: children=[p['id'] for p in app.profiles(c)]
+    for child_id in children:
+        chosen=None
+        with store._db() as c:
+            targets=school_targets(app,store,child_id,connection=c,limit=None)
+            rows={t['id']:dict(c.execute('SELECT rowid AS seq,* FROM agent_items WHERE id=?',(t['append_basis']['canonical_id'],)).fetchone()) for t in targets}
+            # Earlier means saved earlier (same-second saves keep their insertion order), never a smaller random id.
+            order=lambda t:(rows[t['id']]['created'],rows[t['id']]['seq'])
+            for later in sorted(targets,key=order):
+                row=rows[later['id']];plan=json.loads(row['plan'])
+                if plan.get('school_same_task') or later['status'] in ('不参加','不适用'): continue
+                try: evidence,_=_school_material(store,c,row)
+                except AgentError: continue
+                evidence=[dict(e,publisher=_publisher(e['ref'][8:].rsplit(':',1)[0],e),content_incomplete=bool(e.get('unread'))) for e in evidence]
+                candidates=[];refs={e['ref'] for e in evidence};said='\n'.join(e.get('text','') for e in evidence)
+                scope={t['id']:t for t in _school_scope(targets,[said],None)}
+                for target in (scope[t['id']] for t in targets):
+                    if target['id']==later['id'] or order(target)>=order(later) or json.loads(rows[target['id']]['plan']).get('school_same_task'): continue
+                    # Outcomes split from one notice are separate by definition; otherwise the model is asked only about a
+                    # task naming the same concrete object (never because nothing contradicts it).
+                    if refs & {e['ref'] for e in json.loads(rows[target['id']]['evidence'])}: continue
+                    # Own words only: other items of a multi-item original never make a shared object.
+                    if not _school_same_object(said,target['title']+'\n'+target['goal']): continue
+                    trial=dict(change='same',target_id=target['id'],state='ready',title=later['title'],goal=later['goal'],reason='',
+                               purpose=plan.get('school_task',{}).get('purpose',''))
+                    _school_same_brief(trial,evidence,[target])
+                    # A saved later task without a date (due '') that names only the target's own date words; a day recorded as
+                    # not adoptable (changed, conflicting, borrowed) stays unknown. The fresh reading must resolve the same date.
+                    named=[w for e in evidence for w in _SCHOOL_DATE_MENTION.findall(e.get('text',''))]
+                    words=bool(named) and all(w in target['title']+' '+target['goal']+' '+str(target.get('facts') or '') for w in named)
+                    # The same material proof as a fresh reminder: an unread or different file is never taken as understood.
+                    if trial['state']=='ready' and target.get('due') and not _school_same_material(store,c,row,target) and (not _school_same_due(row['due'],target,evidence)
+                            or not row['due'] and not plan.get('school_unadopted_due') and target.get('due') and words
+                            and not _school_same_due(target['due'],target,evidence)):
+                        candidates.append(target)
+                if not candidates: continue
+                key='school-same:'+row['id']
+                value=[row['id'],later['append_basis']['fingerprint'],sorted([t['id'],t['append_basis']['fingerprint']] for t in candidates),SCHOOL_TASK_POLICY]
+                if store._job(key,value,now,model=True,claim=False):
+                    chosen=(later,row,evidence,candidates,key,value,_school_scope(targets,[said]));break
+        if chosen is None: continue
+        later,row,evidence,candidates,key,value,targets=chosen
+        fp=store._job(key,value,now,model=True)
+        if not fp: continue
+        try:
+            items=_select('school',evidence,as_of=now.date().isoformat(),data_path=store.data,school_goals=[],
+                          school_tasks=[t for t in targets if t['id']!=later['id']])
+            used+=1
+            found=[i for i in items if (i.get('plan') or {}).get('school_task',{}).get('change')=='same' and i['plan']['school_task'].get('state')=='ready'
+                   and i['plan']['school_task'].get('target_basis') and i['plan']['school_task'].get('target_id') in {t['id'] for t in candidates}]
+            brief=found[0]['plan']['school_task'] if len({i['plan']['school_task']['target_id'] for i in found})==1 else None
+            with store._db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                if brief:
+                    current={t['id']:t for t in school_targets(app,store,child_id,connection=c,limit=None)}
+                    saved=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+                    target=current.get(brief['target_id']);mine=current.get(later['id'])
+                    if (saved is None or saved['updated']!=row['updated'] or saved['plan']!=row['plan'] or not target or not mine
+                            or target.get('same_basis')!=brief['target_basis'] or mine['append_basis']!=later['append_basis']):
+                        raise AgentError('原事项在整理期间已变化，同一事项关系未保存',409)
+                    if _school_same_material(store,c,saved,target): raise AgentError('同一事项的资料在整理期间有未读清或不同的文件，未归并；两项原记录保留',409)
+                    plan=json.loads(saved['plan'])
+                    plan['school_same_task']=dict(task_id=target['id'],canonical_id=brief['target_basis']['canonical_id'],target_basis=brief['target_basis'],
+                        member_basis=later['append_basis'],input_basis=brief['input_basis'],judged_at=now.isoformat(),
+                        receipt=found[0]['plan'].get('school_selection_receipt',{}))
+                    c.execute('UPDATE agent_items SET plan=? WHERE id=?',(_json(plan),row['id']))
+                c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
+        except (family_llm.LLMDraftError,AgentError,ValueError) as error:
+            store._fail(key,now,fingerprint=fp,reason=error);failed+=1
+        break
+    return dict(used=used,failed=failed)
+
+
+def apply_school_same(app, store, ident, expected):
+    """Link a verified reminder of the same affair to its saved task: provenance only, nothing of the task is rewritten."""
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        row=c.execute("SELECT * FROM agent_items WHERE id=? AND kind='school'",(ident,)).fetchone()
+        if row is None: raise AgentError('学校通知不存在',404)
+        plan=json.loads(row['plan']);brief=plan.get('school_task',{});receipt=plan.get('school_same_receipt')
+        if receipt and row['state']=='accepted' and row['task_id']==receipt['task_id']:
+            return dict(ok=True,state='accepted',task_id=receipt['task_id'],deduplicated=True,replayed=True)
+        if row['state']!='pending' or row['updated']!=expected: raise AgentError('通知已在别处处理，请读取最新记录',409)
+        if brief.get('change')!='same' or brief.get('state')!='ready' or brief.get('policy')!=SCHOOL_TASK_POLICY or not brief.get('target_basis'):
+            raise AgentError('同一事项关系尚不能核对，提醒原文保留待整理',409)
+        if not _school_active(store,c,row): raise AgentError('Agent或原消息来源已停用，提醒未自动关联',409,'school_source_paused')
+        _check_school_page(store,c,row,accepting=True)
+        original,_=_school_material(store,c,row);checked=copy.deepcopy(brief)
+        targets=school_targets(app,store,row['child_id'],connection=c,evidence=[e.get('text','') for e in original])
+        current=next((t for t in targets if t['id']==brief.get('target_id')),None)
+        _school_same_brief(checked,original,targets)
+        if (current is None or current.get('same_basis')!=brief['target_basis'] or checked.get('state')!='ready'
+                or checked.get('target_basis')!=brief['target_basis'] or checked.get('input_basis')!=brief.get('input_basis')
+                or _school_same_due(row['due'],current,original)):
+            raise AgentError('原事项已有新的安排、反馈或来源变化，提醒未自动关联；原事项和提醒原文都保留。',409)
+        problem=_school_same_material(store,c,row,current)
+        if problem: raise AgentError(problem,409)
+        task=c.execute('SELECT * FROM manual_tasks WHERE id=?',(current['id'],)).fetchone()
+        added=[e for e in json.loads(row['evidence']) if e['ref']+'\n' not in task['source']+'\n']
+        if added: c.execute('UPDATE manual_tasks SET source=? WHERE id=?',(task['source']+'\n\n'+'\n\n'.join(e['ref']+'\n'+e['text'] for e in added),task['id']))
+        # The reminder row keeps its own channel, publisher, time and original; the canonical item and its scope are untouched.
+        plan.update(school_duplicate_of=brief['target_basis']['canonical_id'],
+                    school_same_receipt=dict(task_id=task['id'],target_basis=brief['target_basis'],input_basis=brief['input_basis']))
+        for key in ('school_learning','school_goal_id'): plan.pop(key,None)
+        c.execute("UPDATE agent_items SET state='accepted',task_id=?,plan=?,updated=? WHERE id=?",(task['id'],_json(plan),_now().isoformat(),row['id']))
+        return dict(ok=True,state='accepted',task_id=task['id'],deduplicated=True,replayed=False)
 
 
 def _school_append_request(row, brief):
@@ -4677,7 +4982,7 @@ def _recheck_school_history(app,store,now,budget,scopes):
             profile=next(p for p in app.profiles() if p['id']==source['child_id'])
             used=1
             proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
-                school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id']),school_existing=known,
+                school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],evidence=[e['text'] for e in evidence]),school_existing=known,
                 school_rewrite=rewrite,school_revisable=revisable)
             if origin and origin[2] in ('audit','revision'):
                 # A dismissed outcome whose action cannot be located is never offered again under a new item.
@@ -6224,7 +6529,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     native_assigned=set();native_spans=set()
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': [{k:v for k,v in e.items() if k!='message_order'} for e in evidence]}
     # The program's late-standard proof is checked here, not shown to the model: its input stays unchanged.
-    if routing: content.update(learning_goals=school_goals,school_tasks=[{k:v for k,v in t.items() if k!='shared_standard'} for t in school_tasks])
+    if routing: content.update(learning_goals=school_goals,school_tasks=[{k:v for k,v in t.items() if k not in ('shared_standard','facts','same_basis','same_complete','same_as')} for t in school_tasks])
     if native_actions:content['required_native_actions']=[_school_native_view(a) for a in native_actions]
     schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
     historical=routing and school_existing is not None
@@ -6448,6 +6753,14 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if (brief.get('change')=='append' and brief['state']=='ready' and brief.get('target_basis')
                     and brief['target_basis']['due'] and brief['target_basis']['due']<as_of):
                 brief.update(state='review',reason='原事项截止已过，是否仍需办理补充要求待核对；原要求、安排和反馈保留。')
+            if (uncertain_due and brief.get('change')=='same' and brief['state']=='ready' and brief.get('target_basis') and target and not relative
+                    and date(proposed_due) and proposed_due==brief['target_basis']['due']
+                    and not any(deadlines(e['text'],sent_day(e.get('time',''))) for e in cited_evidence)
+                    and all(word in target['title']+' '+target['goal'] for e in cited_evidence for word in _SCHOOL_DATE_MENTION.findall(e['text']))):
+                # The reminder repeats the verified task's own date words (周五 → 周五) and the model its date: no new deadline.
+                uncertain_due=False;item['due']=proposed_due
+            if brief.get('change')=='same' and brief['state']=='ready' and (why:=_school_same_due(item['due'],target or {},cited_evidence)):
+                brief.update(state='review',reason=why);brief.pop('target_basis',None);brief.pop('input_basis',None)
             # A day this item's own clause does not state but a proven scope of its own original gives: its basis is kept.
             if (not historical and not native_action and dated_quote and item['due'] and not clause
                     and (scope:=_school_scope_day(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:]))
@@ -7632,6 +7945,8 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
         try:
             if brief.get('change')=='append':
                 apply_school_change(app,store,_school_append_request(row,brief),school_auto=True)
+            elif brief.get('change')=='same':
+                apply_school_same(app,store,row['id'],row['updated'])
             else:
                 result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
                 created+=not result.get('deduplicated',False)
@@ -7640,8 +7955,8 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
                 expected=_json(plan);brief.update(state='review',reason=str(error));plan['school_task']=brief
                 with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected))
                 return created,failed
-            if isinstance(error,AgentError) and error.status==409 and (brief.get('change')!='append' or error.code=='school_source_paused'): return created,failed
-            expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change')=='append' else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
+            if isinstance(error,AgentError) and error.status==409 and (brief.get('change') not in ('append','same') or error.code=='school_source_paused'): return created,failed
+            expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change') in ('append','same') else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
             with store._db() as c:
                 changed=c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected)).rowcount
             failed+=changed
@@ -7832,7 +8147,7 @@ def _refresh_school(app, store, now, budget):
             targets=school_targets(app,store,row['child_id'])
             from family_goals import Store as Goals
             school_goals=Goals(app,store).school_candidates(row['child_id'])
-            context.update(school_tasks=targets,learning_goals=school_goals)
+            context.update(school_tasks=[{k:v for k,v in t.items() if k not in ('facts','same_basis','same_complete','same_as')} for t in targets],learning_goals=school_goals)
             if saved_reread:_school_recovery_inherit(store,key,row['job_id'],row['child_id'])
             fp=store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread))
             if not fp: continue
@@ -8290,7 +8605,7 @@ def run_once(app, now=None):
                     budget -= 1
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
-                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True),
+                                            school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True,evidence=[e['text'] for e in evidence]),
                                             school_later=later)
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
@@ -8314,6 +8629,8 @@ def run_once(app, now=None):
                 by_id = {row['id']: row for row in records}
             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
+            # Fresh batches above go first; saved repeats of one affair are revisited only with a call to spare.
+            same=_reconcile_school_same(app,store,now,min(1,max(0,budget-1)));budget-=same['used'];processed+=same['used'];failed+=same['failed']
             created += goals.route_school()
             progress = goals.run(now, budget)
             budget -= progress['used']; created += progress['created']; processed += progress['used']; failed += progress['failed']

@@ -192,8 +192,11 @@ function groveCheckHTML(r){
  const t=r.task_id&&data.tasks.find(t=>t.id===r.task_id);
  if(r.pending_review)return '<span class="grove-mark" role="img" aria-label="学校消息待核对，确认后才算正式事项">?</span>';
  if(!t)return `<span class="grove-mark" aria-hidden="true">${r.closed?'✓':''}</span>`;
- const done=status(t)==='已完成',pending=pendingTask?.id===t.id;
- if(taskClosed(t)&&!done)return '<span class="grove-mark" aria-hidden="true">−</span>';
+ // One open same affair whose copies differ in completion (server same_affair) is never shown completed; checking it
+ // confirms only the still-open copies (shared change handler), already closed copies stay as they are.
+ const uncertain=r.same_affair?.state==='uncertain'&&!r.closed;
+ const done=!uncertain&&status(t)==='已完成',pending=pendingTask?.id===t.id;
+ if(!uncertain&&taskClosed(t)&&!done)return '<span class="grove-mark" aria-hidden="true">−</span>';
  if(t.agenda?.category==='homework'&&t.homework_report?.needs_review)return '<span class="grove-mark" role="img" aria-label="作业要求待核对，暂不能确认完成">?</span>';
  return `<label class="checkhit grove-check"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`;
 }
@@ -203,6 +206,7 @@ function groveRowHTML(r){
  return `<article class="grove-row${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
   +`${groveCheckHTML(r)}<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
   +`<span class="grove-title">${esc(r.title)}</span><span class="grove-lines">${r.lines?.length?esc(r.lines.join('；')):'<em>完成标准未提供，待补充</em>'}</span>`
+  +`${r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:''}`
   +`<span class="grove-chips">${groveChipsHTML(r)}</span>${meta?`<span class="grove-meta">${esc(meta)}</span>`:''}</button></article>`;
 }
 function groveMaterialHTML(f){
@@ -238,19 +242,21 @@ function groveDetailHTML(r){
  const head=extra=>`<div class="grove-head"><span class="grove-tag">${esc(r.subject)}</span>${groveSource(r)?`<span class="grove-source">${esc(groveSource(r))} 发布</span>`:''}${extra||''}</div><h2 class="grove-h">${esc(r.title)}</h2>`;
  const item=taskInboxItems().find(x=>x.id===r.id),t=r.task_id&&data.tasks.find(t=>t.id===r.task_id);
  if(!t)return back+head()+(item?agendaItemHTML(item):'<p class="small muted">此条尚未载入详情，请刷新记录。</p>');
- const open=!taskClosed(t),done=status(t)==='已完成',homework=t.agenda?.category==='homework',reportPending=open&&homework&&t.homework_report?.needs_review;
- const originals=schoolOriginalButtons(String(t.source||'').split('\n').filter(x=>x.startsWith('message:')),data.children.find(c=>c.name===t.child)?.id,'看原消息',t.agenda?.publications,t.school_origin?t.id:'');
+ const uncertain=r.same_affair?.state==='uncertain'&&!r.closed;
+ const open=uncertain||!taskClosed(t),done=!uncertain&&status(t)==='已完成',homework=t.agenda?.category==='homework',reportPending=open&&homework&&t.homework_report?.needs_review;
+ const group=typeof sameAffairTasks==='function'?sameAffairTasks(t):[t],owned=group.flatMap(m=>String(m.source||'').split('\n').filter(x=>x.startsWith('message:')).map(x=>[x,m.school_origin?m.id:'']));const originals=schoolOriginalButtons(owned.map(x=>x[0]),data.children.find(c=>c.name===t.child)?.id,'看原消息',group.flatMap(m=>m.agenda?.publications||[]),Object.fromEntries([...owned].reverse()));
  const facts=(r.facts||[]).map(f=>`<div class="grove-fact${f.state==='next_morning'||f.state==='overdue'?' is-coral':''}" data-fact="${esc(f.role)}"><span>${esc(f.label)}</span><strong>${esc(f.known?(f.today?'今天 ':'')+f.value:'日期未写明，不猜')}</strong>${f.state==='next_morning'?'<em>明天</em>':f.state==='overdue'?'<em>已逾期</em>':''}</div>`).join('');
  const history=[...(r.records||[]).map(x=>`<li data-grove-record="${esc(x.id)}"><span class="grove-chip">${esc(x.followup_kind||'反馈')}</span> <span class="small muted">${esc(String(x.created||'').slice(0,16).replace('T',' '))}${x.attachments?.length?` · 照片${x.attachments.length}份`:''}</span>${x.retry?retryViewHTML(x):`<p>${esc(x.note||x.title)}</p>`}</li>`),
   ...(r.wrong||[]).map(w=>`<li data-grove-wrong="${esc(w.id)}"><span class="grove-chip${w.state==='待订正'?' is-coral':' is-leaf'}">${esc(w.state||'待订正')}</span> <span>错题：${esc(w.title)}</span></li>`)].join('');
  const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open?`<button class="primary" data-task="${esc(t.id)}">${homework?'交作答照片 / 写反馈':'写反馈'}</button>`:`<button data-task="${esc(t.id)}">查看反馈</button>`;
  const more=(open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button><button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:'')
   +(open&&homework?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:'')+`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`
-  +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
+  +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(!uncertain&&taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
  const standards=r.lines?.length?`<ul class="grove-standards">${r.lines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
  return back+head(originals?`<span class="grove-originals">${originals}</span>`:'')
   +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
   +`<section class="grove-card"><h3>要做什么与完成标准</h3>${standards}${r.complete_words?`<p class="small muted">完成要求：${esc(r.complete_words)}</p>`:''}${!t.agenda?.due_on&&t.due&&t.due!=='无明确截止'?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}</section>`
+  +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
   +`<div class="grove-facts">${facts}</div>`
   +(homework?`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section><div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
   +`<section class="grove-card"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted">还没有反馈。照片可以不交，只写几句文字也行；没有反馈不等于没做。</p>'}<div class="grove-actions">${primary}</div></section>`
