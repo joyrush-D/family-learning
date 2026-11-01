@@ -5301,7 +5301,10 @@ def _school_untouched_review(c,row,old_key,*,linking=False):
     except (ValueError,TypeError):return False
     if (row['kind']!='school' or row['job_id']!=old_key or row['state']!='pending' or row['task_id'] or row['record_id'] is not None
             or row['care_id'] or plan.get('school_task',{}).get('state')!='review'):return False
-    if not plan.get('school_generated_snapshot') or plan['school_generated_snapshot']!=_school_generated_snapshot(row):return False
+    if not plan.get('school_generated_snapshot'):return False
+    if plan['school_generated_snapshot']!=_school_generated_snapshot(row):
+        # The Agent's own learning routing (school_goal_id) is set after the snapshot; a link reads every other byte unchanged.
+        if not linking or plan['school_generated_snapshot']!=_school_generated_snapshot(dict(row,plan={k:v for k,v in plan.items() if k!='school_goal_id'})):return False
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy',
                                  'school_saved_reread','school_batch_reread','school_split','school_split_from')+(() if linking else ('school_learning',))):return False
