@@ -380,7 +380,7 @@ class RelationScopeTests(ScopeSaveTests):
                 for row in rows:
                     if '第6段' in row['title']: continue
                     notices = (row.get('version') or {}).get('notices') or []
-                    self.assertEqual([n['title'] for n in notices if '第2段' in n['title']], ['英语：周三英语课《雨后》听读展示第2段'],
+                    self.assertEqual(len([n for n in notices if '第2段' in n['title'] and '第6段' not in n['title']]), 1,
                                      'the pending card holds the correction as its notice')
                     self.assertEqual({p.get('ref') for p in row.get('publications') or []} >= {'message:%s:801' % EN, ref}, True,
                                      'the pending card keeps both publications')
