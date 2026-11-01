@@ -213,6 +213,7 @@ class P1aRequirementUnitTests(unittest.TestCase):
         cases = [(chinese, said + '此处仅转发原要求，请不要理解为另布置第二项。', 'ready'),
                  (chinese, said + '这里只是转达前面语文老师的通知，并非另外一项任务。', 'ready'),
                  (slip, back + '和微信群王老师发的那份是一回事。', 'ready'),
+                 (chinese, said + '和QQ群语文老师那条是同一件事，记得请家长明天签名。', 'ready'),
                  (chinese, said + '同原群那一份任务须注明朗读时长。', 'review'),
                  (chinese, said + '同原群那一份任务状态为“撤回”。', 'review'),
                  (chinese, said + '和QQ群语文老师那条是同一件事，务必用红笔圈出生字。', 'review'),

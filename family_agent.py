@@ -2561,7 +2561,7 @@ def _school_relation_clause(clause):
 # requirement or completion standard unless each of their content characters is already the task's own.
 _SCHOOL_SAME_REFERS=re.compile(r'(?:同一|同样一|那一?)(?:件|份|张|条|项)'+_SCHOOL_RELATION_NOUN+r'?')
 _SCHOOL_SAME_MODAL=re.compile(r'(?<![不无毋没])(?:必须|务必|一定要|须|需要|需|要求|应当|应该|记得|注意)')
-_SCHOOL_SAME_FILLER=re.compile(r'[把将来去上下好的了地得都也再并和与及给在一下]')
+_SCHOOL_SAME_FILLER=re.compile(r'[把将来去上下好的了地得都也再并和与及给在一下请]')
 
 
 def _school_same_unstated(text, facts):
@@ -2571,7 +2571,9 @@ def _school_same_unstated(text, facts):
         c=re.sub(r'\s+','',clause)
         tails=[c[m.end():] for m in _SCHOOL_SAME_REFERS.finditer(c)]+[c[m.end():] for m in _SCHOOL_SAME_MODAL.finditer(c)]
         for tail in tails:
-            words=_SCHOOL_SAME_FILLER.sub('',''.join(re.findall(r'[一-鿿]',tail)))
+            # A step word (签名 = 签字) is the steps guard's, a new one the append review's; a day is the date guards'.
+            for group in _SCHOOL_SAME_STEPS:tail=re.sub(group,'',tail)
+            words=_SCHOOL_SAME_FILLER.sub('',''.join(re.findall(r'[一-鿿]',_SCHOOL_DATE_MENTION.sub('',tail))))
             if any(ch not in own for ch in words):return True
     return False
 
