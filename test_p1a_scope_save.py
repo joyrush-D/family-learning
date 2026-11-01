@@ -712,6 +712,25 @@ class CorrectionUnitTests(ScopeSaveTests):
             en, = self.row(view, ids['跟读'])
             self.assertEqual((en.get('version') or {}).get('state'), 'latest', en.get('version'))
 
+    def test_a_whole_message_quote_still_leaves_the_lesson_its_own_item(self):
+        """Root run9 quote-span variant: the reply quotes the whole message (home and lesson) as its title_quote."""
+        r3 = 'message:%s:103' % EN
+        text = '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。'
+        self.batch(EN, [msg('103', text, '16:20', **self.EN_T)], lambda targets, pending: [
+            proposal(r3, text, '英语：跟读Unit 9第1—6个单词', '今晚听音频跟读Unit 9第1到6个单词，每词三遍。\n只做口头跟读，不用抄写。\n周五课堂听写，范围由老师明天再说。')])
+        home = next(i for i in self.items_for(r3) if '跟读' in i['title'])
+        if home['state'] == 'pending':
+            self.store.act(dict(id=home['id'], action='accept')); home = next(i for i in self.items_for(r3) if '跟读' in i['title'])
+        self.assertNotIn('听写', self.task(home['task_id'])['action'])
+        self.assertNotEqual(self.task(home['task_id'])['agenda']['due_on'], FRI, 'the home item never takes the lesson day')
+        lesson, = [i for i in self.items_for(r3) if '听写' in i['title']]
+        self.assertEqual((lesson['state'], lesson['due']), ('pending', FRI))
+        self.assertEqual(lesson['plan']['school_task']['reason'], '老师尚未说明课堂考查范围，等待补充。')
+        for view in self.views(FRI):
+            cards = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
+            self.assertEqual(len(cards), 1)
+            self.assertNotIn('Unit 9', '\n'.join(cards[0]['lines']))
+
     def test_a_move_notice_adding_its_own_requirement_stays_under_review(self):
         en_task, sci_task = self.originals()
         r8 = 'message:%s:108' % EN
