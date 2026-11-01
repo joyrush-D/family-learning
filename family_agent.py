@@ -5531,11 +5531,30 @@ def _recheck_school_history(app,store,now,budget,scopes):
     return dict(used=used,failed=failed,created=created)
 
 
+def _school_relation_mark(old_key):
+    return 'school-relation-scope:'+_hash([old_key])[:40]
+
+
+def _school_relation_boundary(store):
+    """Fix once, before the first permitted round's intake of this release, which done batches predate the selection's
+    pending items: only those may be read again for a relation (_recover_school_pending_relations). A batch saved later was
+    already selected with them and is never added; no model call happens here."""
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        if c.execute("SELECT 1 FROM agent_jobs WHERE id='school-relation-boundary'").fetchone():return
+        marked=[r['id'] for r in c.execute("SELECT id,fingerprint FROM agent_jobs WHERE id LIKE 'messages:%' AND done=1 ORDER BY id").fetchall()]
+        for old_key in marked:
+            fingerprint=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(old_key,)).fetchone()['fingerprint']
+            c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',(_school_relation_mark(old_key),fingerprint))
+        c.execute("INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES('school-relation-boundary',?,1)",(_hash(marked),))
+
+
 def _recover_school_pending_relations(app,store,config,now,budget):
     """Once per affected old batch, read it again with this child's earlier pending school items (Root run6, r300 state).
 
     A batch saved while its selection saw no pending item (or its reply named none) can hold a later notice of an earlier
-    pending item as a card of its own. Only a done batch of one enabled source and one child, every row of it still an
+    pending item as a card of its own. Only a done batch from before this release (_school_relation_boundary) of one
+    enabled source and one child, every row of it still an
     untouched pending review (_school_untouched_review) linked to nothing, with an earlier pending item of that child, is
     read once more by the ordinary selection with those items (school_pending_targets; the batch's own rows and later items
     left out, so no link points to itself or forward). The one write is the program's own proof from that reading
@@ -5552,6 +5571,8 @@ def _recover_school_pending_relations(app,store,config,now,budget):
         for old_key,rows in groups.items():
             job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
             if not job or not job['done']:continue
+            mark=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_relation_mark(old_key),)).fetchone()
+            if not mark or mark['fingerprint']!=job['fingerprint']:continue
             try:
                 if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or not _school_untouched_review(c,r,old_key) for r in rows):continue
                 refs=sorted({e['ref'] for r in rows for e in json.loads(r['evidence'])})
@@ -9214,6 +9235,7 @@ def run_once(app, now=None):
             recovered=_recover_school_ack_originals(store,config,now)
             created+=recovered['created'];failed+=recovered['failed']
             _school_audit_boundary(store)  # before this round's intake; fixed once, zero model calls
+            _school_relation_boundary(store)
             history_scopes=_history_scopes(store,config,now)
             # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
             history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
