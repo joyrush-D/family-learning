@@ -289,6 +289,75 @@ class P1aRequirementUnitTests(unittest.TestCase):
         self.assertEqual(row['version']['state'], 'review', row['version'])
         self.assertIn('新要求的归纳与通知原文对不上', row['version']['reasons'])
         self.assertTrue(any('三遍' in l for l in row['lines']), row['lines'])
+    def same_trial(self, original, text, purpose='learning'):
+        target = dict(id='T1', title=original.split('：')[0], goal=original, facts='', append_basis={'basis': 1}, same_complete=True,
+                      targets_complete=True, status='', due='2026-11-04', same_basis=None)
+        message = dict(id='990', sender_id='qa-head', sender='虚构老师', text=text, time='2026-11-03T16:51:00+08:00', kind='text', unread=False)
+        evidence = [dict(message, ref='message:fictional-wechat-a:990', publisher='虚构老师', content_incomplete=False)]
+        trial = dict(change='same', target_id='T1', state='ready', title='提醒', goal=text, reason='', purpose=purpose)
+        agent._school_same_brief(trial, evidence, [target])
+        return trial
+
+    def test_p1a3_requirement_unit_type_matrix(self):
+        # Developer's own semantic type matrix (Root keeps its held-out variants). A relation unit in any wording (a speech act on
+        # the message, an identity, a denied other item) holds no requirement and its ordinal counts nothing; the same characters
+        # bound to another actor, object, count or day are another requirement; real changes, standards and new rounds stay.
+        original = '语文：今晚孩子朗读《山间》两遍并抄写《春晓》一遍，家长签字，明天交。'
+        cases = [(original + '这条只是把老师原话再发一遍，不是第二份作业。', 'ready'),
+                 (original + '这只是转一下，别当成第二份。', 'ready'),
+                 (original + '重复一下，并非另一项任务。', 'ready'),
+                 ('语文：《山间》今晚读两遍，《春晓》抄写一遍，家长签名，明天交。', 'ready'),
+                 (original, 'ready'),
+                 ('语文：今晚家长朗读《山间》两遍并抄写《春晓》一遍，孩子签字，明天交。', 'review'),
+                 ('语文：今晚孩子朗读《春晓》两遍并抄写《山间》一遍，家长签字，明天交。', 'review'),
+                 ('语文：今晚孩子朗读《山间》一遍并抄写《春晓》两遍，家长签字，明天交。', 'review'),
+                 ('语文：明天孩子朗读《山间》两遍并抄写《春晓》一遍，家长签字，今晚交。', 'review'),
+                 (original + '这条只是再发一遍，不是第二份，是第三份。', 'review'),
+                 (original + '提醒孩子再读一遍。', 'review'),
+                 (original + '同原群那一份任务须注明朗读时长。', 'review'),
+                 (original + '重复一下，这份作业取消。', 'review')]
+        for text, expected in cases:
+            trial = self.same_trial(original, text)
+            self.assertEqual(trial['state'], expected, (text, trial.get('reason')))
+        # Root's controls: one actor's step given to the other is no repeat, whatever the shared characters.
+        for old, new in (('语文：孩子须朗读两遍《山间》，家长须检查。', '语文：家长须朗读两遍《山间》，孩子须检查。'),
+                         ('语文：今晚孩子写《生字表》第3页，家长签字，明天交。', '语文：今晚家长写《生字表》第3页，孩子签字，明天交。')):
+            self.assertEqual(self.same_trial(old, old)['state'], 'ready')
+            trial = self.same_trial(old, new)
+            self.assertEqual(trial['state'], 'review', new); self.assertIn('由谁做哪一步', trial['reason'])
+        self.assertEqual(agent._school_relation_body(original + '这只是转一下，别当成第二份。'), (original, ['这只是转一下', '别当成第二份']))
+
+    def test_p1a3_double_negation_is_read_affirmative_by_every_time_role_reader(self):
+        import family_agenda
+        sent = '2026-11-03T16:51:00+08:00'
+        for plain, double in (('今晚需要提交阅读卡，明早带到学校。', '今晚不是不需要提交阅读卡，明早带到学校。'),
+                              ('今晚完成阅读卡，明天交给老师。', '今晚不能不完成阅读卡，明天交给老师。'),
+                              ('今晚读课文，明天早读检查。', '今晚不是不用读课文，明天早读检查。')):
+            roles = agent._school_role_days(double, [dict(text=double, time=sent)], [])
+            self.assertEqual(roles, ({'2026-11-03'}, '2026-11-04'), double)
+            self.assertEqual(roles, agent._school_role_days(plain, [dict(text=plain, time=sent)], []), plain)
+            self.assertEqual(family_agenda._action_deadlines(double, '2026-11-03'), family_agenda._action_deadlines(plain, '2026-11-03'), double)
+        # One evening handback with no later day keeps its own due; an ordinary negation still states no action or day.
+        self.assertEqual(agent._school_role_days('今晚提交阅读卡。', [dict(text='今晚提交阅读卡。', time=sent)], []), (set(), '2026-11-03'))
+        self.assertEqual(family_agenda.affirmed('今晚不用填写实验记录表'), '今晚不用填写实验记录表')
+        self.assertFalse(family_agenda._action_deadlines('今晚不用填写实验记录表。', '2026-11-03'))
+
+    def test_p1a3_structured_linked_feedback_keeps_the_original_version(self):
+        # A parent observation saved on its own and then linked through the record API (source stays the parent's own words,
+        # linked_task_id names the task) is family feedback exactly as an 事项: record is: a later clear update stays for review.
+        self.whole_day('original_day')
+        english = self.task_for('message:fictional-qq-a:103')
+        record = self.app.save_record(dict(child='示例甲', day='2026-11-03', category='家长观察', subject='英语', title='跟读观察',
+                                           note='虚构：前三个单词读得较慢', source='家长手记'))['record_id']
+        self.app.link_record_task(dict(record_id=record, child='示例甲', task_id=english))
+        self.replay('cross_channel_reminders', 'receipt-02.json'); self.replay('same_publisher_corrections', 'receipt-03.json')
+        row = self.english(self.view())
+        self.assertEqual(row['version']['state'], 'review', row['version']); self.assertIn('家庭已有反馈', row['version']['reasons'])
+        self.assertTrue(any('三遍' in l for l in row['lines'])); self.assertTrue(any('两遍' in l for l in row['version']['notices'][0]['lines']))
+        with self.app.connect() as c:
+            saved = c.execute('SELECT source,linked_task_id FROM records WHERE id=?', (record,)).fetchone()
+        self.assertEqual((saved['source'], saved['linked_task_id']), ('家长手记', english))
+
 
 if __name__ == '__main__':
     unittest.main()

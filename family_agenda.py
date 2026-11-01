@@ -85,6 +85,16 @@ def _negation_negated(before):
     return bool(_NEGATION_NEGATED.search(before))
 
 
+# A negation itself negated is the predicate required (不是不需要提交 = 需要提交、不能不交 = 需要交、并非不用带 = 需要带): every reader
+# of an action's time role reads that affirmative, so the action and its day are neither a leave nor lost.
+_DOUBLE_NEGATION=re.compile(_NEGATION_HEAD+r'(?:不(?!晚于|迟于|超过)|没有?|未|无需|无须|免|别|勿)(?:用|必|需要?|要求?|得)?')
+
+
+def affirmed(text):
+    """text with each double negation read as the requirement it states."""
+    return _DOUBLE_NEGATION.sub('需要',text or '')
+
+
 def _negates(before):
     """Whether the words right before a predicate negate it (不用、无需再), never a negation that is itself negated."""
     m=re.search(_NEGATED_LEAD+r'$',before)
@@ -94,7 +104,7 @@ def _negates(before):
 def _action_deadlines(text,published):
     """Every date the text ties to a required action, grounded on the sending day."""
     anchor=date(published)
-    text=_grounded_text(text,anchor)
+    text=_grounded_text(affirmed(text),anchor)
     if date(text): return {text}
     text=_relative_weekday(text,anchor)
     candidates=set()
@@ -1168,7 +1178,9 @@ def _one_affair_versions(c,items,store):
         if task['closed'] or task.get('touched'):why.append('家庭已有完成、状态或修改')
         else:
             try:
-                if c.execute("SELECT 1 FROM records WHERE source=? LIMIT 1",('事项:'+task_id,)).fetchone():why.append('家庭已有反馈')
+                # Feedback is the family's whether it names the task in its source (事项:) or through its structured link
+                # (save_record → link_record_task keeps the parent's own source and sets linked_task_id); neither is rewritten.
+                if c.execute("SELECT 1 FROM records WHERE source=? OR linked_task_id=? LIMIT 1",('事项:'+task_id,task_id)).fetchone():why.append('家庭已有反馈')
             except Exception:why.append('家庭记录暂时无法核对')
         if subject_key(a)!=subject_key(m) or a.get('subject_state') not in ('known','general'):why.append('科目或事务不能确认相同')
         if not own or '' in senders or senders!={_read_publisher(c,own[0])}:why.append('发布者不同或未核实')
