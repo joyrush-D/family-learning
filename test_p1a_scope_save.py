@@ -689,6 +689,29 @@ class CorrectionUnitTests(ScopeSaveTests):
             self.assertIn(unit, saved)
         self.assertNotIn('三遍', saved)
 
+    def test_a_notice_restating_a_lesson_that_is_already_a_task_forms_no_second_lesson(self):
+        r3, r7 = 'message:%s:103' % EN, 'message:%s:107' % EN
+        self.batch(EN, [msg('103', '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。', '16:20', **self.EN_T)],
+                   lambda targets, pending: [
+            proposal(r3, '今晚听音频跟读Unit 9第1到6个单词，每词三遍', '英语：跟读Unit 9第1—6个单词', '今晚听音频跟读Unit 9第1到6个单词，每词三遍。\n只做口头跟读，不用抄写。'),
+            proposal(r3, '周五课堂听写，范围由老师明天再说', '英语：周五课堂听写', '周五课堂听写，范围由老师明天再说。', due=FRI, state='review')])
+        ids = {}
+        for word in ('跟读', '听写'):
+            item = next(i for i in self.items_for(r3) if word in i['title'])
+            if item['state'] == 'pending':
+                self.store.act(dict(id=item['id'], action='accept')); item = next(i for i in self.items_for(r3) if word in i['title'])
+            ids[word] = item['task_id']
+        self.batch(EN, [msg('107', '更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定，等明天另行通知。', '17:10', **self.EN_T)],
+                   lambda targets, pending: [proposal(r7, 'Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写', '英语：跟读Unit 9第1—6个单词两遍',
+                                                      '今晚跟读Unit 9第1到6个单词，每个单词跟读两遍。\n只做口头跟读，不用抄写。\n周五课堂听写，范围等老师明天另行通知。',
+                                                      state='review', change='update', target=ids['跟读'])])
+        self.assertFalse([i for i in self.items_for(r7) if '听写' in i['title']], 'the accepted lesson task is not formed again')
+        for view in self.views(FRI):
+            self.assertEqual(len([r for g in view['groups'] for r in g['items'] if '听写' in r['title']]), 1)
+        for view in self.views(DAY):
+            en, = self.row(view, ids['跟读'])
+            self.assertEqual((en.get('version') or {}).get('state'), 'latest', en.get('version'))
+
     def test_a_move_notice_adding_its_own_requirement_stays_under_review(self):
         en_task, sci_task = self.originals()
         r8 = 'message:%s:108' % EN
