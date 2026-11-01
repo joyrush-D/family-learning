@@ -3477,7 +3477,8 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             back=bool(re.search(r'交|检查',clause))
             # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
             # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
-            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN,clause) or 'finish' in _school_clause_roles(clause) or step
+            # 签名 alone may be a name (交回签名回执、《家长签名确认单》): read as a predicate only by _school_clause_roles.
+            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|签字|签上|签好',clause) or 'finish' in _school_clause_roles(clause) or step
                         or days=={published} and not back and re.search(work,clause) or prepared and n==prepared[0])
             if len(days)!=1 or (finish and back):return None
             if not finish and back and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):
