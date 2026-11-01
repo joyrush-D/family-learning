@@ -3131,7 +3131,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             material_read=bool(plan.get('school_task',{}).get('material_evidence')) and family_media.school_evidence(store,c,origin,message) is not None
             if not (pdf_read or material_read) and (message['unread'] or message['kind']!='text' or not message['text'].strip()): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
             links.append(dict(source_id=source,message_id=message_id));said.append(str(message.get('text') or ''))
-        status=app.task_status(task,update['status'] if update else None)
+        status=app.task_status(task,update['status'] if update else None);role=''
         original_plan=json.loads(canonical['plan'])
         duplicate=change=='append' and any(x.get('change')=='append' and x.get('goal')==body for x in original_plan.get('school_changes',[]))
         if change in ('update','append'):
@@ -3145,6 +3145,8 @@ def apply_school_change(app, store, obj, *, school_auto=False):
                 # the notice's own day; a day the parent writes is the family's own.
                 moves=_school_notice_moves(c,task,due,plan,row)
                 if not moves and due==(row['due'] or ''):due=agenda['due_on']
+                # A day the notice proves to be the handback's or check's own keeps that role once saved (改为今晚交给数学老师).
+                role='handback' if due in moves.get('handback',()) else 'inspection' if due in moves.get('check',()) else ''
                 merged=_school_update_whole(task,title,body,due,'\n'.join(said),plan,row,connection=c,moves=moves)
             if not duplicate:
                 family_task_focus.save(app,dict(id=target_id,version=focus['version'],request_key='school-change-'+_hash(ident)[:32],
@@ -3157,7 +3159,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             known=original_plan.setdefault('school_messages',[])
             known.extend(x for x in links if x not in known)
         now=_now().isoformat()
-        event=dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due)
+        event=dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due,**({'due_kind':role} if change=='update' and role else {}))
         if change=='append': event.update(applied_title=title,applied_goal=merged,auto_added=school_auto)
         elif change=='update' and merged!=body: event.update(applied_goal=merged,composed='original_with_stated_change')
         original_plan.setdefault('school_changes',[]).append(event)
@@ -3173,8 +3175,8 @@ def apply_school_change(app, store, obj, *, school_auto=False):
 
 
 def _school_notice_moves(c, task, due, plan, row):
-    """Whether this notice moves a date role of the task, read as the day projection reads it (family_agenda._role_days):
-    its own quoted clauses and the day it is saved with against the task's saved dates and own words."""
+    """The date roles this notice moves and their new days ({} when none), read as the day projection reads them
+    (family_agenda._role_days): its own quoted clauses and the day it is saved with against the task's dates and words."""
     from family_agenda import _DATE_ROLES,_role_days,_saved_quote,_stored_date_quote,sent_day
     try:
         ref=json.loads(row['evidence'])[0]['ref'];source_id,message_id=ref[8:].rsplit(':',1)
@@ -3184,7 +3186,7 @@ def _school_notice_moves(c, task, due, plan, row):
     a=task['agenda']
     old=_role_days(a,_saved_quote(c,task_id=task['id']),sent_day(str(a.get('published_at') or '')))
     new=_role_days(dict(due_on=due),_stored_date_quote(plan),sent)
-    return any(new[role]-old[role] for role in _DATE_ROLES)
+    return {role:new[role]-old[role] for role in _DATE_ROLES if new[role]-old[role]}
 
 
 def _school_update_whole(task, title, body, due, said, plan, row, *, connection=None, moves=None):
