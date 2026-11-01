@@ -354,6 +354,52 @@ class RelationScopeTests(ScopeSaveTests):
         self.assertNotIn('school_pending_of', other['plan'])
         self.assertEqual(other['due'], FRI)
 
+    def test_c_a_sibling_opening_with_its_own_day_leaves_the_correction_joined(self):
+        # Root run4 range-control: the next independent action opens with 这周五 and ends 单独安排. That separateness is
+        # the sibling's own; the correction still joins the pending card and the Friday occurrence stays its own card.
+        first = self.rain_pending()
+        ref = 'message:%s:804' % EN
+        text = '周三英语课《雨后》听读展示的段落定为第2段。这周五另外安排英语课《雨后》展示第6段，单独安排。'
+
+        def replies(targets, pending):
+            target = next(p['id'] for p in pending if '展示' in p['title'])
+            return [proposal(ref, '周三英语课《雨后》听读展示的段落定为第2段', '英语：周三英语课《雨后》听读展示第2段',
+                             '周三英语课《雨后》听读展示第2段。', state='review', change='update', target=target, due=WED),
+                    proposal(ref, '这周五另外安排英语课《雨后》展示第6段', '英语：周五英语课《雨后》展示第6段',
+                             '这周五另外安排英语课《雨后》展示第6段，单独安排。', due=FRI)]
+        self.batch(EN, [msg('804', text, '20:00')], replies)
+        items = {i['title']: i for i in self.items_for(ref)}
+        correction = next(i for t, i in items.items() if '第2段' in t)
+        other = next(i for t, i in items.items() if '第6段' in t)
+        self.assertEqual(correction['plan'].get('school_pending_of', {}).get('item_id'), first['id'], 'the correction joins the pending card')
+        self.assertNotIn('school_pending_of', other['plan'], 'the sibling Friday occurrence is its own item')
+        for day in (DAY, WED, FRI):
+            for view in self.views(day):
+                rows = self.cards(view, '雨后')
+                self.assertFalse([r for r in rows if '第2段' in r['title']], 'the correction is no card of its own')
+                for row in rows:
+                    if '第6段' in row['title']: continue
+                    notices = (row.get('version') or {}).get('notices') or []
+                    self.assertEqual([n['title'] for n in notices if '第2段' in n['title']], ['英语：周三英语课《雨后》听读展示第2段'],
+                                     'the pending card holds the correction as its notice')
+                    self.assertEqual({p.get('ref') for p in row.get('publications') or []} >= {'message:%s:801' % EN, ref}, True,
+                                     'the pending card keeps both publications')
+
+    def test_c_own_range_ends_where_a_following_clause_states_its_own_work(self):
+        def own(text, quote):
+            return agent._school_own_range(quote, [dict(ref='message:x:1', text=text, time=DAY + 'T20:00:00+08:00')])
+        correction = '周三英语课《雨后》听读展示的段落定为第2段'
+        for sibling in ('这周五另外安排英语课《雨后》展示第6段，单独安排', '这次另外安排展示第6段，单独安排',
+                        '本周五另外安排一次听写，单独登记', '这周五另外安排英语课《雨后》展示第2段，单独安排'):
+            self.assertEqual(own(correction + '。' + sibling + '。', correction), correction, sibling)
+        # Clauses only referring back keep this reply's separateness, as before (the negative controls stay).
+        friday = '周五英语课展示《雨后》第6段'
+        for back in ('这是独立的一次展示，单独安排', '这是另一场展示', '这周五的展示单独安排', '和周三第2段那场分别登记',
+                     '这次展示第6段单独安排'):
+            self.assertIn(back, own(friday + '，' + back + '。', friday), back)
+        self.assertIn('这周五单独安排', own('展示《雨后》第6段，这周五单独安排。', '展示《雨后》第6段'),
+                      'a day after a clause stating none may still be its own day')
+
     def test_c_a_true_range_supplement_still_joins_the_pending_card(self):
         first = self.rain_pending()
         item = self.wrong_update('周三英语课《雨后》听读展示的段落定为第2段。', quote='周三英语课《雨后》听读展示的段落定为第2段', due=WED)
