@@ -2331,7 +2331,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
 _SCHOOL_PENDING_PRIVATE=('refs','latest')
 
 
-def school_pending_targets(store, child_id, connection=None, *, limit=12):
+def school_pending_targets(store, child_id, connection=None, *, limit=12, before='', exclude=()):
     """This child's latest school items still pending the parent's decision (not yet tasks), for the same selection call.
 
     Listed apart from the saved tasks as pending:<item id>, so a reply can never pass one off as a task id, and a later notice
@@ -2352,7 +2352,7 @@ def school_pending_targets(store, child_id, connection=None, *, limit=12):
                     source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
                     publishers.add((source_id,_publisher(source_id,message)));refs.append(quote['ref']);times.append(str(message.get('time') or ''))
             except (AgentError,ValueError,KeyError,TypeError,AttributeError):continue
-            if not refs:continue
+            if not refs or row['id'] in exclude or before and not max(times)<before:continue  # read before the limit counts
             source,publisher=next(iter(publishers)) if len(publishers)==1 else ('','')
             result.append(dict(id='pending:'+row['id'],title=str(brief.get('title') or row['title'])[:200],goal=str(brief.get('goal') or row['body'] or '')[:400],
                                due=row['due'] or '',state='pending',source_id=source,publisher=publisher,refs=refs,latest=max(times)))
@@ -5576,7 +5576,9 @@ def _recover_school_pending_relations(app,store,config,now,budget):
             job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
             if not job or not job['done']:continue
             try:
-                if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or not _school_untouched_review(c,r,old_key,linking=True) for r in rows):continue
+                # A batch whose own selection already read this child's pending items (school_pending_seen) is never read again.
+                if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or 'school_pending_seen' in json.loads(r['plan'])
+                       or not _school_untouched_review(c,r,old_key,linking=True) for r in rows):continue
                 refs=sorted({e['ref'] for r in rows for e in json.loads(r['evidence'])})
             except (ValueError,KeyError,TypeError):continue
             if not refs or any(not ref.startswith('message:') for ref in refs):continue
@@ -5591,19 +5593,19 @@ def _recover_school_pending_relations(app,store,config,now,budget):
                 values.append(json.loads(m['payload']))
             if len(values)!=len(ids) or len(values)>6 or any(v.get('kind')!='text' or v.get('unread') for v in values):continue
             first=min(str(v.get('time') or '') for v in values);own={r['id'] for r in rows}
-            targets=[t for t in school_pending_targets(store,source['child_id'],c) if t['id'][8:] not in own and t['latest'] and t['latest']<first]
+            targets=school_pending_targets(store,source['child_id'],c,before=first,exclude=own)
             if not targets:continue
             key='school-pending-relation:'+_hash([old_key,source['child_id']])[:40]
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS):continue
-            candidates.append((old_key,job['fingerprint'],source,values,rows,targets,key))
+            candidates.append((old_key,job['fingerprint'],source,values,rows,targets,key,first,own))
     if not candidates:return dict(used=0,failed=0,created=0,linked=0)
     _school_relation_boundary(store)
     with store._db() as c:
         candidates=[x for x in candidates if (mark:=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_relation_mark(x[0]),)).fetchone())
                     and mark['fingerprint']==x[1]]
     from family_goals import Store as Goals
-    for old_key,fingerprint,source,values,rows,targets,key in candidates:
+    for old_key,fingerprint,source,values,rows,targets,key,first,own in candidates:
         fp=store._job(key,dict(kind='pending-relation',origin=[old_key,fingerprint],source=source['id'],messages=values,
                                 targets=[t['id'] for t in targets]),now,model=True,keep_budget=True)
         if not fp:continue
@@ -5619,20 +5621,25 @@ def _recover_school_pending_relations(app,store,config,now,budget):
                 c.execute('BEGIN IMMEDIATE')
                 job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(key,)).fetchone()
                 if not job or job['fingerprint']!=fp or job['done']:raise AgentError('旧待核关系恢复资格已变化，未写入',409,'school_relation_stale')
-                listed={t['id'][8:] for t in targets}
+                # The target is read again in this write: still the same pending item, as listed to the reply, of this child's
+                # same source and publisher (a parent's dismiss, accept or edit meanwhile is theirs; no link is written on it).
+                listed={t['id'][8:]:t for t in targets}
+                current_targets={t['id'][8:]:t for t in school_pending_targets(store,source['child_id'],c,before=first,exclude=own)};stale=0
                 for item in proposals:
                     link=(item.get('plan') or {}).get('school_pending_of')
                     if not isinstance(link,dict) or link.get('item_id') not in listed:continue
+                    if current_targets.get(link['item_id'])!=listed[link['item_id']]:stale+=1;continue
                     refs={e['ref'] for e in item['evidence']}
                     mine=[r for r in rows if {e['ref'] for e in json.loads(r['evidence'])}==refs]
                     if len(mine)!=1:continue
                     current=c.execute('SELECT * FROM agent_items WHERE id=?',(mine[0]['id'],)).fetchone()
-                    if (current is None or current['updated']!=mine[0]['updated'] or current['state']!='pending'
-                            or json.loads(current['plan']).get('school_pending_of') or not _school_untouched_review(c,current,old_key,linking=True)):continue
+                    if (current is None or current['updated']!=mine[0]['updated'] or current['state']!='pending' or not _school_active(store,c,current)
+                            or json.loads(current['plan']).get('school_pending_of') or not _school_untouched_review(c,current,old_key,linking=True)):stale+=1;continue
                     plan=json.loads(current['plan']);plan['school_pending_of']=dict(link,recovered_by=key)
                     c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),current['id'],current['updated']))
                     linked+=1
-                c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
+                c.execute("UPDATE agent_jobs SET done=1,error=?,next_try='' WHERE id=? AND fingerprint=?",
+                          ('关系目标或本条已变化，未写入；家长的决定保留。' if stale else '',key,fp))
         except (family_llm.LLMDraftError,AgentError,ValueError,KeyError,TypeError,StopIteration,OSError,sqlite3.Error) as error:
             store._fail(key,now,fingerprint=fp,reason=error);failed=1
         break
@@ -9290,9 +9297,12 @@ def run_once(app, now=None):
                                  if m['id'] not in ids]
                     budget -= 1
                     try:
+                        pending_seen = school_pending_targets(store,source['child_id'])
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
                                             school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True,evidence=[e['text'] for e in evidence]),
-                                            school_later=later,school_pending=school_pending_targets(store,source['child_id']))
+                                            school_later=later,school_pending=pending_seen)
+                        # This selection read this child's pending items: its rows are never read again for a relation.
+                        for item in proposals:item.setdefault('plan',{})['school_pending_seen']=[t['id'] for t in pending_seen]
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:

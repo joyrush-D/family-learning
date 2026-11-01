@@ -1242,13 +1242,33 @@ def _count_token(units):
     return re.compile(r'(?:\d+|[一二两三四五六七八九十]+)\s*(?:'+'|'.join(sorted(map(re.escape,units),key=len,reverse=True))+')')
 
 
+def _explicit_replacements(said,old):
+    """(old words, their new words) of each object a notice explicitly changes (透明塑料杯改为两个玻璃杯): the old words are
+    the longest end of what precedes the change verb that the original writes verbatim; the new words, their numbers aside,
+    share its head noun (杯). Only as many old words right before that head as the new words bring (塑料 for 玻璃) are
+    replaced; every other old word of that object (透明) stays its requirement. A change to a day or a count alone is none."""
+    pairs=[];old=(old or '').lower()
+    for m in re.finditer(r'([\u4e00-\u9fff]{2,16}?)\s*(?:改为|改成|换成|换为)\s*([^，,；;。！!？?\n]{1,16})',(said or '').lower()):
+        if _UNIT_DAY_WORDS.match(m[2].strip()):continue
+        before=next((m[1][i:] for i in range(len(m[1])-1) if m[1][i:] in old),'')
+        new=re.sub(r'\s+','',_NUMERAL.sub('',m[2]))
+        head=next((before[-k:] for k in range(min(len(before),len(new))-1,0,-1) if new.endswith(before[-k:])),'')
+        words=new[:len(new)-len(head)];kept=before[:len(before)-len(head)]
+        if head and words and len(words)<=len(kept):pairs.append((before,kept[:len(kept)-len(words)]+words+head))
+    return pairs
+
+
 def _unchanged_lost(old_lines,shown,said):
-    """Original clauses the latest shown words no longer carry beyond the notice's own changes; [] when every one is kept."""
+    """Original clauses the latest shown words no longer carry beyond the notice's own changes; [] when every one is kept.
+    An object the notice explicitly changes (透明塑料杯改为两个玻璃杯) is carried only by its changed words written as one
+    phrase in the latest (透明玻璃杯); otherwise its old words stay required."""
     units={u for _,u in family_agent._school_counts(said) if u}
     renamed=bool(family_agent._school_named_objects(said)-family_agent._school_named_objects('\n'.join(old_lines)))
-    have=_unit_chars(shown);lost=[]
+    have=_unit_chars(shown);lost=[];written=re.sub(r'\s+','',(shown or '').lower())
+    changed=[(a,b) for a,b in _explicit_replacements(said,'\n'.join(old_lines)) if b in written]
     for clause in re.split(r'[，,；;。！!？?\n]+','\n'.join(old_lines)):
         core=clause.lower()
+        for a,b in changed:core=core.replace(a,b)
         if units:core=_count_token(units).sub(' ',core)
         if renamed:core=family_agent._SCHOOL_NAMED.sub(' ',core)
         if _unit_chars(core)-have:lost.append(clause.strip()[:24])
