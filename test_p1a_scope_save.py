@@ -301,12 +301,12 @@ class RelationScopeTests(ScopeSaveTests):
         self.assertEqual((first['state'], first['due']), ('pending', ''), 'the scalar day is unknown')
         return first
 
-    def wrong_update(self, text, quote='周五英语课展示《雨后》第6段'):
+    def wrong_update(self, text, quote='周五英语课展示《雨后》第6段', due=FRI):
         ref = 'message:%s:802' % EN
 
         def replies(targets, pending):
             target = next(p['id'] for p in pending if '展示' in p['title'])
-            return [proposal(ref, quote, '英语：' + quote, quote, change='update', target=target, due=FRI)]
+            return [proposal(ref, quote, '英语：' + quote, quote, change='update', target=target, due=due)]
         self.batch(EN, [msg('802', text, '20:00')], replies)
         item, = self.items_for(ref)
         return item
@@ -356,7 +356,22 @@ class RelationScopeTests(ScopeSaveTests):
 
     def test_c_a_true_range_supplement_still_joins_the_pending_card(self):
         first = self.rain_pending()
-        item = self.wrong_update('周三英语课《雨后》听读展示的段落定为第2段。', quote='周三英语课《雨后》听读展示的段落定为第2段')
+        item = self.wrong_update('周三英语课《雨后》听读展示的段落定为第2段。', quote='周三英语课《雨后》听读展示的段落定为第2段', due=WED)
+        self.assertEqual(item['plan'].get('school_pending_of', {}).get('item_id'), first['id'])
+
+    def test_c_a_range_supplement_stating_no_day_still_joins_the_pending_card(self):
+        first = self.rain_pending()
+        item = self.wrong_update('《雨后》听读展示的段落定为第2段。', quote='《雨后》听读展示的段落定为第2段', due='')
+        self.assertEqual(item['plan'].get('school_pending_of', {}).get('item_id'), first['id'])
+
+    def test_c_an_unknown_pending_day_is_no_wildcard_for_another_day(self):
+        self.rain_pending()
+        # No separateness is stated at all: the pending item's own Wednesday still binds, so Friday is another occurrence.
+        self.assert_own_card(self.wrong_update('周五英语课展示《雨后》第6段。'))
+
+    def test_c_a_stated_move_of_an_unknown_scalar_day_still_joins(self):
+        first = self.rain_pending()
+        item = self.wrong_update('《雨后》听读展示改到周五英语课，展示第6段。', quote='《雨后》听读展示改到周五英语课，展示第6段')
         self.assertEqual(item['plan'].get('school_pending_of', {}).get('item_id'), first['id'])
 
 

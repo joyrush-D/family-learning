@@ -2386,9 +2386,14 @@ def _school_pending_link(target, change, brief, cited, due, quote=''):
     # A reply whose own words the program cannot locate proves no scope: an original that says some occurrence is separate
     # then leaves the link unproven (its own card), never the model's summary alone deciding it.
     if not own and any(_SCHOOL_APART.search(text) or _SCHOOL_SEPARATE.search(text) for text in said.split('\n')):return None
-    if change!='same' and target['due']:
+    if change!='same':
+        held={target['due']} if target['due'] else set()
+        # An unknown scalar day is no wildcard for any later day: a pending item of one original still states its one own day
+        # in its title (英语：周三英语课做《雨后》听读展示), and that day binds its notices the same way.
+        if not held and len(target['refs'])==1:
+            held=_school_own_dates(re.sub(r'^[^：:，,。；;\n]{1,8}[：:]','',target['title']),sent_day(target['latest']),True)
         own={due} if due else set().union(*(deadlines(str(e.get('text') or ''),sent_day(e.get('time',''))) for e in cited))
-        if own and target['due'] not in own and not re.search(_SCHOOL_MOVED,said):return None
+        if held and own and not own&held and not re.search(_SCHOOL_MOVED,said):return None
     return dict(item_id=target['id'].removeprefix('pending:'),change=change,publisher=target['publisher'])
 
 
