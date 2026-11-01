@@ -326,6 +326,9 @@ class P1aRequirementUnitTests(unittest.TestCase):
             trial = self.same_trial(old, new)
             self.assertEqual(trial['state'], 'review', new); self.assertIn('由谁做哪一步', trial['reason'])
         self.assertEqual(agent._school_relation_body(original + '这只是转一下，别当成第二份。'), (original, ['这只是转一下', '别当成第二份']))
+        # Relation words never cover work: an act not on the message itself or a denial of no whole item keeps the clause.
+        for clause in ('请说明理由', '观察豆子发芽', '不要忘记带新的笔记本', '请告知老师', '提醒大家明天带竖笛', '请家长转告孩子', '转发一下第二份通知'):
+            self.assertFalse(agent._school_relation_unit(clause), clause)
 
     def test_p1a3_double_negation_is_read_affirmative_by_every_time_role_reader(self):
         import family_agenda
@@ -339,6 +342,8 @@ class P1aRequirementUnitTests(unittest.TestCase):
             self.assertEqual(family_agenda._action_deadlines(double, '2026-11-03'), family_agenda._action_deadlines(plain, '2026-11-03'), double)
         # One evening handback with no later day keeps its own due; an ordinary negation still states no action or day.
         self.assertEqual(agent._school_role_days('今晚提交阅读卡。', [dict(text='今晚提交阅读卡。', time=sent)], []), (set(), '2026-11-03'))
+        # An evening handback beside a later handback of another thing proves no link: the two-date guard keeps it for review.
+        self.assertIsNone(agent._school_role_days('今晚提交电子版，明天交纸质版。', [dict(text='今晚提交电子版，明天交纸质版。', time=sent)], []))
         self.assertEqual(family_agenda.affirmed('今晚不用填写实验记录表'), '今晚不用填写实验记录表')
         self.assertFalse(family_agenda._action_deadlines('今晚不用填写实验记录表。', '2026-11-03'))
 

@@ -2651,13 +2651,14 @@ def _school_units_differ(text, facts):
 # (with that item's ordinal) are read, nothing of a requirement unit may remain: no step, requirement modal, change, date, quote,
 # count, child or parent. A relation phrasing never seen before is therefore set aside by these types, with no new entry, while
 # any word of work beside it (须注明地图方向、状态为“撤回”、提醒孩子再读一遍、是第三份) keeps the whole clause a requirement unit.
-_SCHOOL_SPEECH=r'(?:再|重新|又|特此)?(?:转发|转达|转告|转述|转|重发|发(?![到给送])|复述|重复|提醒|告知|说|讲)(?:一(?:遍|次|下)|下)?'
-_SCHOOL_DENIED=(r'(?:不是|并非|并不是|不属于|不算|不要|别|勿|非|没有)[^，,。；;！!？?\n]{0,10}?(?:第二|另一|另外一?|又一|新的?|新增|额外|再一)'
-                r'(?:件|份|张|条|项|个|次|轮)?'+_SCHOOL_RELATION_NOUN+r'?')
-
-
-# Work a requirement unit may name beyond the steps above (老师说带口琴 is a carry, not a relation).
-_SCHOOL_WORK=r'带|拿|准备|穿|戴|买|画|练|算|唱|听|看|参加|报名|打卡|交|提交|完成|注明|标注|写明|圈|划|贴|装'
+_SCHOOL_SPEECH=(r'(?:再|重新|又|特此)?(?:转发|转达|转告|转述|转|重发|发|复述|重复|提醒)(?:一(?:遍|次|下)|下)?(?:给?(?:大家|各位(?:家长|同学)?))?'
+               r'(?:'+_SCHOOL_RELATION_NOUN+r'|原话|原文|原要求|原通知|老师的话)?$')  # an act on the message itself, ending its clause
+_SCHOOL_DENIED=(r'(?:不是|并非|并不是|不属于|不算|不要|别|勿|非|没有)(?:理解为|当成|当作|误以为是?|以为是?|是|算|属于)?(?:另行|另|又|再)?'
+                r'(?:布置|安排|增加|加|留|发)?的?(?:第二|另一|另外一?|又一|新的?|新增|额外|再一)(?:布置|安排|增加|加|留|发)?的?'
+                r'(?:(?:件|份|张|条|项|个|次|轮)'+_SCHOOL_RELATION_NOUN+r'?|'+_SCHOOL_RELATION_NOUN+r')')  # an item denied as a whole
+# Work a requirement unit may name beyond the steps above (老师说带口琴 is a carry, 观察豆子发芽 an observation, not a relation).
+_SCHOOL_WORK=(r'带|拿|准备|穿|戴|买|画|练|算|唱|听|看|参加|报名|打卡|交|提交|完成|注明|标注|写明|圈|划|贴|装|观察|记录|测量|种|养|采集|制作'
+              r'|收集|搜集|整理|查|找|问|调查|说明|讲解|讲述|介绍|分享|展示|汇报|告知|告诉|联系|回答')
 
 
 def _school_relation_unit(clause):
@@ -3428,7 +3429,7 @@ def _school_role_days(quote,cited,others,words=False):
         while other and (at:=text.find(other,at))!=-1:
             if max(head,at)<min(end,at+len(other)):return None
             at+=len(other)
-    done,due,evening=set(),set(),set()
+    done,due,evening,bare=set(),set(),set(),set()
     # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
     work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包'
     from family_agenda import prepared_carry
@@ -3466,11 +3467,14 @@ def _school_role_days(quote,cited,others,words=False):
             finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or 'finish' in _school_clause_roles(clause) or step
                         or days=={published} and not back and re.search(work,clause) or prepared and n==prepared[0])
             if len(days)!=1 or (finish and back):return None
-            if not finish and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):evening.update(days)
+            if not finish and back and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):evening.update(days)
+            if (not finish and days and min(days)>published and re.fullmatch(role+r'(?:让孩子)?(?:带到学校|带来学校|带回学校|带到班里|带到班上|带去学校'
+                                                                      r'|带来|带去|交回|上交|交给(?:老师|班主任|课代表|组长))\s*',clause)):bare.update(days)
             (done if finish else due).update(days)
-    # 今晚需要提交阅读卡，明早带到学校: that evening is at home, no handback at school. With the same range's one later handback,
-    # carry or check day, the evening's own step is this item's completion and the later day its one due.
-    if len(due)==2 and evening and min(due) in evening:
+    # 今晚需要提交阅读卡，明早带到学校: that evening is at home, no handback at school. Only when the evening's own step is a
+    # handback and the later clause only carries or hands back that same thing (no other object, 明天科学课带放大镜 stays two
+    # days for review), the evening step is this item's completion and the later day its one due.
+    if len(due)==2 and evening and min(due) in evening and max(due) in bare:
         done.add(min(due));due.discard(min(due))
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
     for e,(named,body) in restated:
