@@ -559,5 +559,47 @@ class P1aRequirementUnitTests(unittest.TestCase):
                           agent._school_earlier_role('今晚提交《检查表》')), ('check', 'submit', 'submit'))
 
 
+    def test_p1a6_paper_place_needs_no_shang(self):
+        R = agent._school_clause_roles
+        # The paper's own place, with or without 上, is read off before the predicate it heads.
+        for text in ('再在告知书签名', '再在告知书上签名', '在《知情单》签名', '在家长栏签字', '在通知单背面签名', '在签名册签字'):
+            self.assertEqual(R(text), {'finish'}, text)
+        # A sign word inside a noun, or a negation between the paper and its predicate, makes no signing step.
+        for text, roles in (('在签名册登记', set()), ('在签名册上登记', set()), ('交回签名回执', {'handback'}), ('在告知书不签名', set())):
+            self.assertEqual(R(text), roles, text)
+        sent = '2026-11-03T16:51:00+08:00'
+        def roles(text): return agent._school_role_days(text, [dict(text=text, time=sent)], [])
+        self.assertEqual(roles('家长今晚先看说明，再在告知书签名；学生星期五带回班级。'), ({'2026-11-03'}, '2026-11-06'))
+        # Another doer, a negation, its own day or no signing step leaves the evening step undated; no day is made up.
+        for text in ('家长今晚先看说明，再由孩子在告知书签名；学生星期五带回班级。', '家长今晚先看说明，不用在告知书签名；学生星期五带回班级。',
+                     '家长今晚先看说明，明天在告知书签名；学生星期五带回班级。', '家长今晚先看说明，再在签名册登记；学生星期五带回班级。'):
+            self.assertIsNone(roles(text), text)
+        self.assertNotIn('2026-11-03', (roles('家长先看说明，再在告知书签名；学生星期五带回班级。') or (set(), ''))[0])
+        task = self.save_new('741', '班级：家长今晚先看说明，再在告知书签名；学生星期五带回班级。', '家长今晚先看说明，再在告知书签名；学生星期五带回班级',
+                             '2026-11-06', '班级：带回告知书')
+        for _ in range(2):  # save, then reopen from the store
+            row = self.by_title(self.view(), '告知书')
+            self.assertEqual((row['when'], self.fact(row, 'complete')['value'], self.fact(row, 'due')['value']), ('today', '2026-11-03', '2026-11-06'))
+            self.assertIsNone(self.fact(row, 'submit'))
+        self.assertTrue(task)
+
+    def test_p1a6_receiver_scope_ends_at_a_closing_hou(self):
+        old = '孩子把《练习纸》交给老师后朗读《雨声》两遍。'
+        for text in ('孩子把《练习纸》交给老师后由孩子朗读《雨声》两遍。', '孩子把《练习纸》交给老师以后由孩子朗读《雨声》两遍。', '孩子把《练习纸》交给老师后再朗读《雨声》两遍。'):
+            self.assertFalse(agent._school_units_differ(text, old), text)
+        for text in ('孩子把《练习纸》交给老师后由老师朗读《雨声》两遍。', '孩子把《练习纸》交给老师后由家长朗读《雨声》两遍。', '孩子把《练习纸》交给老师后朗读《雨声》三遍。',
+                     '孩子把《练习纸》交给老师后朗读《雪花》两遍。', '孩子把《练习纸》交给老师朗读《雨声》两遍。'):
+            self.assertTrue(agent._school_units_differ(text, old), text)
+        # 后天, a title's own 后 and a noun's 后 (读后感) close nothing: a receiver directly followed by its own step still does it.
+        check = [g for g, x in enumerate(agent._SCHOOL_UNIT_STEPS) if '检查' in x][0]
+        for text, days in (('孩子把《练习纸》交给老师检查', set()), ('孩子把《练习纸》交给老师后天检查', {'+2'}), ('孩子把《读后》交给老师检查', set()),
+                           ('孩子写读后感交给老师检查', set())):
+            self.assertEqual(agent._school_units(text)[check], [('teacher', frozenset(), frozenset(), frozenset(days))], text)
+        task = self.save_new('751', '语文：孩子把《练习纸》交给老师后朗读《雨声》两遍，明天早读检查。', '孩子把《练习纸》交给老师后朗读《雨声》两遍，明天早读检查',
+                             '2026-11-04', '语文：交《练习纸》并朗读《雨声》', 'learning', '语文')
+        same = self.same_trial5(task, '语文', '提醒：孩子把《练习纸》交给老师后由孩子朗读《雨声》两遍，明天早读检查；同一件事。')
+        self.assertEqual(same['state'], 'ready', same.get('reason'))
+        self.assertEqual(self.same_trial5(task, '语文', '提醒：孩子把《练习纸》交给老师后由老师朗读《雨声》两遍，明天早读检查。')['state'], 'review')
+
 if __name__ == '__main__':
     unittest.main()

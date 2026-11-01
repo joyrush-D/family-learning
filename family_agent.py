@@ -2595,8 +2595,12 @@ _SCHOOL_UNIT_ACTORS=(('child',r'孩子|学生|同学|小朋友'),('parent',r'家
 _SCHOOL_UNIT_ACTOR=re.compile('|'.join('(%s)'%words for _,words in _SCHOOL_UNIT_ACTORS))
 _SCHOOL_UNIT_STEPS=_SCHOOL_SAME_STEPS[:3]+(r'签',)+_SCHOOL_SAME_STEPS[4:]+(r'检查|批改|核对|查看|督促|监督|陪同',r'(?<![抄默听填描])写|做|完成|练习|作答')
 # The person a thing is handed or spoken to (交给班主任、交班主任、向老师、跟老师) is its receiver: the doer only of a step in its own
-# part (交给老师检查), never of a step after a connector (交给班主任并朗读… is still the giver's reading).
+# part (交给老师检查), never of a step after a connector (交给班主任并朗读…, 交给老师后朗读… is still the giver's reading).
 _SCHOOL_UNIT_RECEIVER=re.compile(r'(?:给|向|对|跟|交(?:回|到|至)?|送(?:到|至)?|递)\s*$')
+# The connectors joining a clause's parts. 后 (之后、以后) closes the step before it only where a new step or doer starts right
+# after it (交给老师后朗读、交给老师后由孩子朗读、交完后再读); 后天、读后感、后面 and a title's own 后 join nothing.
+_SCHOOL_UNIT_THEN=(r'、|并且|并|然后|以及|(?:之|以)?后(?=\s*(?:请|让|由|再|还|就|要|须|需)*\s*(?:'+_SCHOOL_UNIT_ACTOR.pattern+'|'
+                   +_SCHOOL_OUTCOME_LEARN+'|'+'|'.join(_SCHOOL_UNIT_STEPS)+'))')
 _SCHOOL_UNIT_DAY=re.compile(r'(今天|今日|今晚|今夜)|(明天|明日|明早|明晚)|(后天)|(下)?(?:周|星期|礼拜)([一二三四五六日天])|(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]')
 
 
@@ -2612,7 +2616,7 @@ _SCHOOL_SIGNED_STATE=re.compile(r'(?:已经?)?签(?:好|过|了|上)?(?:字|名�
 def _school_units(text):
     """{step group: [(actor, counts, named objects, days), ...]} of the text's own requirement units, each kept whole.
 
-    A clause's parts joined by 、/并/然后/以及 are its units: a part's one step takes the part's own counts, 《》/named objects
+    A clause's parts joined by 、/并/然后/以及/后 (_SCHOOL_UNIT_THEN) are its units: a part's one step takes the part's own counts, 《》/named objects
     and days (a part with no step belongs to the unit before it, or else after it; several steps in one part split it at each
     step). A unit's actor is the explicit actor last written before its step in the clause, and a unit stating no day keeps
     the day written before it in that clause; a receiver (交给班主任) is no actor of a later part. Titles are names, never an
@@ -2623,7 +2627,7 @@ def _school_units(text):
         blank=re.sub(r'《[^》]{0,40}》',lambda m:'《'+'_'*(len(m[0])-2)+'》',clause)
         blank=_SCHOOL_SIGNED_STATE.sub(lambda m:'_'*len(m[0]),blank)
         actors=[(m.start(),_SCHOOL_UNIT_ACTORS[m.lastindex-1][0],bool(_SCHOOL_UNIT_RECEIVER.search(blank[:m.start()]))) for m in _SCHOOL_UNIT_ACTOR.finditer(blank)]
-        cuts=[0]+[m.end() for m in re.finditer(r'、|并且|并|然后|以及',blank)]+[len(blank)]
+        cuts=[0]+[m.end() for m in re.finditer(_SCHOOL_UNIT_THEN,blank)]+[len(blank)]
         found=[];loose=[]
         for a,b in zip(cuts,cuts[1:]):
             steps=sorted((m.start(),m.end(),g) for g,group in enumerate(_SCHOOL_UNIT_STEPS) for m in re.finditer(group,blank[a:b]))
@@ -4593,8 +4597,13 @@ _SCHOOL_ROLE_HEAD=(_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的
 # Choosing on the item's own form (圈选、勾选、选择) is the family's own step of it, finished like a signature.
 _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN))
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
+# A place on the paper itself needs no 上 (在告知书签名、在《知情单》签名、在通知单背面签名): its head noun directly followed by a
+# role predicate is read off, so a sign word inside the noun (在签名册登记) or a negation, doer or day written between the paper
+# and the predicate (在告知书不签名) still reads as before.
+_SCHOOL_ROLE_PAPER=r'(?:》|书|单|表|册|本|执|卷|纸|页|栏|处|条|联|卡|格|框|面)'
 _SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:(?:家长|监护人|父母|爸爸|妈妈|爸妈)(?:[或和、](?:家长|监护人|父母|爸爸|妈妈|爸妈))?|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
-                   r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
+                   r'(?:在[^，,在]{0,12}?'+_SCHOOL_ROLE_PAPER+r'\s*(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r'))|在[^，,在]{1,12}?(?:上|里|中|内)\s*)?'
+                   r'(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
 
 
 def _school_clause_roles(clause):
