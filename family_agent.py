@@ -642,10 +642,19 @@ def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
         if len(homes)!=1:continue
         home=homes[0];text=home['text'];sent=sent_day(str(home.get('time') or ''))
         if not sent or home.get('kind','text')!='text' or home.get('unread') or home.get('content_incomplete') or home.get('attachments'):continue
-        q0=text.index(quote);q1=q0+len(quote);own=_school_clause_days(quote,sent) or set()
+        q0=text.index(quote);q1=q0+len(quote)
         for m in re.finditer(r'[^。；;！!？?\n]+',text):
             run=m[0].strip(' ，,');start=m.start()+m[0].find(run) if run else m.start()
-            if not run or start<q1 and q0<start+len(run) or (home['ref'],run) in taken or text.count(run)!=1:continue
+            if not run or (home['ref'],run) in taken or text.count(run)!=1:continue
+            # A quote spanning the whole message is no proof of one action: a lesson sentence wholly inside it is read apart,
+            # and the item's own days are its quote's without that sentence. A sentence only partly quoted stays as it was;
+            # a proposal that is only the lesson (nothing dated of its own besides) is that lesson's own item already.
+            inside=start<q1 and q0<start+len(run)
+            if inside and not (q0<=start and start+len(run)<=q1):continue
+            a,b=start-q0,start-q0+len(run)
+            rest=(quote[:a]+quote[b:]) if inside else quote
+            own=_school_clause_days(rest,sent) or set()
+            if inside and (not own or (a and b<len(quote.rstrip(' ，,；;。'))) ):continue
             first=re.split(r'[，,]',run)[0].strip()
             days=_school_clause_days(first,sent)
             if not _school_lesson_assessment(first) or not days or len(days)!=1 or days<=own:continue
@@ -666,6 +675,10 @@ def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
             held=[t for t in tasks if t.get('due')==day and t.get('source_id')==source_id and t.get('publisher')==home.get('publisher')
                   and _school_same_object(title+'\n'+goal,str(t.get('title') or '')+'\n'+str(t.get('goal') or ''))]
             taken.add((home['ref'],run))
+            if inside:
+                # The item's own words are its quote without the lesson sentence (leading or trailing); the reply's quote stays
+                # verbatim in its receipt mark below.
+                out[index]=dict(out[index],title_quote=rest.strip(' ，,；;'));marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run,quote=quote)))
             if len(kept)!=len(lines):
                 out[index]=dict(out[index],task_goal='\n'.join(kept))
                 marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run)))
@@ -674,7 +687,7 @@ def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
                                              **({} if len(kept)!=len(lines) else {'omitted':True})))
             out.append(dict(title_quote=run,focus='school',due=day,evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
                 task_title=title,task_goal=goal,task_advice='',task_state='review',
-                task_reason='原文另有独立的课堂安排，'+('模型并入同消息另一项' if len(kept)!=len(lines) else '模型回执未归纳')+'；已按原文单独成项，原文未写明的范围仍待补。',
+                task_reason='老师尚未说明课堂考查范围，等待补充。',
                 task_change='same' if bound else 'new',task_target_id=bound[0]['id'] if bound else '',
                 task_purpose='learning' if subject else 'admin',task_submission=''))
     return out,marks
