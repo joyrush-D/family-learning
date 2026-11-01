@@ -418,12 +418,15 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 1))
         row = self._history_rows()[0]
         self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'ready')
-        self.assertEqual(row['state'], 'accepted')
+        self.assertEqual(row['state'], 'accepted')  # the automatic accept replaces the old manual accept step
+        self.assertEqual(row['body'], group['values'][0]['text'])
         self.assertEqual(row['due'], '2026-02-12')
         with self.app.connect() as c:
-            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
-        self.assertEqual(len(tasks), 1)
-        self.assertEqual(tasks[0]['id'], row['task_id'])
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 1, 'one task, no duplicate')
+            task = next(t for t in self.app.tasks(c) if t['id'] == row['task_id'])
+        self.assertIn('2月12日前带《英语练习册》1份到校', task['action'], 'the whole carry requirement and its count are kept')
+        self.assertEqual(task['agenda']['due_on'], '2026-02-12')
+        self.assertIn(group['refs'][0], task['source'], 'the task keeps its original message')
 
     def test_empty_legacy_completion_with_unknown_range_stays_review(self):
         """A learning completion whose range the teacher has not given (具体页码老师另行通知) stays review even when the reply
