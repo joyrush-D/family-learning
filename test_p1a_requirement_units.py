@@ -380,7 +380,11 @@ class P1aRequirementUnitTests(unittest.TestCase):
                                ('语文：原先朗读取消，不必读，家长签字，明天交。', 'review'),      # real cancellation
                                (original + '不必读。', 'review'),                             # the work itself denied
                                (original + '明天再读一遍。', 'review'),                       # real new round
-                               (original + '不用再读一遍，明天读三遍。', 'review')):
+                               (original + '不用再读一遍，明天读三遍。', 'review'),
+                               (original + '这次只是重申，用不着另起一轮。', 'ready'),          # non-template wordings, same type
+                               (original + '并不是要大家再做一次。', 'ready'),
+                               (original + '无需额外再交一份。', 'ready'),
+                               (original + '不需要再背第二遍。', 'review')):                  # 背 not restated: a change
             self.assertEqual(self.same_trial(original, text)['state'], expected, text)
         signed = '班级：出行确认单请家长签好名字，周四交。'
         for text, expected in (('班级：那张已签名的出行确认单，让学生周四交。', 'ready'),  # a signed state, no new actor step
@@ -410,6 +414,9 @@ class P1aRequirementUnitTests(unittest.TestCase):
             found, handed = roles(text)
             self.assertEqual(found, ({'2026-11-03'}, due), text); self.assertEqual(handed, {}, text)
         self.assertEqual(roles('今晚不必提交，明早交给老师。'), ((set(), '2026-11-04'), {}))
+        text = '今晚请爸爸或妈妈勾选“参加”或“不参加”并签字，周五由孩子交给班主任。'
+        self.assertEqual(roles(text), (({'2026-11-03'}, '2026-11-06'), {}), text)
+        self.assertEqual(agent._school_relation_body('读两遍。签过字的回执单请学生周四带来。')[1], [])
         self.assertFalse(agent._school_clause_negated(agent._school_choices_read('今晚监护人在《出行确认单》圈选‘同意’或‘不同意’')))
         for text in ('今晚提交电子版，明天交纸质版。', '今晚在线提交《活动卡》，明早科学课带放大镜。', '今晚提交活动卡，明早或后天交给班主任。'):
             self.assertIsNone(roles(text)[0], text)

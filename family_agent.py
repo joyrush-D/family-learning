@@ -2556,10 +2556,10 @@ def _school_relation_clause(clause):
     # 不必另外重做一轮、不用再单独做一遍、无需另外再读一遍: what is denied is another round of the obligation (an extra-round
     # marker and a round), never the work itself. A generic redo (做、重做、完成) is the whole affair's; a work verb (读) is relation
     # only while this reminder's own requirement words restate it (as 不用重复X). 不必读、原先朗读取消 deny the work: a change.
-    m=re.fullmatch(r'(?:这|此|本条|这条|这次|此次)?(?:也|就|仍|还|都)?(?:不用|无需|无须|不必|不需要?|不要|别|勿|用不着)(?:再|另外|另行|额外|单独|重新|又)+'
-                   r'(重做|重复做?|做|完成|弄|来|[一-鿿]{1,2}?)(?:一(?:轮|遍|次|回|份)|第二(?:轮|遍|次|回|份)|新的一轮)',c)
+    m=re.fullmatch(r'(?:这|此|本条|这条|这次|此次)?(?:也|就|仍|还|都)?(?:不用|无需|无须|不必|不需要?|不要|别|勿|用不着|(?:并)?不是要?(?:大家|各位|孩子们?)?)'
+                   r'(?:再|另外|另行|另|额外|单独|重新|又)+(重做|重复做?|做|完成|弄|来|起|开|[一-鿿]{1,2}?)(?:一(?:轮|遍|次|回|份)|第二(?:轮|遍|次|回|份)|新的一轮)',c)
     if m and not _SCHOOL_DATE_MENTION.search(c) and not re.search(r'[《“「『"]',c):
-        return True,('' if re.fullmatch(r'重做|重复做?|做|完成|弄|来',m[1]) else m[1])
+        return True,('' if re.fullmatch(r'重做|重复做?|做|完成|弄|来|起|开',m[1]) else m[1])
     return False,''
 
 
@@ -4556,7 +4556,7 @@ _SCHOOL_ROLE_HEAD=(_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的
 # Choosing on the item's own form (圈选、勾选、选择) is the family's own step of it, finished like a signature.
 _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN))
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
-_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|监护人|父母|爸爸|妈妈|爸妈|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
+_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:(?:家长|监护人|父母|爸爸|妈妈|爸妈)(?:[或和、](?:家长|监护人|父母|爸爸|妈妈|爸妈))?|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
                    r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
 
 
