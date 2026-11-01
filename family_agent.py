@@ -2373,6 +2373,15 @@ def _school_pending_link(target, change, brief, cited, due):
                 or not str(e.get('time') or '')>target['latest']):return None
     if not _school_same_object(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''),target['title']+'\n'+target['goal']):return None
     if change=='same' and due and target['due'] and due!=target['due']:return None
+    # The item's own day binds its notices: another day of the same object (周五再展示朗读一次《小树林》第5段 after a pending
+    # 周四…展示朗读) is another occurrence unless the notice itself moves this item there (改到周五); one that says it is
+    # separate (另外安排、和周四那场分别登记) is never this item's update. A notice stating no day of its own keeps the proof above.
+    from family_agenda import deadlines,sent_day
+    said='\n'.join(str(e.get('text') or '') for e in cited)
+    if _SCHOOL_APART.search(said) or re.search(r'另外安排|另一次|另一场',said):return None
+    if change!='same' and target['due']:
+        own={due} if due else set().union(*(deadlines(str(e.get('text') or ''),sent_day(e.get('time',''))) for e in cited))
+        if own and target['due'] not in own and not re.search(_SCHOOL_MOVED,said):return None
     return dict(item_id=target['id'].removeprefix('pending:'),change=change,publisher=target['publisher'])
 
 
@@ -3097,7 +3106,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
                     or any(sent_day(e.get('time'))!=_now().date().isoformat() for e in original)
                     or row['due'] and row['due']!=task['agenda']['due_on']):
                 raise AgentError('补充的当前原文、日期或唯一归属无法核对，原要求保留',409)
-        evidence=json.loads(row['evidence']);links=[]
+        evidence=json.loads(row['evidence']);links=[];said=[]
         if not evidence: raise AgentError('变更缺少原通知')
         for entry in evidence:
             if not isinstance(entry,dict) or not isinstance(entry.get('ref'),str) or not entry['ref'].startswith('message:'): raise AgentError('变更的原通知无法核对')
@@ -3109,7 +3118,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
             pdf_read=bool(plan.get('school_task',{}).get('pdf_evidence')) and family_pdf_material.complete_evidence(store,c,origin,message) is not None
             material_read=bool(plan.get('school_task',{}).get('material_evidence')) and family_media.school_evidence(store,c,origin,message) is not None
             if not (pdf_read or material_read) and (message['unread'] or message['kind']!='text' or not message['text'].strip()): raise AgentError('请先读清变更原件，不能据占位内容修改原事项')
-            links.append(dict(source_id=source,message_id=message_id))
+            links.append(dict(source_id=source,message_id=message_id));said.append(str(message.get('text') or ''))
         status=app.task_status(task,update['status'] if update else None)
         original_plan=json.loads(canonical['plan'])
         duplicate=change=='append' and any(x.get('change')=='append' and x.get('goal')==body for x in original_plan.get('school_changes',[]))
@@ -3119,7 +3128,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
                 title=task['title'];due=agenda['due_on']
                 merged=task['action']+'\n补充要求：'+body
                 if len(merged)>4000: raise AgentError('原要求与补充过长，未截断或覆盖原要求，请家长核对',409)
-            else: merged=body
+            else: merged=_school_update_whole(task,title,body,due,'\n'.join(said),plan,row)
             if not duplicate:
                 family_task_focus.save(app,dict(id=target_id,version=focus['version'],request_key='school-change-'+_hash(ident)[:32],
                     **{k:focus[k] for k in ('mode','next_action','waiting_for','review_on','scheduled_on','box')},
@@ -3133,6 +3142,7 @@ def apply_school_change(app, store, obj, *, school_auto=False):
         now=_now().isoformat()
         event=dict(item_id=ident,change=change,confirmed_at=now,title=title,goal=body,due=due)
         if change=='append': event.update(applied_title=title,applied_goal=merged,auto_added=school_auto)
+        elif change=='update' and merged!=body: event.update(applied_goal=merged,composed='original_with_stated_change')
         original_plan.setdefault('school_changes',[]).append(event)
         c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(original_plan),now,canonical['id']))
         source=task['source']+'\n\n'+'\n\n'.join(e['ref']+'\n'+e['text'] for e in evidence)
@@ -3143,6 +3153,28 @@ def apply_school_change(app, store, obj, *, school_auto=False):
     result=dict(ok=True,state='accepted',task_id=target_id,school_changed=True,replayed=False,completion_needs_review=status=='已完成' and change in ('update','append'))
     if change=='append': result['deduplicated']=duplicate
     return result
+
+
+def _school_update_whole(task, title, body, due, said, plan, row):
+    """The whole requirement a confirmed update saves, read as the day projection reads its latest (_one_affair_versions).
+
+    Words the parent wrote are the family's own and saved as written. The notice's own candidate words (its saved summary,
+    the form's default) are saved only when they keep every unchanged unit of the task's current requirement
+    (family_agenda._unchanged_lost); a proven pure count change is put into those lines (_count_only_latest). A candidate that
+    drops a method, range or quantity is refused before any write: the requirement and the pending notice stay as they were,
+    and the same notice can be confirmed again once the whole requirement is written. Advice never adds a standard.
+    """
+    from family_agenda import _count_only_latest,_unchanged_lost,exact_day
+    clean=lambda text:re.sub(r'\s+','',str(text or ''))
+    brief=plan.get('school_task') or {}
+    if clean(body) not in {clean(x) for x in (brief.get('goal'),(plan.get('approved') or {}).get('action'),row['body']) if clean(x)}:return body
+    old=[line.strip() for line in str(task.get('action') or '').splitlines() if line.strip()];shown=title+'\n'+body
+    lost=_unchanged_lost(old,shown,said)
+    if not lost:return body
+    fixed=_count_only_latest(old,task['title'],shown,said,bool(exact_day(due)) and due!=task['agenda'].get('due_on',''))
+    if fixed is None:
+        raise AgentError('新要求的归纳缺少原要求中未改的部分（'+'；'.join(lost)[:60]+'）；原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
+    return '\n'.join(fixed)
 
 
 def _school_submission_step(brief, activity):
@@ -3272,6 +3304,20 @@ def _school_handback_day(text,published,values):
     return late
 
 
+# A note relating an item to another occurrence (和周四朗读第2段那场分别登记、与周四那场是两项独立活动) names that occurrence
+# and its day, never a day of this item: the clause holding it is set aside only where this item's own days are read.
+_SCHOOL_APART=re.compile(r'(?:与|和|跟|同)\s*[^，,。；;！!？?\n]{0,16}?(?:那场|那次|那节|那项|那一场|那一次)\s*[^，,。；;！!？?\n]{0,10}?'
+                         r'(?:分别|分开|不是同一|两项|两次|独立)')
+# A notice moving an item's own day (改到周五、调整到下周一、推迟到11月20日) states the move in its own words.
+_SCHOOL_MOVED=r'(?:改|调|调整|推迟|延后|延期|提前|挪|换|移)\s*(?:到|至|为|在)'
+
+
+def _school_apart_free(text):
+    """The text without its clauses relating this item to another occurrence (_SCHOOL_APART); every other clause kept."""
+    parts=re.split(r'([，,。；;！!？?\n])',text)
+    return ''.join('' if i%2==0 and _SCHOOL_APART.search(part) else part for i,part in enumerate(parts))
+
+
 _SCHOOL_DAY_OFFSET={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
 
 
@@ -3329,7 +3375,21 @@ def _school_goal_dates(goal,cited):
         old=named(note[1]);rest=named(goal[:m.start()]+goal[m.end():])
         return '' if old and named(m[0])<=stated and not old&rest and named(m[0])-old<=rest else m[0]
     goal=re.sub(r'[（(]\s*原(?:为|定|是)[^（）()]*[）)]',history,goal)
-    return set().union(*(_school_own_dates(goal,day,True) for day in {sent_day(e.get('time','')) for e in cited} if day))
+    # A note relating this item to another occurrence (与周四朗读第2段那场是两项独立活动) names that occurrence's day: it is set
+    # aside only when a cited original relates the same day the same way (和周四朗读第2段那场分别登记) and no other clause of the
+    # summary names it. A day the originals do not relate so, or this item's own second day, is still read.
+    from family_agenda import deadlines
+    def apart(published):
+        related=set().union(*(deadlines(part,published) for e in cited if sent_day(e.get('time',''))==published
+                              for part in re.split(r'[，,。；;！!？?\n]',str(e.get('text') or '')) if _SCHOOL_APART.search(part)))
+        parts=re.split(r'([，,。；;！!？?\n])',goal);kept=[]
+        for i,part in enumerate(parts):
+            rest=''.join(parts[:i]+parts[i+1:])
+            if (i%2==0 and _SCHOOL_APART.search(part) and (days:=deadlines(part,published)) and days<=related
+                    and not days&(deadlines(rest,published)|_school_own_dates(rest,published,True))):continue
+            kept.append(part)
+        return ''.join(kept)
+    return set().union(*(_school_own_dates(apart(day),day,True) for day in {sent_day(e.get('time','')) for e in cited} if day))
 
 
 # Only a subject label and the work's own completion limit may stand before a short anchor in its clause (语文：2026年10月18日20:00前).
@@ -6787,7 +6847,8 @@ def _school_native_roles(action):
 def _school_native_dates(action):
     from family_agenda import deadlines,sent_day
     published=sent_day(action['time'])
-    own='\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])])
+    # A clause relating this outcome to another occurrence (和周四朗读第2段那场分别登记) dates that occurrence, not this one.
+    own=_school_apart_free('\n'.join([action['header'],action['quote'],*action.get('conditions',[]),*action.get('shared_conditions',[])]))
     # One work's completion limit and its own handback (订正本…交给…) read as the handback day; another object keeps both.
     dates=_school_handback_day(own,published,deadlines(own,published))
     # Its own quote's two time roles (今天完成…。明天交给数学课代表) are one item dated by its handback, read as the ordinary
@@ -6796,7 +6857,7 @@ def _school_native_dates(action):
     roles=_school_native_roles(action) if dates else None
     if roles and roles[0]<=dates<=roles[0]|{roles[1]}:dates={roles[1]}
     # A school arrangement in this outcome's own quote (明天早读抽查) is its day; a header date is never borrowed.
-    if not dates:dates=_school_own_dates(action['quote'],published)
+    if not dates:dates=_school_own_dates(_school_apart_free(action['quote']),published)
     # Two own roles the generic reader sees no day of (今晚跟读…三遍，…，明早检查记录页) still date it by that one check/handback
     # day, as the ordinary path reads the same words; separate conditions or common standards leave it as read.
     if not dates and not action.get('conditions') and not action.get('shared_conditions') and (roles:=_school_native_roles(action)):
