@@ -907,3 +907,16 @@ class DateRoleCountMoveTests(ScopeSaveTests):
             self.assertIn('今晚交给数学老师', '\n'.join(row['lines']))
         for rows in self.rows('2026-11-18', task):
             self.assertFalse([f for r in rows for f in r.get('facts', []) if f.get('kind') == 'handback' and f['value'] == '2026-11-18'])
+
+    def test_a_later_same_day_correction_after_a_confirmed_handback_move_keeps_the_handback(self):
+        self.test_confirming_a_handback_move_keeps_the_handback_role_after_saving_and_reopening()
+        task = next(i for i in self.items_for('message:%s:891' % SCI))['task_id']
+        self.saved('893', '更正：今晚完成《松石练习册》第7页第2题即可，写出解题步骤，今晚交给数学老师。', '19:00', self.MATH,
+                   '今晚完成《松石练习册》第7页第2题即可，写出解题步骤，今晚交给数学老师', '数学：完成《松石练习册》第7页第2题',
+                   '今晚完成《松石练习册》第7页第2题，写出解题步骤，今晚交给数学老师。', DAY, subject='数学', state='review',
+                   change='update', target=task)
+        item, = [i for i in self.items_for('message:%s:893' % SCI) if i['state'] == 'pending']
+        self.assertTrue(agent.apply_school_change(self.app, self.store, form_request(self, item, task))['school_changed'])
+        for row, in self.rows(DAY, task):
+            self.assertIn('第2题', '\n'.join(row['lines']))
+            self.assertEqual([(f.get('kind'), f['value']) for f in row['facts'] if f.get('kind') in ('handback', 'deadline')], [('handback', DAY)], row['facts'])
