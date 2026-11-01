@@ -5535,6 +5535,12 @@ def _recheck_school_history(app,store,now,budget,scopes):
     return dict(used=used,failed=failed,created=created)
 
 
+def _stamp_pending_seen(proposals,pending):
+    """This selection read this child's pending items (school_pending_seen, their ids): its rows are never read again for a
+    relation (_recover_school_pending_relations); only batches saved before the stamp existed may be."""
+    for item in proposals:item.setdefault('plan',{})['school_pending_seen']=[t['id'] for t in pending]
+
+
 def _school_relation_mark(old_key):
     return 'school-relation-scope:'+_hash([old_key])[:40]
 
@@ -9301,8 +9307,7 @@ def run_once(app, now=None):
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
                                             school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True,evidence=[e['text'] for e in evidence]),
                                             school_later=later,school_pending=pending_seen)
-                        # This selection read this child's pending items: its rows are never read again for a relation.
-                        for item in proposals:item.setdefault('plan',{})['school_pending_seen']=[t['id'] for t in pending_seen]
+                        _stamp_pending_seen(proposals,pending_seen)
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:
