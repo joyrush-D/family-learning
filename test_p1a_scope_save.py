@@ -510,3 +510,100 @@ class SchoolChangeWholeTests(ScopeSaveTests):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+MON = '2026-11-23'
+
+
+class CorrectionUnitTests(ScopeSaveTests):
+    """D: a same-publisher correction changes only its stated unit (Root run4). A count correction restating the original's
+    own 今晚 (filed by the summary as a due day) is no move and keeps every date role; a stated move of the item's day keeps
+    every unchanged unit (一个) whether or not the summary repeats it. Replies replay the shapes of the none and low returns,
+    shifted onto this file's frozen Tuesday; no product model is called."""
+    EN_T = dict(sender='虚构甲英语老师', sender_id='fic-en-teacher')
+    SCI_T = dict(sender='虚构甲科学老师', sender_id='fic-sci-teacher')
+
+    def originals(self):
+        r_en, r_sci = 'message:%s:103' % EN, 'message:%s:105' % EN
+        self.batch(EN, [msg('103', '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。', '16:20', **self.EN_T),
+                        msg('105', '科学：周四实验课带空的透明塑料瓶一个，今晚不用填写实验记录表。', '16:30', **self.SCI_T)],
+                   lambda targets, pending: [
+            proposal(r_en, '今晚听音频跟读Unit 9第1到6个单词，每词三遍', '英语：跟读Unit 9第1—6个单词',
+                     '今晚听音频跟读Unit 9第1到6个单词，每词三遍。\n只做口头跟读，不用抄写。\n周五课堂听写，范围由老师明天再说。'),
+            proposal(r_en, '周五课堂听写，范围由老师明天再说', '英语：周五课堂听写', '周五课堂进行英语听写。\n听写范围由老师明天再说，目前未公布。',
+                     state='review', due=FRI),
+            proposal(r_sci, '周四实验课带空的透明塑料瓶一个，今晚不用填写实验记录表', '科学：周四实验课带空透明塑料瓶',
+                     '周四实验课带空的透明塑料瓶一个。\n今晚不用填写实验记录表。', due=THU, purpose='admin', subject='')])
+        found = {}
+        for ref, word in ((r_en, '跟读'), (r_sci, '塑料瓶')):
+            item = next(i for i in self.items_for(ref) if word in i['title'])
+            if item['state'] == 'pending':
+                self.store.act(dict(id=item['id'], action='accept')); item = next(i for i in self.items_for(ref) if word in i['title'])
+            self.assertEqual(item['state'], 'accepted')
+            found[word] = item['task_id']
+        return found['跟读'], found['塑料瓶']
+
+    def corrections(self, english, science, english_due):
+        en_task, sci_task = self.originals()
+        r7, r8 = 'message:%s:107' % EN, 'message:%s:108' % EN
+
+        def replies(targets, pending):
+            dictation = next(p['id'] for p in pending if '听写' in p['title'])
+            return [proposal(r7, 'Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写', english[0], english[1], state='review', change='update',
+                             target=en_task, due=english_due),
+                    proposal(r7, '周五课堂听写的范围还没定，等明天另行通知', '英语：周五课堂听写', '周五课堂进行英语听写。\n听写范围尚未确定，等老师明天另行通知。',
+                             state='review', change='same', target=dictation, due=FRI),
+                    proposal(r8, '周四科学课改到下周一，前面通知带的透明塑料瓶也下周一再带', '科学：下周一实验课带空透明塑料瓶', science,
+                             state='review', change='update', target=sci_task, due=MON, purpose='admin', subject='')]
+        self.batch(EN, [msg('107', '更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定，等明天另行通知。', '17:10', **self.EN_T),
+                        msg('108', '周四科学课改到下周一，前面通知带的透明塑料瓶也下周一再带，今晚仍不用填写记录表。', '17:12', **self.SCI_T)], replies)
+        return en_task, sci_task
+
+    def row(self, view, task_id):
+        rows = [r for g in view['groups'] for r in g['items'] if r.get('task_id') == task_id] + \
+               [u for u in view['upcoming'] if u.get('task_id') == task_id]
+        return rows
+
+    def assert_whole(self, en_task, sci_task):
+        for view in self.views(DAY):
+            en, = self.row(view, en_task)
+            version = en.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            words = '\n'.join(version['lines'])
+            for unit in ('听音频', '两遍', '只做口头跟读', '不用抄写'):
+                self.assertIn(unit, words)
+            self.assertNotIn('三遍', words, 'the stated count replaces the old one; the old number is no current requirement')
+            self.assertEqual(en['when'], 'today', 'the original completion day stays')
+        for view in self.views(MON):
+            sci, = self.row(view, sci_task)
+            version = sci.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            words = '\n'.join(version['lines'])
+            for unit in ('空的透明塑料瓶一个', '下周一', '不用填写实验记录表'):
+                self.assertIn(unit, words)
+            self.assertNotIn('周四', words, 'the moved day word is no current requirement')
+        for view in self.views(THU):
+            self.assertEqual(self.row(view, sci_task), [], 'the moved item no longer lists on its old day')
+
+    def test_none_shape_summary_dropping_one_unchanged_quantity_composes_the_whole_original(self):
+        en_task, sci_task = self.corrections(
+            ('英语：跟读Unit 9第1—6个单词两遍', '今晚听音频跟读Unit 9第1到6个单词，每个单词跟读两遍。\n只做口头跟读，不用抄写。'),
+            '科学实验课由周四改到下周一。\n前面通知要带的空透明塑料瓶改为下周一再带。\n今晚仍不用填写实验记录表。', '')
+        self.assert_whole(en_task, sci_task)
+
+    def test_low_shape_count_correction_restating_its_own_tonight_is_no_move(self):
+        en_task, sci_task = self.corrections(
+            ('英语：跟读Unit 9第1—6个单词', '今晚听音频跟读Unit 9第1到6个单词两遍。\n不用抄写。'),
+            '科学课由周四改到下周一。\n前面通知带的空透明塑料瓶一个也下周一再带。\n今晚仍不用填写实验记录表。', DAY)
+        self.assert_whole(en_task, sci_task)
+
+    def test_a_move_notice_adding_its_own_requirement_stays_under_review(self):
+        en_task, sci_task = self.originals()
+        r8 = 'message:%s:108' % EN
+        self.batch(EN, [msg('108', '周四科学课改到下周一，透明塑料瓶也下周一再带，另外每人带一把剪刀。', '17:12', **self.SCI_T)], lambda targets, pending: [
+            proposal(r8, '周四科学课改到下周一，透明塑料瓶也下周一再带，另外每人带一把剪刀', '科学：下周一实验课带空透明塑料瓶',
+                     '科学实验课改到下周一。\n透明塑料瓶下周一再带。', state='review', change='update', target=sci_task, due=MON,
+                     purpose='admin', subject='')])
+        for view in self.views(THU):
+            sci, = self.row(view, sci_task)
+            self.assertEqual(sci['version']['state'], 'review', 'an added requirement is no proven move-only change')
