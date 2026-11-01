@@ -730,7 +730,7 @@ def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
     return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=()):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=(),reminders=()):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -745,6 +745,9 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
             if not any(p['ref']==ref for p in publications):
                 publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
         except family_agent.AgentError:continue
+    # A reminder verified as this same affair (its receipt's unchanged originals) adds provenance only: its words never re-date
+    # the original requirement, which keeps its own completion and handback days; corrections and cancels are other changes.
+    messages=[m for m in messages if m['ref'] not in reminders]
     # A read attachment's own requirements (image/PDF) saved with this action are its original words, read on their own
     # message's sending time; a caption only pointing to them (英语：老师布置的两项要求见图片。) gives no day of its own.
     attached=[o for o in originals if isinstance(o,dict) and isinstance(o.get('text'),str) and o['text'].strip()
@@ -823,7 +826,9 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         handed={};roles=family_agent._school_role_days(date_quote,messages,date_siblings,handbacks=handed)
         if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:
             earlier=next(iter(roles[0]))
-            if earlier in handed:submit=dict(submit_on=earlier,submit_words=handed[earlier])
+            if earlier in handed:
+                # Its role is its own predicate's: an evening check (今晚老师检查《手工草图》) stays a check, never 先提交.
+                submit=dict(submit_on=earlier,submit_words=handed[earlier],**({'submit_role':'check'} if family_agent._school_earlier_role(handed[earlier])=='check' else {}))
             else:complete_on=earlier
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',
@@ -974,6 +979,20 @@ def _date_siblings(cited_by,row):
     return list(others.values())
 
 
+def _same_reminders(c,store,task,proposal):
+    """Refs of the reminders linked to this task as the same affair whose receipt still holds: the reminder row accepted onto
+    this task for this original item, its originals unchanged since they were verified (the same basis the link checked)."""
+    refs=set()
+    for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted' AND task_id=? AND child_id=?",(task['id'],proposal['child_id'])):
+        plan=json.loads(row['plan']);receipt=plan.get('school_same_receipt')
+        if (not isinstance(receipt,dict) or receipt.get('task_id')!=task['id'] or plan.get('school_duplicate_of')!=proposal['id']
+                or not isinstance(receipt.get('input_basis'),dict) or not receipt['input_basis']):continue
+        try:evidence,_=family_agent._school_material(store,c,row)
+        except family_agent.AgentError:continue
+        if family_agent._school_message_basis(evidence)==receipt['input_basis']:refs.update(receipt['input_basis'])
+    return refs
+
+
 def enrich(app,c,tasks):
     owners={p['name']:p['id'] for p in app.profiles(c)}
     reported={r['task_id']:(r['child_id'],r['day'],r['report'],r['subject']) for r in c.execute('SELECT task_id,child_id,day,report,subject FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
@@ -981,7 +1000,7 @@ def enrich(app,c,tasks):
     for task in tasks:
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
-        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None;originals=()
+        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None;originals=();reminders=()
         subject_title=task.get('original_title',task['title']);own_quote='';saved_subject=''
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
@@ -1001,6 +1020,7 @@ def enrich(app,c,tasks):
                 date_siblings=_date_siblings(cited_by,proposal)
                 # Only while this item's own originals still stand as saved (same child, messages, files and drafts).
                 originals=family_agent.school_original_requirements(family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False),c,dict(proposal))
+                reminders=_same_reminders(c,store,task,proposal)
         due=task['due'];teacher={}
         captured=reported.get(task['id'])
         if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
@@ -1013,7 +1033,7 @@ def enrich(app,c,tasks):
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
             saved_subject=captured[3] or ''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''))
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders)
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):
             task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
@@ -1208,7 +1228,7 @@ def _one_affair_versions(c,items,store):
             # A date-only update of the same lesson-day affair (带瓶改到下周一) keeps its own role; a new role is read when stated.
             kind=m.get('due_kind','') if m.get('due_kind') not in ('','deadline') or a.get('due_kind') in ('','deadline') else a['due_kind']
             task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs,
-                                submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''))
+                                submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''),submit_role=m.get('submit_role',''))
             task['agenda'].pop('complete_words',None)
             task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=rel['lines'],previous=previous,notices=listed,
                                  change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,previous['due_on'],m.get('due_on','')) or '要求有更新')
@@ -1275,8 +1295,10 @@ def day_facts(agenda, day, today, school):
     if complete and (complete != a.get('due_on') or a.get('due_kind') == 'handback'):
         facts.append(dict(role='complete', label='完成', value=complete, known=True, today=complete == today))
     submit = exact_day(a.get('submit_on'))
-    if submit and submit != exact_day(a.get('due_on')):  # an earlier handback of the same thing, in its own words
-        facts.append(dict(role='submit', label='先提交', value=submit, known=True, today=submit == today, words=str(a.get('submit_words') or '')))
+    if submit and submit != exact_day(a.get('due_on')):  # an earlier handback or check of the same thing, in its own words and role
+        check = a.get('submit_role') == 'check'
+        facts.append(dict(role='check' if check else 'submit', label='先检查' if check else '先提交', value=submit, known=True,
+                          today=submit == today, words=str(a.get('submit_words') or '')))
     due = exact_day(a.get('due_on'))
     if due:
         kind = a.get('due_kind') or 'deadline'

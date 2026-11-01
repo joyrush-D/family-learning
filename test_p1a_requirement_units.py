@@ -446,6 +446,118 @@ class P1aRequirementUnitTests(unittest.TestCase):
             saved = c.execute('SELECT source,linked_task_id FROM records WHERE id=?', (record,)).fetchone()
         self.assertEqual((saved['source'], saved['linked_task_id']), ('家长手记', english))
 
+    def save_new(self, mid, text, quote, due, title, purpose='admin', subject='', sent='2026-11-03T16:40:00+08:00', source='fictional-qq-a'):
+        """One new fictional notice through the ordinary selection, save and refresh; the reply names its quote, due and title."""
+        phase = dict(name='new-' + mid, source=source, messages=[dict(id=mid, sender_id='qa-head', sender='虚构班主任', text=text, time=sent, kind='text', unread=False)])
+        child = next(s['child_id'] for s in self.fixture['sources'] if s['id'] == source); self.ingest(phase)
+        evidence = [dict(m, ref='message:%s:%s' % (source, m['id']), publisher=agent._publisher(source, m), content_incomplete=False) for m in phase['messages']]
+        targets = agent.school_targets(self.app, self.store, child, evidence=[text])
+        reply = dict(proposals=[dict(title_quote=quote, focus='school', due=due, evidence=[dict(ref=evidence[0]['ref'])], task_title=title, task_goal=quote,
+                                     task_advice='', learning_subject=subject, learning_goal_id='', task_change='new', task_target_id='', task_state='ready',
+                                     task_reason='虚构', task_purpose=purpose, task_submission='')])
+        with patch.object(agent.family_llm, '_chat_json', return_value=reply):
+            items = agent._select('school', evidence, school_goals=[], school_tasks=targets, as_of=self.fixture['day'])
+        for item in items: item.update(child_id=child, kind='school')
+        self.store._save('p1a5:' + mid, 'p1a-fixed', items, self.now)
+        with patch.object(agent.family_llm, '_chat_json') as model, patch.object(agent, '_now', return_value=self.now):
+            agent._refresh_school(self.app, self.store, self.now, 0); model.assert_not_called()
+        return self.task_for(evidence[0]['ref'])
+
+    def same_trial5(self, target, title, text, purpose='learning', mid='960'):
+        message = dict(id=mid, sender_id='qa-head', sender='虚构班主任', text=text, time='2026-11-03T16:59:00+08:00', kind='text', unread=False)
+        evidence = [dict(message, ref='message:fictional-wechat-a:' + mid, publisher=agent._publisher('fictional-wechat-a', message), content_incomplete=False)]
+        trial = dict(change='same', target_id=target, state='ready', title=title, goal=text, reason='', purpose=purpose)
+        agent._school_same_brief(trial, evidence, agent.school_targets(self.app, self.store, 'child-1'))
+        return trial
+
+    def test_p1a5_receiver_is_no_doer_of_a_later_step(self):
+        old = '孩子把《课堂本》交给班主任并朗读《月色》两遍。'
+        self.assertFalse(agent._school_units_differ('孩子把《课堂本》交给班主任并由孩子朗读《月色》两遍。', old))
+        self.assertFalse(agent._school_units_differ('孩子交班主任《课堂本》，并朗读《月色》两遍。', old))
+        for text in ('孩子把《课堂本》交给班主任并由班主任朗读《月色》两遍。', '孩子把《课堂本》交给班主任并由家长朗读《月色》两遍。',
+                     '孩子把《课堂本》交给班主任并朗读《月色》三遍。', '孩子把《课堂本》交给班主任并朗读《星空》两遍。'):
+            self.assertTrue(agent._school_units_differ(text, old), text)
+        # A receiver directly followed by its own step does it (交给老师检查); after a connector it names no later doer.
+        self.assertEqual(agent._school_units('孩子把《课堂本》交给老师检查')[[g for g, x in enumerate(agent._SCHOOL_UNIT_STEPS) if '检查' in x][0]][0][0], 'teacher')
+        task = self.save_new('701', '语文：孩子把《课堂本》交给班主任并朗读《月色》两遍，明天早读检查。', '孩子把《课堂本》交给班主任并朗读《月色》两遍，明天早读检查',
+                             '2026-11-04', '语文：交《课堂本》并朗读《月色》', 'learning', '语文')
+        same = self.same_trial5(task, '语文', '提醒：孩子把《课堂本》交给班主任并由孩子朗读《月色》两遍，明天早读检查；同一件事。')
+        self.assertEqual(same['state'], 'ready', same.get('reason'))
+        for text in ('提醒：孩子把《课堂本》交给班主任并由班主任朗读《月色》两遍，明天早读检查。', '提醒：孩子把《课堂本》交给班主任，班主任朗读《月色》两遍，明天早读检查。'):
+            self.assertEqual(self.same_trial5(task, '语文', text)['state'], 'review', text)
+
+    def test_p1a5_peer_ambiguity_reads_whole_units(self):
+        first = self.save_new('711', '语文：学生抄写《竹叶》三遍，家长抄写《竹叶》一遍，明天检查。', '学生抄写《竹叶》三遍，家长抄写《竹叶》一遍，明天检查', '2026-11-04',
+                              '语文：抄写《竹叶》', 'learning', '语文')
+        second = self.save_new('712', '语文：学生抄写《竹叶》一遍，家长抄写《竹叶》三遍，明天检查。', '学生抄写《竹叶》一遍，家长抄写《竹叶》三遍，明天检查', '2026-11-04',
+                               '语文：抄写《竹叶》', 'learning', '语文', sent='2026-11-03T16:41:00+08:00')
+        self.assertTrue(first and second and first != second)
+        for target, text in ((first, '再提醒：学生抄写《竹叶》三遍，家长抄写《竹叶》一遍，明天检查。'), (second, '再提醒：学生抄写《竹叶》一遍，家长抄写《竹叶》三遍，明天检查。')):
+            same = self.same_trial5(target, '语文', text)
+            self.assertEqual(same['state'], 'ready', (text, same.get('reason')))
+        # A reminder both tasks' units fit stays the parent's choice; the peer guard is kept.
+        both = self.same_trial5(first, '语文', '再提醒：学生和家长抄写《竹叶》，明天检查。')
+        self.assertEqual(both['state'], 'review'); self.assertIn('另一项', both['reason'])
+
+    def test_p1a5_undated_continuation_keeps_the_dated_step_day(self):
+        sent = '2026-11-03T16:51:00+08:00'
+        def roles(text): return agent._school_role_days(text, [dict(text=text, time=sent)], [])
+        for text, due in (('监护人今晚先看看提示，然后在《知情单》上签名；孩子星期四带回教室。', '2026-11-05'),
+                          ('监护人今晚先看看提示；然后在《知情单》上签名；孩子星期四带回教室。', '2026-11-05'),
+                          ('今晚家长先看完说明。看完后在《知情单》上签名。周五由孩子交回。', '2026-11-06'),
+                          ('今晚请监护人先浏览提示；再签上姓名；本周五让学生交给班主任。', '2026-11-06')):
+            self.assertEqual(roles(text), ({'2026-11-03'}, due), text)
+        # Another doer, a negation, its own day or no continuation leaves the evening step undated: the existing review decides.
+        for text in ('今晚家长先看看提示；然后孩子在《知情单》上签名；星期四孩子交回。', '今晚家长先看看提示；不用签名；星期四孩子交回。',
+                     '今晚家长先看看提示；明天签名；星期四孩子交回。', '今晚家长先看看提示。在《知情单》上签名。星期四孩子交回。'):
+            self.assertIsNone(roles(text), text)
+        task = self.save_new('721', '班级：监护人今晚先看看提示；然后在《知情单》上签名；孩子星期四带回教室。',
+                             '监护人今晚先看看提示；然后在《知情单》上签名；孩子星期四带回教室', '2026-11-05', '班级：交回《知情单》')
+        row = self.by_title(self.view(), '知情单')
+        self.assertEqual((row['when'], self.fact(row, 'complete')['value'], self.fact(row, 'due')['value']), ('today', '2026-11-03', '2026-11-05'))
+        self.assertIsNone(self.fact(row, 'submit')); self.assertTrue(task)
+
+    def test_p1a5_verified_reminder_keeps_original_days_at_every_stage(self):
+        stages = (('original_day', 'receipt-01.json'), ('cross_channel_reminders', 'receipt-02.json'),
+                  ('same_publisher_corrections', 'receipt-03.json'), ('other_child_same_title', 'receipt-04.json'))
+        for n, (name, receipt) in enumerate(stages):
+            self.replay(name, receipt)
+            for _ in range(2):  # save, then reopen from the store
+                view = self.view(); row = self.by_title(view, '秋游回执')
+                self.assertEqual((row['when'], self.fact(row, 'complete')['value'], self.fact(row, 'due')['value']), ('today', '2026-11-03', '2026-11-06'), name)
+                self.assertEqual({p['source_name'] for p in row['publications']}, {'虚构甲QQ群'} | ({'虚构甲微信群'} if n else set()), name)
+                for word in ('山间小路', '青石练习册', '跟读Unit 9'):
+                    self.assertEqual(self.fact(self.by_title(view, word), 'complete')['value'], '2026-11-03', (name, word))
+                self.assertEqual(self.fact(self.by_title(view, '山间小路'), 'due')['value'], '2026-11-04', name)
+                self.assertEqual(self.fact(self.by_title(view, '青石练习册'), 'due')['value'], '2026-11-04', name)
+        # The receipt bounds it: once a linked reminder's verified basis no longer holds, its words are read again (no silent pass).
+        receipt_task = self.task_for('message:fictional-qq-a:106')
+        with self.app.connect() as c:
+            row = c.execute("SELECT id,plan FROM agent_items WHERE state='accepted' AND task_id=? AND plan LIKE '%school_same_receipt%'", (receipt_task,)).fetchone()
+            plan = json.loads(row['plan']); plan['school_same_receipt']['input_basis'] = {k: 'changed' for k in plan['school_same_receipt']['input_basis']}
+            c.execute('UPDATE agent_items SET plan=? WHERE id=?', (json.dumps(plan, ensure_ascii=False), row['id']))
+        self.assertIsNone(self.fact(self.by_title(self.view(), '秋游回执'), 'complete'))
+
+    def test_p1a5_each_role_day_is_its_own_predicate(self):
+        import family_agenda
+        self.save_new('731', '今晚老师检查《手工草图》，后天交给班主任。', '今晚老师检查《手工草图》，后天交给班主任', '2026-11-05', '班级：交《手工草图》')
+        self.save_new('732', '班级：今晚在平台提交《活动卡》，明天交给老师。', '今晚在平台提交《活动卡》，明天交给老师', '2026-11-04', '班级：提交《活动卡》',
+                      sent='2026-11-03T16:41:00+08:00')
+        for _ in range(2):
+            view = self.view(); check, card = self.by_title(view, '手工草图'), self.by_title(view, '活动卡')
+            self.assertEqual([(f['role'], f['label'], f['value']) for f in check['facts'] if f['role'] != 'published'],
+                             [('check', '先检查', '2026-11-03'), ('due', '老师要求交回', '2026-11-05')])
+            self.assertIn('检查', self.fact(check, 'check')['words']); self.assertEqual(check['when'], 'today')
+            self.assertEqual([(f['role'], f['label'], f['value']) for f in card['facts'] if f['role'] != 'published'],
+                             [('submit', '先提交', '2026-11-03'), ('due', '老师要求交回', '2026-11-04')])
+            self.assertIn('提交', self.fact(card, 'submit')['words'])
+        # The one-affair version projection carries the same role.
+        agenda = dict(published_at='2026-11-03T16:51:00+08:00', due_on='2026-11-05', due_kind='handback', submit_on='2026-11-03',
+                      submit_words='今晚老师检查《手工草图》', submit_role='check')
+        self.assertEqual([f['role'] for f in family_agenda.day_facts(agenda, '2026-11-03', '2026-11-03', True)], ['published', 'check', 'due'])
+        self.assertEqual((agent._school_earlier_role('今晚老师检查《手工草图》'), agent._school_earlier_role('今晚在线提交《活动卡》'),
+                          agent._school_earlier_role('今晚提交《检查表》')), ('check', 'submit', 'submit'))
+
 
 if __name__ == '__main__':
     unittest.main()
