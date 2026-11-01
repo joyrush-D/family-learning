@@ -528,6 +528,7 @@ func factWords(_ f: DayFact) -> String {
     if f.state == "next_morning" { return f.label + " 明天" }  // 只知道日期是明天，不写“明早”
     if f.state == "overdue" { return "已逾期 · " + f.value }
     if f.role == "complete", f.today == true { return "今天完成" }
+    if f.role == "submit", f.today == true { return "今天先提交" }
     return f.label + " " + (f.known ? f.value : "日期未写明")
 }
 
@@ -704,7 +705,7 @@ struct ItemRow: View {
                 } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
                 FlowRow(spacing: 6, lineSpacing: 4) {
                     if !item.whenLabel.isEmpty { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
-                    ForEach(item.facts.filter { $0.role == "due" || $0.role == "complete" }, id: \.self) { f in
+                    ForEach(item.facts.filter { $0.role == "due" || $0.role == "complete" || $0.role == "submit" }, id: \.self) { f in
                         let (tone, ink) = factTone(f)
                         Badge(text: factWords(f), tone: tone, ink: ink)
                     }
