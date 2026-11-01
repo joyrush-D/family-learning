@@ -5531,6 +5531,86 @@ def _recheck_school_history(app,store,now,budget,scopes):
     return dict(used=used,failed=failed,created=created)
 
 
+def _recover_school_pending_relations(app,store,config,now,budget):
+    """Once per affected old batch, read it again with this child's earlier pending school items (Root run6, r300 state).
+
+    A batch saved while its selection saw no pending item (or its reply named none) can hold a later notice of an earlier
+    pending item as a card of its own. Only a done batch of one enabled source and one child, every row of it still an
+    untouched pending review (_school_untouched_review) linked to nothing, with an earlier pending item of that child, is
+    read once more by the ordinary selection with those items (school_pending_targets; the batch's own rows and later items
+    left out, so no link points to itself or forward). The one write is the program's own proof from that reading
+    (school_pending_of from _school_pending_link) on the same row: its id, words, due, state, the batch's job, messages and
+    cursor stay, an unknown range stays unknown, and a reply proving no link changes nothing. One stable identity per batch
+    keeps its own attempts, backoff and exhaustion (keep_budget); there is no new budget beyond the tick's own."""
+    used=failed=linked=0
+    if budget<1:return dict(used=0,failed=0,created=0,linked=0)
+    sources={s['id']:s for s in config['sources'] if s['enabled']};candidates=[]
+    with store._db() as c:
+        groups={}
+        for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state!='superseded' AND job_id LIKE 'messages:%' ORDER BY created,id"):
+            groups.setdefault(r['job_id'],[]).append(dict(r))
+        for old_key,rows in groups.items():
+            job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
+            if not job or not job['done']:continue
+            try:
+                if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or not _school_untouched_review(c,r,old_key) for r in rows):continue
+                refs=sorted({e['ref'] for r in rows for e in json.loads(r['evidence'])})
+            except (ValueError,KeyError,TypeError):continue
+            if not refs or any(not ref.startswith('message:') for ref in refs):continue
+            ids=[ref[8:].rsplit(':',1) for ref in refs]
+            if len({sid for sid,_ in ids})!=1 or ids[0][0] not in sources:continue
+            source=sources[ids[0][0]]
+            if any(r['child_id']!=source['child_id'] for r in rows):continue
+            values=[]
+            for sid,mid in ids:
+                m=c.execute('SELECT payload,processed FROM agent_messages WHERE source_id=? AND id=?',(sid,mid)).fetchone()
+                if m is None or m['processed']!=1:break
+                values.append(json.loads(m['payload']))
+            if len(values)!=len(ids) or len(values)>6 or any(v.get('kind')!='text' or v.get('unread') for v in values):continue
+            first=min(str(v.get('time') or '') for v in values);own={r['id'] for r in rows}
+            targets=[t for t in school_pending_targets(store,source['child_id'],c) if t['id'][8:] not in own and t['latest'] and t['latest']<first]
+            if not targets:continue
+            key='school-pending-relation:'+_hash([old_key,source['child_id']])[:40]
+            done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
+            if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS):continue
+            candidates.append((old_key,job['fingerprint'],source,values,rows,targets,key))
+    from family_goals import Store as Goals
+    for old_key,fingerprint,source,values,rows,targets,key in candidates:
+        fp=store._job(key,dict(kind='pending-relation',origin=[old_key,fingerprint],source=source['id'],messages=values,
+                                targets=[t['id'] for t in targets]),now,model=True,keep_budget=True)
+        if not fp:continue
+        try:
+            evidence=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],source=source['name'],time=v['time'],sender=v['sender'],
+                           publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
+            profile=next(p for p in app.profiles() if p['id']==source['child_id'])
+            used=1
+            proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
+                school_goals=Goals(app,store).school_candidates(source['child_id']),
+                school_tasks=school_targets(app,store,source['child_id'],evidence=[e['text'] for e in evidence]),school_pending=targets)
+            with store._db() as c:
+                c.execute('BEGIN IMMEDIATE')
+                job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(key,)).fetchone()
+                if not job or job['fingerprint']!=fp or job['done']:raise AgentError('旧待核关系恢复资格已变化，未写入',409,'school_relation_stale')
+                listed={t['id'][8:] for t in targets}
+                for item in proposals:
+                    link=(item.get('plan') or {}).get('school_pending_of')
+                    if not isinstance(link,dict) or link.get('item_id') not in listed:continue
+                    refs={e['ref'] for e in item['evidence']}
+                    mine=[r for r in rows if {e['ref'] for e in json.loads(r['evidence'])}==refs]
+                    if len(mine)!=1:continue
+                    current=c.execute('SELECT * FROM agent_items WHERE id=?',(mine[0]['id'],)).fetchone()
+                    if (current is None or current['updated']!=mine[0]['updated'] or current['state']!='pending'
+                            or json.loads(current['plan']).get('school_pending_of') or not _school_untouched_review(c,current,old_key)):continue
+                    plan=json.loads(current['plan']);plan['school_pending_of']=dict(link,recovered_by=key)
+                    c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),current['id'],current['updated']))
+                    linked+=1
+                c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
+        except (family_llm.LLMDraftError,AgentError,ValueError,KeyError,TypeError,StopIteration,OSError,sqlite3.Error) as error:
+            store._fail(key,now,fingerprint=fp,reason=error);failed=1
+        break
+    return dict(used=used,failed=failed,created=0,linked=linked)
+
+
 def _school_acknowledgement(entry):
     acknowledgement=r'(?:是的|好的|收到|已上传|已提交|明白了|谢谢(?:老师)?)'
     return bool(re.fullmatch(acknowledgement+r'(?:[。！!，,\s]+'+acknowledgement+r')*[。！!，,\s]*',entry['text'].strip()))
@@ -9206,6 +9286,7 @@ def run_once(app, now=None):
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
+            relation=_recover_school_pending_relations(app,store,config,now,min(1,max(0,budget-1)));budget-=relation['used'];processed+=relation['used'];failed+=relation['failed']
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
             # Fresh batches above go first; saved repeats of one affair are revisited only with a call to spare.
             same=_reconcile_school_same(app,store,now,min(1,max(0,budget-1)));budget-=same['used'];processed+=same['used'];failed+=same['failed']
