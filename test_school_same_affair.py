@@ -483,6 +483,29 @@ class SchoolSameAffairTests(unittest.TestCase):
         for _ in range(3): self._tick()
         self.assertEqual(self._same_jobs(), [])
 
+    def test_s07_pending_same_saved_before_requirement_units_is_refused_on_save_and_kept(self):
+        # A reminder reversing who does which step could be linked before requirement units were compared. Such a pending
+        # same/ready item, already saved, is checked again by the one save path: refused with the unit reason and kept pending
+        # for review by the ordinary refresh (no model call); its original, the task and every cursor stay as they were.
+        text = '英语：今晚孩子读Unit 3课文两遍，家长签字，明天交。'
+        original, task_id = self._original(text=text, goal=text)
+        swapped = '英语：今晚家长读Unit 3课文两遍，孩子签字，明天交。'
+        with patch.object(agent, '_school_units_differ', return_value=False):
+            row = self._candidate(12, swapped, change='same', target=task_id, due='2026-02-11', goal=swapped)
+        self.assertEqual([json.loads(row['plan'])['school_task'][k] for k in ('state', 'change')], ['ready', 'same'])
+        with self.app.connect() as c:
+            before = (self._rows(c, 'manual_tasks'), self._rows(c, 'agent_sources'), self._rows(c, 'agent_messages'))
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_same(self.app, self.store, row['id'], row['updated'])
+        self.assertEqual(refused.exception.status, 409); self.assertIn('由谁做哪一步', str(refused.exception))
+        self.assertEqual(self._refresh()['created'], 0)
+        with self.app.connect() as c:
+            kept = dict(c.execute('SELECT * FROM agent_items WHERE id=?', (row['id'],)).fetchone())
+            self.assertEqual((self._rows(c, 'manual_tasks'), self._rows(c, 'agent_sources'), self._rows(c, 'agent_messages')), before)
+        brief = json.loads(kept['plan'])['school_task']
+        self.assertEqual((kept['state'], kept['task_id'], brief['state'], brief['change']), ('pending', '', 'review', 'same'))
+        self.assertIn('由谁做哪一步', brief['reason']); self.assertEqual(json.loads(kept['evidence'])[0]['ref'], 'message:synthetic-group:12')
+
 
 if __name__ == '__main__':
     unittest.main()

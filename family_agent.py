@@ -2935,6 +2935,10 @@ def apply_school_same(app, store, ident, expected):
         targets=school_targets(app,store,row['child_id'],connection=c,evidence=[e.get('text','') for e in original])
         current=next((t for t in targets if t['id']==brief.get('target_id')),None)
         _school_same_brief(checked,original,targets)
+        # A pending reminder saved before a guard it no longer passes (a reversed actor and step) is refused with that guard's
+        # own reason; the ordinary refresh keeps it pending for review with its original, the task and the cursors unchanged.
+        if current is not None and current.get('same_basis')==brief['target_basis'] and checked.get('state')=='review' and checked.get('reason'):
+            raise AgentError(checked['reason'],409)
         if (current is None or current.get('same_basis')!=brief['target_basis'] or checked.get('state')!='ready'
                 or checked.get('target_basis')!=brief['target_basis'] or checked.get('input_basis')!=brief.get('input_basis')
                 or _school_same_due(row['due'],current,original)):
