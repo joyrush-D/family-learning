@@ -5304,7 +5304,7 @@ def _school_untouched_review(c,row,old_key,*,linking=False):
     if not plan.get('school_generated_snapshot') or plan['school_generated_snapshot']!=_school_generated_snapshot(row):return False
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy',
-                                 'school_saved_reread','school_batch_reread','school_split','school_split_from')+(() if linking else ('school_learning',)))):return False
+                                 'school_saved_reread','school_batch_reread','school_split','school_split_from')+(() if linking else ('school_learning',))):return False
     return not (c.execute('SELECT 1 FROM records WHERE source=? LIMIT 1',('Agent建议:'+row['id'],)).fetchone()
                 or c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone())
 
