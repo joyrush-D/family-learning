@@ -674,7 +674,9 @@ class CorrectionUnitTests(ScopeSaveTests):
                 self.assertIn(unit, words)
             self.assertNotIn('三遍', words)
             self.assertNotIn('听写', words)
-            self.assertFalse([r for g in view['groups'] for r in g['items'] if '听写' in r['title']], 'the lesson is no to-do today')
+            lessons = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
+            self.assertEqual(len(lessons), 1, 'one pending lesson row before its day')
+            self.assertNotEqual(lessons[0].get('when'), 'today', 'the lesson is no to-do today')
         for view in self.views(FRI):
             cards = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
             self.assertEqual(len(cards), 1, 'the restated lesson is one card')

@@ -173,10 +173,13 @@ class P1aRequirementUnitTests(unittest.TestCase):
         english = [r for r in self.rows(view) if 'Unit 9' in r['title'] and '听写' not in r['title']]
         self.assertEqual(len(english), 1, [r['title'] for r in self.rows(view)])
         row = english[0]
-        # Root's frozen updates drop unchanged original units (听音频; 空的…一个): never a silent latest, one card for review.
-        self.assertEqual(row['version']['state'], 'review', row['version'])
-        self.assertTrue(any(r.startswith('新要求的归纳缺少原要求中未改的部分') and '听音频' in r for r in row['version']['reasons']), row['version'])
-        self.assertTrue(any('三遍' in l for l in row['lines']), row['lines'])
+        # Root's frozen updates drop unchanged original units (听音频; 空的…一个): never a latest losing them. The English notice
+        # states only a count change (每词两遍) once its lesson sentence is the lesson's own item (Root run9), so the program
+        # composes the whole original with that count put in: the latest still holds 听音频 and every other unit.
+        self.assertEqual((row['version']['state'], row['version'].get('composed')), ('latest', 'original_with_stated_change'), row['version'])
+        self.assertTrue(any('听音频' in l and '两遍' in l for l in row['version']['lines']), row['version'])
+        self.assertFalse(any('三遍' in l for l in row['version']['lines']), row['version'])
+        self.assertTrue(any('三遍' in l for l in row['version']['previous']['lines']))
         self.assertTrue(any('两遍' in l for l in row['version']['notices'][0]['lines']))
         self.assertFalse([r for r in self.rows(view) + view['upcoming'] if r['pending_review'] and '跟读' in r['title']])
         bottle, = [u for u in view['upcoming'] if '透明塑料瓶' in u['title']] + [r for r in self.rows(view) if '透明塑料瓶' in r['title']]
