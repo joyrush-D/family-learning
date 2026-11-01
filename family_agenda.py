@@ -1001,7 +1001,7 @@ def enrich(app,c,tasks):
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
         purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None;originals=();reminders=()
-        subject_title=task.get('original_title',task['title']);own_quote='';saved_subject='';confirmed=('','')
+        subject_title=task.get('original_title',task['title']);own_quote='';saved_subject='';confirmed=[]
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
@@ -1013,8 +1013,7 @@ def enrich(app,c,tasks):
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
                 date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
                 # The role a confirmed school update proved for its day (交回) is the saved due's while that day stays.
-                updates=[e for e in plan.get('school_changes') or [] if isinstance(e,dict) and e.get('change')=='update']
-                if updates:confirmed=(str(updates[-1].get('due_kind') or ''),str(updates[-1].get('due') or ''))
+                confirmed=[e for e in plan.get('school_changes') or [] if isinstance(e,dict) and e.get('change')=='update']
                 date_header=_stored_date_header(plan,date_quote)
                 # The same saved row, words and subject its pending candidate was filed with.
                 subject_title=proposal['title'];own_quote=_stored_date_quote(plan);saved_subject=str((plan.get('school_learning') or {}).get('subject') or '')
@@ -1037,7 +1036,11 @@ def enrich(app,c,tasks):
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
             saved_subject=captured[3] or ''
         task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders)
-        if confirmed[0] in DUE_LABELS and confirmed[1] and confirmed[1]==task['agenda'].get('due_on'):task['agenda']['due_kind']=confirmed[0]
+        # The latest confirmed updates on the task's current day decide its role: a later one moving no role on that same day
+        # (只做第2题) keeps the earlier proven 交回; an update to another day ends the search (a parent's day reads as before).
+        for event in reversed(confirmed):
+            if not task['agenda'].get('due_on') or str(event.get('due') or '')!=task['agenda']['due_on']:break
+            if event.get('due_kind') in DUE_LABELS:task['agenda']['due_kind']=event['due_kind'];break
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
         if teacher.get('complete_on'):
             task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
