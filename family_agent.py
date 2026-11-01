@@ -4597,12 +4597,13 @@ _SCHOOL_ROLE_HEAD=(_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的
 # Choosing on the item's own form (圈选、勾选、选择) is the family's own step of it, finished like a signature.
 _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN))
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
-# A place on the paper itself needs no 上 (在告知书签名、在《知情单》签名、在通知单背面签名): its head noun directly followed by a
-# role predicate is read off, so a sign word inside the noun (在签名册登记) or a negation, doer or day written between the paper
-# and the predicate (在告知书不签名) still reads as before.
+# A signature is made on the paper itself, so its place needs no 上 (在告知书签名、在《知情单》签名、在通知单背面签名): the
+# paper's head noun directly followed by the signing predicate is read off. A sign word inside the noun (在签名册登记), a
+# negation, doer or day written between the paper and the signature (在告知书不签名) and a choice among options written on it
+# (在《回执》勾选‘参加’或‘不参加’) still read as before.
 _SCHOOL_ROLE_PAPER=r'(?:》|书|单|表|册|本|执|卷|纸|页|栏|处|条|联|卡|格|框|面)'
 _SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:(?:家长|监护人|父母|爸爸|妈妈|爸妈)(?:[或和、](?:家长|监护人|父母|爸爸|妈妈|爸妈))?|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
-                   r'(?:在[^，,在]{0,12}?'+_SCHOOL_ROLE_PAPER+r'\s*(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r'))|在[^，,在]{1,12}?(?:上|里|中|内)\s*)?'
+                   r'(?:在[^，,在]{0,12}?'+_SCHOOL_ROLE_PAPER+r'\s*(?='+_SCHOOL_SIGN+r')|在[^，,在]{1,12}?(?:上|里|中|内)\s*)?'
                    r'(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
 
 

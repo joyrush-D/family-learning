@@ -564,8 +564,10 @@ class P1aRequirementUnitTests(unittest.TestCase):
         # The paper's own place, with or without 上, is read off before the predicate it heads.
         for text in ('再在告知书签名', '再在告知书上签名', '在《知情单》签名', '在家长栏签字', '在通知单背面签名', '在签名册签字'):
             self.assertEqual(R(text), {'finish'}, text)
-        # A sign word inside a noun, or a negation between the paper and its predicate, makes no signing step.
-        for text, roles in (('在签名册登记', set()), ('在签名册上登记', set()), ('交回签名回执', {'handback'}), ('在告知书不签名', set())):
+        # A sign word inside a noun, or a negation between the paper and its predicate, makes no signing step; a choice among
+        # options written on the paper keeps its own reading (the frozen reply-slip variants).
+        for text, roles in (('在签名册登记', set()), ('在签名册上登记', set()), ('交回签名回执', {'handback'}), ('在告知书不签名', set()),
+                            ('今晚请家长在《研学活动回执》勾选‘参加’或‘不参加’', set())):
             self.assertEqual(R(text), roles, text)
         sent = '2026-11-03T16:51:00+08:00'
         def roles(text): return agent._school_role_days(text, [dict(text=text, time=sent)], [])
