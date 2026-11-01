@@ -1265,6 +1265,8 @@ def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent
     if any(days(t[0],new_sent) not in ({old_day},{new_day},*({d} for d in kept)) for t in _UNIT_DAY_WORDS.finditer(said)):return None
     if not _unit_chars(_MOVE_NARRATION.sub(' ',_UNIT_DAY_WORDS.sub(' ',said.lower())))<=_unit_chars(old_title+'\n'+'\n'.join(old_lines)+'\n'+original):
         return None
+    # An exemption the notice names again without its negation (今晚要填写记录表 after 今晚不用填写) is a changed unit.
+    if any(verb in said for verb in _negated_actions('\n'.join(old_lines))-_negated_actions(said)):return None
     (i,t),=moved;lines[i]=lines[i][:t.start()]+to[0][1]+lines[i][t.end():]
     return lines
 

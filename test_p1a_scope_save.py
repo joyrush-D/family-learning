@@ -610,3 +610,14 @@ class CorrectionUnitTests(ScopeSaveTests):
         for view in self.views(THU):
             sci, = self.row(view, sci_task)
             self.assertEqual(sci['version']['state'], 'review', 'an added requirement is no proven move-only change')
+
+    def test_a_move_notice_lifting_an_exemption_stays_under_review(self):
+        en_task, sci_task = self.originals()
+        r8 = 'message:%s:108' % EN
+        self.batch(EN, [msg('108', '周四科学课改到下周一，透明塑料瓶也下周一再带，今晚要填写记录表。', '17:12', **self.SCI_T)], lambda targets, pending: [
+            proposal(r8, '周四科学课改到下周一，透明塑料瓶也下周一再带，今晚要填写记录表', '科学：下周一实验课带空透明塑料瓶',
+                     '科学实验课改到下周一。\n透明塑料瓶下周一再带。', state='review', change='update', target=sci_task, due=MON,
+                     purpose='admin', subject='')])
+        for view in self.views(THU):
+            sci, = self.row(view, sci_task)
+            self.assertEqual(sci['version']['state'], 'review', 'the notice names the exempted step again: no move-only change')
