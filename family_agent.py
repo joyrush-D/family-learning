@@ -2374,11 +2374,12 @@ def _school_pending_link(target, change, brief, cited, due):
     if not _school_same_object(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''),target['title']+'\n'+target['goal']):return None
     if change=='same' and due and target['due'] and due!=target['due']:return None
     # The item's own day binds its notices: another day of the same object (周五再展示朗读一次《小树林》第5段 after a pending
-    # 周四…展示朗读) is another occurrence unless the notice itself moves this item there (改到周五); one that says it is
-    # separate (另外安排、和周四那场分别登记) is never this item's update. A notice stating no day of its own keeps the proof above.
+    # 周四…展示朗读) is another occurrence unless the notice itself moves this item there (改到周五); a reply whose own words
+    # say it is separate (另外安排、和周四那场分别登记) is never this item's notice, while a sibling in the same message that
+    # says so leaves this reply's proof as it is. A notice stating no day of its own keeps the proof above.
     from family_agenda import deadlines,sent_day
-    said='\n'.join(str(e.get('text') or '') for e in cited)
-    if _SCHOOL_APART.search(said) or re.search(r'另外安排|另一次|另一场',said):return None
+    said='\n'.join(str(e.get('text') or '') for e in cited);words=str(brief.get('title') or '')+'\n'+str(brief.get('goal') or '')
+    if _SCHOOL_APART.search(words) or re.search(r'另外安排|另一次|另一场',words):return None
     if change!='same' and target['due']:
         own={due} if due else set().union(*(deadlines(str(e.get('text') or ''),sent_day(e.get('time',''))) for e in cited))
         if own and target['due'] not in own and not re.search(_SCHOOL_MOVED,said):return None

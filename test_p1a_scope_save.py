@@ -174,6 +174,25 @@ class PendingOtherOccurrenceTests(ScopeSaveTests):
             self.assertEqual([r['when'] for r in self.cards(view, '展示') if '第5段' not in r['title']], ['today'],
                              'the Thursday pending item stays its own card')
 
+    def test_one_message_with_the_pending_items_correction_and_another_occurrence_binds_each_apart(self):
+        first = self.thursday_pending()
+        ref = 'message:%s:505' % EN
+        text = '周四英语课展示朗读的段落定为《小树林》第3段。另外安排周五英语课再展示朗读一次《小树林》第5段，和周四那场分别登记。'
+
+        def replies(targets, pending):
+            target = next(p['id'] for p in pending if '展示' in p['title'])
+            return [proposal(ref, '周四英语课展示朗读的段落定为《小树林》第3段', '英语：周四英语课展示朗读《小树林》第3段',
+                             '周四英语课展示朗读《小树林》第3段。', state='review', change='update', target=target, due=THU),
+                    proposal(ref, '另外安排周五英语课再展示朗读一次《小树林》第5段', '英语：周五英语课再展示朗读一次《小树林》第5段',
+                             '周五英语课再展示朗读一次《小树林》第5段；与周四那场分别登记。', due=FRI)]
+        self.batch(EN, [msg('505', text, '20:10')], replies)
+        items = {i['title']: i for i in self.items_for(ref)}
+        correction = next(i for t, i in items.items() if '第3段' in t)
+        other = next(i for t, i in items.items() if '第5段' in t)
+        self.assertEqual(correction['plan'].get('school_pending_of', {}).get('item_id'), first['id'], 'the correction joins the pending card')
+        self.assertNotIn('school_pending_of', other['plan'], 'the separate Friday occurrence is its own item')
+        self.assertEqual(other['due'], FRI)
+
     def test_true_correction_on_the_same_day_still_joins_the_pending_card(self):
         first = self.thursday_pending()
         item = self.later('503', '周四英语课展示朗读的段落定为《小树林》第3段。', '周四英语课展示朗读的段落定为《小树林》第3段',
