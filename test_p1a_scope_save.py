@@ -260,6 +260,11 @@ class RelationScopeTests(ScopeSaveTests):
         self.assert_apart(wednesday, self.friday(self.QUOTE + '；与周三复述第1段那次是两次独立安排。',
                                                  text='英语：' + self.QUOTE + '，与周三复述第1段那次是两次独立安排。'))
 
+    def test_the_other_word_order_in_the_items_own_sentence_reads_the_same(self):
+        wednesday = self.wednesday()
+        self.assert_apart(wednesday, self.friday(self.QUOTE + '，周三的复述与本次是两个独立安排。',
+                                                 text=self.QUOTE + '，周三的复述与本次是两个独立安排。'))
+
     def test_a_relation_day_no_original_or_listed_item_grounds_is_still_read(self):
         self.wednesday()
         # No listed item is dated Thursday and the original relates Wednesday: the model's own day stays this summary's.
@@ -318,6 +323,14 @@ class RelationScopeTests(ScopeSaveTests):
     def test_c_a_following_sentence_referring_back_is_the_same_occurrences_words(self):
         self.rain_pending()
         self.assert_own_card(self.wrong_update('周五英语课展示《雨后》第6段。这是另一场展示。'))
+
+    def test_c_separateness_heading_the_items_own_clause_refuses_the_link(self):
+        self.rain_pending()
+        self.assert_own_card(self.wrong_update('这次单独安排一场展示：周五英语课展示《雨后》第6段。'))
+
+    def test_c_an_unlocated_quote_proves_no_scope_where_the_original_says_separate(self):
+        self.rain_pending()
+        self.assert_own_card(self.wrong_update('周五英语课展示《雨后》第6段，这是独立的一次展示。', quote='周五展示《雨后》第6段'))
 
     def test_c_a_siblings_separateness_leaves_the_correction_joined(self):
         first = self.rain_pending()

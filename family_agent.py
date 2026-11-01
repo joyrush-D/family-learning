@@ -2383,6 +2383,9 @@ def _school_pending_link(target, change, brief, cited, due, quote=''):
     said='\n'.join(str(e.get('text') or '') for e in cited);words=str(brief.get('title') or '')+'\n'+str(brief.get('goal') or '')
     own=_school_own_range(quote,cited)
     if any(_SCHOOL_APART.search(text) or _SCHOOL_SEPARATE.search(text) for text in (words,own)):return None
+    # A reply whose own words the program cannot locate proves no scope: an original that says some occurrence is separate
+    # then leaves the link unproven (its own card), never the model's summary alone deciding it.
+    if not own and any(_SCHOOL_APART.search(text) or _SCHOOL_SEPARATE.search(text) for text in said.split('\n')):return None
     if change!='same' and target['due']:
         own={due} if due else set().union(*(deadlines(str(e.get('text') or ''),sent_day(e.get('time',''))) for e in cited))
         if own and target['due'] not in own and not re.search(_SCHOOL_MOVED,said):return None
@@ -3359,14 +3362,15 @@ def _school_clause_days(text,published):
 
 
 def _school_own_range(quote,cited):
-    """This reply's own words in its cited original: from its quote to the end of that clause, and each directly following
-    clause that only refers back to it (这两次分开安排、这是独立的一次展示，单独安排、和周四那场分别登记). A sibling action of the
-    same message (另外安排周五…) starts its own range. Empty when the quote is found in no cited original."""
+    """This reply's own words in its cited original: the whole clause holding its quote (这次单独安排一场展示：周五…), and each
+    directly following clause that only refers back to it (这两次分开安排、这是独立的一次展示，单独安排、和周四那场分别登记). A
+    sibling action of the same message (另外安排周五…) starts its own range. Empty when the quote is found in no cited original."""
     quote=re.sub(r'\s+','',str(quote or ''))
     for e in cited:
         flat=re.sub(r'\s+','',str(e.get('text') or ''));at=flat.find(quote) if quote else -1
         if at<0:continue
-        first,*rest=re.split(r'[，,。；;！!？?\n]',flat[at+len(quote):]);own=[quote+first]
+        lead=re.split(r'[，,。；;！!？?\n]',flat[:at])[-1]
+        first,*rest=re.split(r'[，,。；;！!？?\n]',flat[at+len(quote):]);own=[lead+quote+first]
         for part in filter(None,rest):
             if not re.match(r'(?:这|此|本|该|两|与|和|跟|同|单独|分开|分别|独立|属于|是|不是|并非)',part):break
             own.append(part)
