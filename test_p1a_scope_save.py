@@ -1004,3 +1004,32 @@ class DateRoleCountMoveTests(ScopeSaveTests):
         for row, in self.rows(DAY, task):
             self.assertIn('第2题', '\n'.join(row['lines']))
             self.assertEqual([(f.get('kind'), f['value']) for f in row['facts'] if f.get('kind') in ('handback', 'deadline')], [('handback', DAY)], row['facts'])
+
+    def test_a_candidate_still_stating_the_explicitly_changed_count_is_never_the_latest(self):
+        """Root H1 shape (fictional variant): 每句由四遍改为一遍 while the candidate goal still says 每句四遍."""
+        task = self.original('901', '英语：今晚先听配套音频，再跟读《竹影短歌》第1至3句，每句四遍；完成后把跟读录音上传到班级练习栏。', '16:10', self.MATH,
+                             '英语：今晚先听配套音频，再跟读《竹影短歌》第1至3句，每句四遍；完成后把跟读录音上传到班级练习栏', '英语：《竹影短歌》今晚跟读',
+                             '今晚先听配套音频，再跟读《竹影短歌》第1至3句，每句四遍。\n完成后把跟读录音上传到班级练习栏。', '', subject='英语')
+        original = self.task(task)['action']
+        self.saved('902', '更正今晚《竹影短歌》的跟读：每句由四遍改为一遍，其余完成标准和提交方式不变。', '17:05', self.MATH,
+                   '更正今晚《竹影短歌》的跟读：每句由四遍改为一遍，其余完成标准和提交方式不变', '英语：《竹影短歌》每句跟读一遍',
+                   '今晚先听配套音频，再跟读《竹影短歌》第1至3句，每句四遍。\n完成后把跟读录音上传到班级练习栏。', '', subject='英语',
+                   state='review', change='update', target=task)
+        for rows in self.rows(DAY, task):
+            for row in rows:
+                version = row.get('version') or {}
+                if version.get('state') == 'latest':
+                    words = '\n'.join(version['lines'])
+                    self.assertNotIn('四遍', words, 'the explicitly changed count is never the latest')
+                    for unit in ('一遍', '听配套音频', '第1至3句', '录音上传'):
+                        self.assertIn(unit, words)
+        item, = [i for i in self.items_for('message:%s:902' % SCI) if i['state'] == 'pending']
+        try:
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        except agent.AgentError:
+            self.assertEqual(self.task(task)['action'], original, 'a refused save writes nothing')
+        else:
+            saved = self.task(task)['action']
+            self.assertNotIn('四遍', saved)
+            for unit in ('一遍', '听配套音频', '录音上传'):
+                self.assertIn(unit, saved)
