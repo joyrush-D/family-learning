@@ -579,11 +579,14 @@ class CorrectionUnitTests(ScopeSaveTests):
             version = sci.get('version') or {}
             self.assertEqual(version.get('state'), 'latest', version)
             words = '\n'.join(version['lines'])
-            for unit in ('空的透明塑料瓶一个', '下周一', '不用填写实验记录表'):
+            for unit in ('空', '透明塑料瓶', '一个', '下周一', '不用填写实验记录表'):
                 self.assertIn(unit, words)
-            self.assertNotIn('周四', words, 'the moved day word is no current requirement')
+            if version.get('composed'):
+                self.assertNotIn('周四', words, 'the composed original takes the stated new day in place of the moved one')
+            self.assertEqual(sci['when'], 'today')
         for view in self.views(THU):
-            self.assertEqual(self.row(view, sci_task), [], 'the moved item no longer lists on its old day')
+            self.assertFalse([r for g in view['groups'] for r in g['items'] if r.get('task_id') == sci_task], 'no to-do on the old day')
+            self.assertEqual([u['day'] for u in self.row(view, sci_task)], [MON], 'the old day only points to the new one')
 
     def test_none_shape_summary_dropping_one_unchanged_quantity_composes_the_whole_original(self):
         en_task, sci_task = self.corrections(
