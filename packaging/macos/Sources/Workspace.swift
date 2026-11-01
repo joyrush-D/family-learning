@@ -213,6 +213,14 @@ final class WorkspaceStore: ObservableObject {
         }
     }
 
+    /// 以后课堂/待补范围的事项（服务端 day_view 同一 upcoming，与网页同一行）：日期、标题、待补与变化；发生日完整列出，不算今天。
+    var upcomingLine: String? {
+        guard mode == .calendar, !showDone, let u = current?.upcoming, !u.isEmpty else { return nil }
+        return "即将/待补：" + u.map { x in
+            "\(x.day.dropFirst(5)) \(x.title)" + (x.pending_review ? "（待补）" : "") + ((x.change ?? "").isEmpty ? "" : "（\(x.change ?? "")）")
+        }.joined(separator: "；")
+    }
+
     static func formatter() -> DateFormatter {
         let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = TimeZone(secondsFromGMT: 8 * 3600); f.dateFormat = "yyyy-MM-dd"; return f
@@ -664,6 +672,10 @@ struct SubjectList: View {
             if store.groups.isEmpty && store.current != nil {
                 Text(store.showDone ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
                     .font(Palette.body).foregroundStyle(Palette.ink2).probe("list-empty")
+            }
+            if let line = store.upcomingLine {
+                Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                    .listRowSeparator(.hidden).probe("upcoming", text: line)
             }
         }
         .listStyle(.sidebar)

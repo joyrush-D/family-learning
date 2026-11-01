@@ -201,5 +201,93 @@ class P1aRequirementUnitTests(unittest.TestCase):
         self.assertTrue(any('两遍' in l for l in row['version']['notices'][0]['lines']))
 
 
+    def test_b1_relation_is_proven_whole_while_standards_quoted_states_and_new_rounds_stay(self):
+        # Developer's own variants (Root keeps its held-out ones): other words for a pure relation link without the parent;
+        # a standard, a quoted state or another item beside relation words is a requirement unit and stays for review.
+        self.whole_day('original_day')
+        ids = self.translate()
+        targets = agent.school_targets(self.app, self.store, 'child-1')
+        chinese, slip = ids['AGENT-8a4497101bceb5f89ce3e971'], ids['AGENT-4be1b9a5da40e98d346fd320']
+        said = '提醒语文《山间小路》朗读两遍并请家长在阅读登记本签字，明天早读查登记本；'
+        back = '秋游回执参加、不参加都交，今晚家长勾好并签字，周五孩子交班主任；'
+        cases = [(chinese, said + '此处仅转发原要求，请不要理解为另布置第二项。', 'ready'),
+                 (chinese, said + '这里只是转达前面语文老师的通知，并非另外一项任务。', 'ready'),
+                 (slip, back + '和微信群王老师发的那份是一回事。', 'ready'),
+                 (chinese, said + '同原群那一份任务须注明朗读时长。', 'review'),
+                 (chinese, said + '同原群那一份任务状态为“撤回”。', 'review'),
+                 (chinese, said + '和QQ群语文老师那条是同一件事，务必用红笔圈出生字。', 'review'),
+                 (chinese, said + '“不用签字”，和QQ群语文老师那条是同一件事。', 'review'),
+                 (chinese, said + '这是另布置的第二项，请不要理解为原要求。', 'review'),
+                 (slip, back + '请不要理解为另布置第二项，另交一张安全承诺书。', 'review')]
+        for n, (target, text, expected) in enumerate(cases):
+            message = dict(id=str(960 + n), sender_id='qa-head', sender='虚构班主任', text=text, time='2026-11-03T16:51:00+08:00', kind='text', unread=False)
+            evidence = [dict(message, ref='message:fictional-wechat-a:' + message['id'], publisher=agent._publisher('fictional-wechat-a', message), content_incomplete=False)]
+            trial = dict(change='same', target_id=target, state='ready', title='提醒', goal=text, reason='', purpose='learning' if target == chinese else 'admin')
+            agent._school_same_brief(trial, evidence, targets)
+            self.assertEqual(trial['state'], expected, (text, trial.get('reason')))
+        # Root's minimal forms, as requirement units of the pure guard.
+        geo = '地理：今晚完成《地形练习》第9页第2题，明天交。'
+        for text in (geo + '同原群那一份任务须注明地图方向。', geo + '同原群那一份任务状态为“撤回”。'):
+            body, relation = agent._school_relation_body(text)
+            self.assertEqual((body, relation), (text, []))
+            self.assertTrue(agent._school_same_changes(body, geo) or agent._school_same_unstated(body, geo), text)
+        music = '音乐：周五带竖笛。'
+        body, relation = agent._school_relation_body(music + '此处仅转发原要求，请不要理解为另布置第二项。')
+        self.assertEqual((body, relation), (music, ['此处仅转发原要求', '请不要理解为另布置第二项']))
+        self.assertFalse(agent._school_same_changes(body, music) or agent._school_same_unstated(body, music))
+        for text in (music + '这是另布置的第二项。', music + '下周三再带一次竖笛。', '音乐：周五带两支竖笛。此处仅转发原要求。'):
+            body, _ = agent._school_relation_body(text)
+            self.assertTrue(agent._school_same_changes(body, music) or agent._school_counts(body) - agent._school_counts(music), text)
+
+    def test_b2_double_negation_keeps_the_action_and_its_day(self):
+        import family_agenda
+        for clause in ('今晚不是不需要提交阅读卡', '明天不能不交', '今晚并非不用带回执'):
+            self.assertFalse(agent._school_clause_negated(clause), clause)
+            self.assertFalse(agent._school_negated_day(clause), clause)
+            self.assertEqual(family_agenda._negated_actions(clause), set(), clause)
+        self.assertIn('2026-11-03', family_agenda._action_deadlines('今晚不是不需要提交阅读卡，明早带到学校。', '2026-11-03'))
+        # An ordinary negation still states no action or day; a contrasted positive step stays.
+        self.assertTrue(agent._school_clause_negated('今晚不用填写实验记录表'))
+        self.assertTrue(agent._school_negated_day('今晚不用填写实验记录表'))
+        self.assertFalse(family_agenda._action_deadlines('今晚不用填写实验记录表。', '2026-11-03'))
+        self.assertFalse(agent._school_clause_negated('今晚不用填表但要请家长签字'))
+
+    def english(self, view):
+        rows = [r for r in self.rows(view) if 'Unit 9' in r['title'] and '听写' not in r['title']]
+        self.assertEqual(len(rows), 1, [r['title'] for r in self.rows(view)])
+        return rows[0]
+
+    def test_b4_unread_original_on_the_notice_keeps_review_until_wholly_read(self):
+        import family_media
+        self.whole_day()
+        self.assertEqual(self.english(self.view())['version']['state'], 'latest')
+        # An original (an unread PNG) linked straight to the read correction text: the text alone is not the whole notice.
+        with self.app.connect() as c:
+            c.execute('INSERT INTO agent_message_attachments(source_id,message_id,upload_id) VALUES(?,?,?)', ('fictional-qq-a', '107', 'f' * 32))
+        row = self.english(self.view())
+        self.assertEqual(row['version']['state'], 'review', row['version'])
+        self.assertIn('通知或所附原件尚未读全', row['version']['reasons'])
+        self.assertTrue(any('三遍' in l for l in row['lines']), row['lines'])
+        read = dict(complete=True, upload_ids=['f' * 32], draft=dict(originals=[dict(upload_id='f' * 32, title='虚构原件', note='虚构：只需跟读两遍。', uncertainties=[])]))
+        with patch.object(family_media, 'school_evidence', return_value=read):
+            self.assertEqual(self.english(self.view())['version']['state'], 'latest', '读全原件后恢复明确最新展示')
+        for partial in (dict(read, complete=False), dict(read, upload_ids=[]),
+                        dict(read, draft=dict(originals=[dict(read['draft']['originals'][0], uncertainties=['右下角看不清'])]))):
+            with patch.object(family_media, 'school_evidence', return_value=partial):
+                self.assertEqual(self.english(self.view())['version']['state'], 'review', partial)
+
+    def test_b4_latest_lines_must_be_the_notice_own_words(self):
+        self.whole_day()
+        with self.app.connect() as c:
+            for x in c.execute("SELECT id,plan FROM agent_items WHERE state='pending' AND kind='school'").fetchall():
+                plan = json.loads(x['plan'])
+                if plan['school_task'].get('change') == 'update' and '跟读' in plan['school_task']['title']:
+                    plan['school_task']['title'] = plan['school_task']['title'].replace('两遍', '四遍')
+                    c.execute('UPDATE agent_items SET plan=? WHERE id=?', (json.dumps(plan, ensure_ascii=False), x['id']))
+        row = self.english(self.view())
+        self.assertEqual(row['version']['state'], 'review', row['version'])
+        self.assertIn('新要求的归纳与通知原文对不上', row['version']['reasons'])
+        self.assertTrue(any('三遍' in l for l in row['lines']), row['lines'])
+
 if __name__ == '__main__':
     unittest.main()

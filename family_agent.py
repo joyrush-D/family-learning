@@ -2521,25 +2521,59 @@ def _school_counts(value):
 # model's), each proven to hold nothing but the relation; every remaining requirement word still meets every change, count,
 # step, object and date guard below. A clause also saying anything else (改为三遍、明天不用交、再读一遍、两张) stays a requirement,
 # and 不用重复X is relation only while this reminder's own requirement words restate X (a negated original action stays a change).
+# Positive proof only: a clause is set aside when its whole text is one relation form below, built of nothing but the
+# reference to the earlier notice (channel, teacher, said, time), the one-affair phrase, a forward/reminder verb, a denied
+# new/another claim and closed nouns (作业、任务、通知、要求). Any other word (须注明地图方向、状态为、a quote, a count or date
+# outside a denied new claim) keeps the whole clause a requirement unit; nothing is inferred from what a clause lacks.
 _SCHOOL_RELATION_ONE=re.compile(r'(?:同一|同样一|那一?|这一?)(?:件|份|张|条|项|个)(?:事情?|作业|任务|通知|消息|回执|表格?)?')
-_SCHOOL_RELATION_SAID=re.compile(r'(?:今天|今日|刚才|刚刚|上午|下午|早上|中午|昨天|之前|前面|原来)?(?:布置|发布?|通知|说|讲)(?:的|过的)?')
+_SCHOOL_RELATION_NOUN=r'(?:事情?|作业|任务|通知|消息|回执|表格?|要求|内容|安排)'
+_SCHOOL_RELATION_REF=(r'(?:(?:QQ|qq|微信|钉钉|企业微信|班级|家长|年级|学校|原来?的?)?群(?:里|内|中|上)?'
+    r'|(?:语文|数学|英语|物理|化学|生物|历史|地理|政治|道法|科学|音乐|美术|体育|信息|劳动|[一-鿿])?老师|班主任|学校|班级'
+    r'|原来?的?|之前的?|前面的?|上面的?|刚才的?|刚刚|今天|今日|上午|下午|早上|中午|昨天'
+    r'|(?:布置|发布|发出|发|通知|说|讲|转发)(?:的|过的)?|的|里)')
+_SCHOOL_RELATION_FORMS=(
+    # 这就是QQ群里数学老师今天布置的那份、和QQ群语文老师那条是同一件事、同QQ群通知那一张
+    re.compile(r'(?:这|此|本条|这条|该条|此条|它)?也?(?:就|即|正)?(?:是|为|属于)?(?:和|与|跟|同)?'+_SCHOOL_RELATION_REF+r'*'
+               r'(?:同一|同样一|那一?|这一?)(?:件|份|张|条|项|个)'+_SCHOOL_RELATION_NOUN+r'?'
+               r'(?:(?:是|为|属于)?(?:同一(?:件|个|项|份|张|条)'+_SCHOOL_RELATION_NOUN+r'?|一回事|一样的?|相同的?))?'),
+    # 提醒一次、此处仅转发原要求、只是再提醒一下大家
+    re.compile(r'(?:此处|这里|本条|此条|这条|以上|上述|这|此)?也?(?:仅|只|只是|仅仅|仅是|就是|是|特此)?再?(?:转发|转达|转告|重发|复述|重复|提醒)'
+               r'(?:一(?:次|下|遍))?(?:大家|各位(?:家长|同学)?)?(?:'+_SCHOOL_RELATION_REF+r'*'+_SCHOOL_RELATION_NOUN+r')?'),
+    # 不是新增表格、请不要理解为另布置第二项: a new or another item denied as a whole; its 第二/一 counts nothing
+    re.compile(r'请?并?(?:不是|并非|不属于|不算|不要理解为|别理解为|勿理解为|不要当作|不要当成|别当成|别当作|不要误以为是?|不要以为是?)'
+               r'(?:新(?:增|加|布置)?|另(?:外|行)?|额外|又)(?:加|增加|布置|留|发)?的?(?:第二|另一|一|新的?)?(?:件|份|张|条|项|个)?'+_SCHOOL_RELATION_NOUN+r'?'),
+    re.compile(r'不(?:另(?:外)?|额外|再)(?:加|增加|布置|留|发)'+_SCHOOL_RELATION_NOUN+r'?'),
+)
 
 
 def _school_relation_clause(clause):
     """(True, X) when one clause only states the reminder's relation to an earlier notice; X is an action it says not to repeat."""
-    c=re.sub(r'\s+','',_SCHOOL_SAME_QUOTED.sub('',clause)).strip('。；;！!？?，,、')
+    c=re.sub(r'\s+','',clause).strip('。；;！!？?，,、')
     if not c:return False,''
-    if re.fullmatch(r'(?:再|重复|特此|只是|仅)?提醒(?:一(?:次|下|遍))?(?:大家|各位(?:家长|同学)?)?',c):return True,''
-    if re.fullmatch(r'并?(?:不是|并非|不属于|不算)(?:新(?:增|加|布置)?|另(?:外|加)?一?|额外)(?:的)?(?:作业|任务|表格?|回执|通知|一项|一份|一张|要求)?',c):return True,''
-    if re.fullmatch(r'不(?:另(?:外)?|额外|再)(?:加|增加|布置|留|发)(?:作业|任务|表格?|回执)?',c):return True,''
-    m=re.fullmatch(r'(?:不用|无需|无须|不必|不需要?|不要)重复(.{0,6})',c)
+    if any(form.fullmatch(c) for form in _SCHOOL_RELATION_FORMS):return True,''
+    m=re.fullmatch(r'(?:不用|无需|无须|不必|不需要?|不要)重复([一-鿿]{1,6})',c)
     if m:return (not _school_counts(m[1]) and not _SCHOOL_DATE_MENTION.search(m[1])),m[1]
-    rest=_SCHOOL_RELATION_SAID.sub('',_SCHOOL_RELATION_ONE.sub('',c))
-    if (_SCHOOL_RELATION_ONE.search(c) and re.match(r'(?:这|此|本条|也)?(?:就|即)?(?:是|为)?(?:和|与|跟|同)|这就|就是|即是|同一',c)
-            and not _school_counts(rest) and not _SCHOOL_DATE_MENTION.search(rest) and not _SCHOOL_SAME_CHANGED.search(rest)
-            and not any(re.search(group,rest) for group in _SCHOOL_SAME_STEPS)):
-        return True,''
     return False,''
+
+
+# What a reminder's kept clause says that the task's own words do not (同原群那一份任务须注明地图方向、状态为“撤回”): the words
+# after an earlier-notice reference (那份、同一件) or a requirement modal (须、必须、务必、需要、要求、记得、注意) are the reminder's own
+# requirement or completion standard unless each of their content characters is already the task's own.
+_SCHOOL_SAME_REFERS=re.compile(r'(?:同一|同样一|那一?)(?:件|份|张|条|项)'+_SCHOOL_RELATION_NOUN+r'?')
+_SCHOOL_SAME_MODAL=re.compile(r'(?<![不无毋没])(?:必须|务必|一定要|须|需要|需|要求|应当|应该|记得|注意)')
+_SCHOOL_SAME_FILLER=re.compile(r'[把将来去上下好的了地得都也再并和与及给在一下]')
+
+
+def _school_same_unstated(text, facts):
+    """Whether a kept clause of the reminder states a requirement or standard whose content words the task never states."""
+    own=set(re.sub(r'\s+','',facts))
+    for clause in re.split(r'[，,。；;！!？?\n]',text):
+        c=re.sub(r'\s+','',clause)
+        tails=[c[m.end():] for m in _SCHOOL_SAME_REFERS.finditer(c)]+[c[m.end():] for m in _SCHOOL_SAME_MODAL.finditer(c)]
+        for tail in tails:
+            words=_SCHOOL_SAME_FILLER.sub('',''.join(re.findall(r'[一-鿿]',tail)))
+            if any(ch not in own for ch in words):return True
+    return False
 
 
 def _school_relation_body(text):
@@ -2557,16 +2591,17 @@ def _school_relation_body(text):
 
 
 def _school_same_spoken(text):
-    """The reminder's own instructions: quoted titles/names and discourse labels removed."""
-    return _SCHOOL_SAME_LABEL.sub(' ',_SCHOOL_SAME_QUOTED.sub(' ',text))
+    """The reminder's own instructions: 《》 titles and discourse labels removed. Other quotes mark an emphasis or a state as
+    often as a name (状态为“撤回”), so only their marks go and their words still count."""
+    return _SCHOOL_SAME_LABEL.sub(' ',re.sub(r'[“”「」『』"]','',re.sub(r'《[^》]{0,40}》',' ',text)))
 
 
 def _school_same_changes(text, facts):
     """A change, new round or extra requirement the reminder itself says; a condition the task already states is repeated."""
-    spoken=_school_same_spoken(text)
+    spoken=_school_same_spoken(text);plain=re.sub(r'[“”「」『』"]','',facts)
     for match in _SCHOOL_SAME_CHANGED.finditer(spoken):
         phrase=re.split(r'[，,。；;！!？?\n]',spoken[match.start():match.end()+8])[0]
-        if phrase not in facts: return True
+        if phrase not in facts and phrase not in plain: return True
     return False
 
 
@@ -2612,6 +2647,8 @@ def _school_same_brief(brief, evidence, targets):
     said,relation=_school_relation_body(text)
     if _school_same_changes(said,facts) or brief.get('purpose') not in ('learning','admin'):
         uncertain('提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。');return
+    if _school_same_unstated(said,facts):
+        uncertain('提醒写了原事项没有的要求或完成标准，不能只当作重复提醒；原事项和提醒原文都保留。');return
     old=_school_counts(facts)
     for value in (said,brief['title']+' '+_school_relation_body(brief['goal'])[0]):
         if (not _school_named_objects(value).issubset(_school_named_objects(facts))
@@ -3014,9 +3051,10 @@ _SCHOOL_LESSON_PLACE=(r'\s*的?\s*(?:(?:早上|上午|下午)\s*)?(?:第[一二�
 
 def _school_negated_day(clause):
     """Whether one clause's own day directly heads a negated predicate (今晚不交纸质作业、明天不用带): no day of an action."""
-    from family_agenda import _NEGATED_LEAD
-    return bool(re.search(r'(?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上)?\s*'
-                          r'(?:都|也)?\s*'+_NEGATED_LEAD+r'[一-鿿]',clause))
+    from family_agenda import _NEGATED_LEAD,_NEGATION_HEAD
+    day=r'(?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上)?\s*(?:都|也)?\s*'
+    # 今晚不是不需要提交阅读卡: the day heads a negated negation, an action still required on that day.
+    return bool(re.search(day+_NEGATED_LEAD+r'[一-鿿]',clause)) and not re.search(day+_NEGATION_HEAD+_NEGATED_LEAD,clause)
 
 
 def _school_handback_day(text,published,values):
@@ -3342,9 +3380,9 @@ def _school_role_days(quote,cited,others,words=False):
 
 def _school_clause_negated(clause):
     """Whether every work, sign, handback, check or carry predicate of one clause is negated (今晚不用填写记录表、明天不交)."""
-    from family_agenda import _COMPLETION_VERB,_NEGATED_LEAD,_titles_read_as_objects
+    from family_agenda import _COMPLETION_VERB,_NEGATED_LEAD,_negation_negated,_titles_read_as_objects
     text=_titles_read_as_objects(clause);verbs=r'(?:'+_COMPLETION_VERB+r'|填写|填|上交|提交|交|检查|带|准备|'+_SCHOOL_SIGN+r')'
-    negated=list(re.finditer(_NEGATED_LEAD+verbs,text))
+    negated=[m for m in re.finditer(_NEGATED_LEAD+verbs,text) if not _negation_negated(text[:m.start()])]
     if not negated:return False
     rest=text
     # Only the negated predicate and its own object go (今晚不用抄写旧词); a contrasted or joined step (但要完成词表第2页) stays.

@@ -57,8 +57,18 @@ class NativeWorkspaceProjectionTests(unittest.TestCase):
     def test_frozen_whole_day_items_are_listed_once_under_their_subjects(self):
         view = self.app.day_view(self.child['id'], self.today)
         rows = [(g['subject'], i) for g in view['groups'] for i in g['items']]
+        # A later lesson-day or still-pending item is named once on the 即将/待补 line (PRD 3.2) and listed in full, under
+        # its own subject, on its own exact later day as that day's work: every frozen item has exactly one place.
+        later = []
+        for u in view['upcoming']:
+            self.assertGreater(u['day'], self.today, u)
+            there = [(g['subject'], i) for g in self.app.day_view(self.child['id'], u['day'])['groups'] for i in g['items'] if i['id'] == u['id']]
+            self.assertEqual(len(there), 1, u)
+            self.assertEqual((there[0][1]['title'], there[0][1]['when']), (u['title'], 'today'), there[0][1])
+            later.append(there[0])
+        self.assertFalse({i['id'] for _s, i in rows} & {u['id'] for u in view['upcoming']}, 'never both listed and named as later')
         for anchor, _words, subject, _day in whole_items():
-            found = [(s, i) for s, i in rows if anchor in i['title']]
+            found = [(s, i) for s, i in rows + later if anchor in i['title']]
             self.assertEqual(len(found), 1, anchor)
             if subject: self.assertEqual(found[0][0], subject, anchor)
         oral = [i for _s, i in rows if i['origin'] == 'oral']
@@ -94,7 +104,13 @@ class NativeWorkspaceProjectionTests(unittest.TestCase):
         self.assertEqual(c['open'], len(rows))
         self.assertEqual(sum(c[k] for k in ('today', 'later', 'overdue', 'earlier', 'unknown')), len(rows))
         self.assertEqual(c['today'], sum(bool(i['today']) for i in rows))
-        self.assertEqual((c['open'], c['today'], c['later']), (7, 5, 2), 'the frozen whole day: 7 items, 5 today, 2 later')
+        # The frozen whole day still has 7 items, 5 today and 2 later: the 2 later ones (no family progress, an exact later day)
+        # are named on the 即将/待补 line instead of the list, and counted there, never dropped or counted as today.
+        self.assertEqual(c['upcoming'], len(view['upcoming']))
+        self.assertEqual((c['open'] + c['upcoming'], c['today'], c['later'] + c['upcoming']), (7, 5, 2), 'the frozen whole day: 7 items, 5 today, 2 later')
+        for u in view['upcoming']:
+            self.assertFalse((tasks.get(u['task_id']) or {}).get('progress'), 'an item with family progress stays listed')
+        self.assertTrue(all(i['when'] != 'unknown' or not next(f for f in i['facts'] if f['role'] == 'due')['known'] for i in rows))
 
     def test_material_states_read_the_saved_interpretation_only(self):
         a, b = 'a' * 32, 'b' * 32

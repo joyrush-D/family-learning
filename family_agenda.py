@@ -76,6 +76,19 @@ def _titles_read_as_objects(text):
 # 别 ending another word (分别、特别、区别) negates nothing.
 _NEGATED_LEAD=(r'(?:不(?!晚于|迟于|超过)|没有?|未|无需|无须|免|(?<![分区特告个差识辨离派级类性])别|勿)'
                r'(?:用|必|需要?|要求?|得)?\s*(?:再|额外|另行)?\s*')
+# A negation itself negated (不是不需要、不能不、并非不用、没有不) grants no leave: the predicate stands as required.
+_NEGATION_HEAD=r'(?:不是|并非|并不是|绝非|决非|不能|不可以?|不得|不许|不准|没有|没)\s*(?:说)?\s*'
+_NEGATION_NEGATED=re.compile(_NEGATION_HEAD+r'$')
+
+
+def _negation_negated(before):
+    return bool(_NEGATION_NEGATED.search(before))
+
+
+def _negates(before):
+    """Whether the words right before a predicate negate it (不用、无需再), never a negation that is itself negated."""
+    m=re.search(_NEGATED_LEAD+r'$',before)
+    return bool(m) and not _negation_negated(before[:m.start()])
 
 
 def _action_deadlines(text,published):
@@ -108,7 +121,7 @@ def _action_deadlines(text,published):
     pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+action
     for match in re.finditer(pattern,text or ''):
         # A direct negation right before the action (今晚不交纸质作业、明天不用带) ties the day to no action of its own.
-        if re.search(_NEGATED_LEAD+r'$',match[2]):continue
+        if _negates(match[2]):continue
         token=match[1];value=date(token)
         if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
             offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
@@ -146,7 +159,7 @@ def _action_deadlines(text,published):
     # 是否准备好) states no requirement, and a name or state after the word (准备活动、准备好的材料) is no predicate (_PREPARE).
     for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+_PREPARE,text):
         clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
-        if (re.search(_NEGATED_LEAD+r'$',match[2]) or re.search(r'可|自愿|自选|酌情|视情况|建议|尽量|最好|如有|有条件',match[2])
+        if (_negates(match[2]) or re.search(r'可|自愿|自选|酌情|视情况|建议|尽量|最好|如有|有条件',match[2])
                 or re.search(r'吗|[？?]|如果|假如|若是|要是|是否|万一|如需|仅供参考',clause)):continue
         value=date(match[1])
         if not value and anchor:
@@ -1046,7 +1059,7 @@ def snapshot(app,start,end):
                           if brief.get('change') in ('update','append') and brief.get('target_id') else None)
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {})))
-            items=_one_affair_versions(c,items)
+            items=_one_affair_versions(c,items,store)
         study=[]
         if 'study_items' in tables:
             for row in c.execute('SELECT * FROM study_items ORDER BY day,rowid'):
@@ -1103,9 +1116,27 @@ def _read_publisher(c,ref):
     return family_agent._publisher(source_id,message)
 
 
+def _wholly_read(c,store,child,ref):
+    """One message read in full: its text and every original attached to it, each with a saved complete reading that leaves
+    no open question. An attached file without one (未读PNG、未整理的原件) leaves the message, and any notice on it, unread."""
+    message,source_id=_message(c,ref)
+    if not message or message.get('unread') or message.get('kind','text')!='text' or not str(message.get('text') or '').strip():return False
+    message_id=ref.rsplit(':',1)[1]
+    try:
+        attached={r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source_id,message_id))}
+        if not attached:return True
+        import family_media
+        source,saved=store._message_context(c,dict(child_id=child,source_id=source_id,message_id=message_id))
+        value=family_media.school_evidence(store,c,source,saved)
+    except Exception:return False
+    if not value or not value['complete'] or not attached<=set(value['upload_ids']):return False
+    return all(not d.get('uncertainties') for d in value['draft'].get('originals') or [value['draft']])
+
+
 def _negated_actions(text):
     verbs=r'('+_COMPLETION_VERB+r'|填写|填|上交|提交|交|检查|带|准备|签字|签名)'
-    return {m[1] for m in re.finditer(_NEGATED_LEAD+verbs,_titles_read_as_objects(text or ''))}
+    text=_titles_read_as_objects(text or '')
+    return {m[1] for m in re.finditer(_NEGATED_LEAD+verbs,text) if not _negation_negated(text[:m.start()])}
 
 
 def _short_change(old_text,new_text,old_due,new_due):
@@ -1118,7 +1149,7 @@ def _short_change(old_text,new_text,old_due,new_due):
     return '；'.join(parts)
 
 
-def _one_affair_versions(c,items):
+def _one_affair_versions(c,items,store):
     tasks={x['task_id']:x for x in items if x['kind']=='task'};notices={}
     for x in items:
         rel=x.get('relation')
@@ -1141,6 +1172,14 @@ def _one_affair_versions(c,items):
             except Exception:why.append('家庭记录暂时无法核对')
         if subject_key(a)!=subject_key(m) or a.get('subject_state') not in ('known','general'):why.append('科目或事务不能确认相同')
         if not own or '' in senders or senders!={_read_publisher(c,own[0])}:why.append('发布者不同或未核实')
+        # Only a wholly read notice on a wholly read original is a clear latest requirement: a linked original still unread
+        # (an attached PNG with no saved reading) may hold the very standard the text points to.
+        if not all(_wholly_read(c,store,task['child_ids'][0],r) for r in list(rel['refs'])+own):why.append('通知或所附原件尚未读全')
+        # The latest lines shown are the model's summary: each title and number in them must be the notice's or original's own words.
+        shown=rel['title']+'\n'+'\n'.join(rel['lines']);grounded=said+'\n'+original
+        if (not family_agent._school_named_objects(shown)<=family_agent._school_named_objects(grounded)
+                or not all(any(n==m and (u==v or not u) for m,v in family_agent._school_counts(grounded)) for n,u in family_agent._school_counts(shown))):
+            why.append('新要求的归纳与通知原文对不上')
         if not (m.get('published_at') and a.get('published_at') and m['published_at']>a['published_at']):why.append('不是原发布者之后的通知')
         if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
         previous=dict(title=task['title'],lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()][:12],
