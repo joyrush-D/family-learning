@@ -180,9 +180,14 @@ class P1aRequirementUnitTests(unittest.TestCase):
         self.assertTrue(any('两遍' in l for l in row['version']['notices'][0]['lines']))
         self.assertFalse([r for r in self.rows(view) + view['upcoming'] if r['pending_review'] and '跟读' in r['title']])
         bottle, = [u for u in view['upcoming'] if '透明塑料瓶' in u['title']] + [r for r in self.rows(view) if '透明塑料瓶' in r['title']]
-        thursday = self.by_title(self.view('2026-11-05'), '透明塑料瓶')
-        self.assertEqual(thursday['version']['state'], 'review')
-        self.assertTrue(any('空的透明塑料瓶一个' in r for r in thursday['version']['reasons']), thursday['version'])
+        # The science notice only moves the day (周四科学课改到下周一) and its summary drops 一个. Never a silent latest: the
+        # program composes the whole original with the notice's stated new day (Root run4), so the latest still holds every
+        # unchanged unit and the old Thursday keeps no to-do; a summary without a provable move-only change stays review.
+        self.assertFalse([r for r in self.rows(self.view('2026-11-05')) if '透明塑料瓶' in r['title']], 'no to-do left on the old day')
+        moved = self.by_title(self.view('2026-11-09'), '透明塑料瓶')
+        self.assertEqual((moved['version']['state'], moved['version'].get('composed')), ('latest', 'original_with_stated_change'), moved['version'])
+        self.assertTrue(any('空的透明塑料瓶一个' in l for l in moved['version']['lines']), moved['version'])
+        self.assertFalse(any('周四' in l for l in moved['version']['lines']), moved['version'])
         # The same notices as whole snapshots (every unchanged unit kept) show the latest on the one card.
         self.complete_snapshot('跟读', '今晚听音频跟读Unit 9第1到6个单词，每词两遍。\n只做口头跟读，不用抄写。')
         self.complete_snapshot('透明塑料瓶', '下周一实验课带空的透明塑料瓶一个。\n今晚仍不用填写实验记录表。')
