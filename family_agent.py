@@ -3366,18 +3366,33 @@ def _school_clause_days(text,published):
                                                         for word,offset in _SCHOOL_DAY_OFFSET.items() if word in text}
 
 
+# A concrete part of an activity (第6段、第3页、第2题、第4单元): a clause naming one the reply's own clause does not states
+# its own work. A class period (第二节) is a time, not a part.
+_SCHOOL_OWN_PART=re.compile(r'第\s*[一二三四五六七八九十百0-9]+\s*(?:段|课|页|题|单元|首|篇|章|部分)')
+
+
 def _school_own_range(quote,cited):
     """This reply's own words in its cited original: the whole clause holding its quote (这次单独安排一场展示：周五…), and each
     directly following clause that only refers back to it (这两次分开安排、这是独立的一次展示，单独安排、和周四那场分别登记). A
-    sibling action of the same message (另外安排周五…) starts its own range. Empty when the quote is found in no cited original."""
+    sibling action of the same message starts its own range, whatever word opens it (另外安排周五…、这周五另外安排…第6段): a
+    following clause that, its relation to another occurrence set aside, names a concrete part this reply's clause does not,
+    or another day than the one this reply's clause names, states its own work. A clause naming no day or part of its own
+    (这周五单独安排 after a clause stating no day) still only refers back. Empty when the quote is found in no cited original."""
+    from family_agenda import sent_day
     quote=re.sub(r'\s+','',str(quote or ''))
     for e in cited:
         flat=re.sub(r'\s+','',str(e.get('text') or ''));at=flat.find(quote) if quote else -1
         if at<0:continue
         lead=re.split(r'[，,。；;！!？?\n]',flat[:at])[-1]
         first,*rest=re.split(r'[，,。；;！!？?\n]',flat[at+len(quote):]);own=[lead+quote+first]
+        published=sent_day(str(e.get('time') or ''))
+        parts=lambda text:_school_named_objects(text)|{re.sub(r'\s+','',m) for m in _SCHOOL_OWN_PART.findall(text)}
+        held_parts=parts(own[0]);held_days=_school_clause_days(own[0],published) if published else None
         for part in filter(None,rest):
             if not re.match(r'(?:这|此|本|该|两|与|和|跟|同|单独|分开|分别|独立|属于|是|不是|并非)',part):break
+            stated=_school_apart_free(part)
+            days=_school_clause_days(stated,published) if published and stated else set()
+            if parts(stated)-held_parts or (held_days and days and not days<=held_days):break
             own.append(part)
         return '，'.join(own)
     return ''
