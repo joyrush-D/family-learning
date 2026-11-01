@@ -6713,8 +6713,13 @@ def _school_native_view(action):
     return dict({k:v for k,v in action.items() if k!='purpose'},purpose_options=['learning','admin'])
 
 
-def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
-    """Allocate one literal outcome per proposal and retain its complete named supplements."""
+def _school_native_bind(proposal,actions,assigned,entries=None,spans=None,*,notice=None,noticed=None):
+    """Allocate one literal outcome per proposal and retain its complete named supplements.
+
+    With ``notice`` (a review notice on a listed original: a saved task, or a pending item the program bound) the located
+    words it quotes are that original's later notice, no new outcome: they are covered, recorded in ``notice``, and may be
+    shared only with other notices, never with an outcome another proposal forms (``noticed`` holds the notice-covered ids).
+    """
     for name,field in _school_fields['properties'].items():
         if field.get('type')=='string':
             value=_text(proposal,name,field.get('maxLength',4000))
@@ -6727,13 +6732,19 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None):
         return [found[0]] if found else []
     matches=[a for a in actions if a['ref'] in refs and quote and (any(quote in own for own in [a['quote']]+a.get('conditions',[])+labelled(a))
         or any(quote in c['quote'] for c in a['changes']))]
+    if notice is not None and matches:
+        if any(a['id'] in assigned and a['id'] not in noticed for a in matches):
+            raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
+        assigned.update(a['id'] for a in matches);noticed.update(a['id'] for a in matches)
+        notice.extend(dict(id=a['id'],ref=a['ref'],quote=a['quote']) for a in matches)
+        return proposal,None
     if not matches:
         owned={a['ref'] for a in actions}|{s['ref'] for a in actions for s in _school_native_later(a)}
         # An outcome the ledger did not locate keeps the general checks only when disjoint from every located one.
         if refs&owned and not _school_native_unlocated(quote,refs,actions,entries,spans):
             raise AgentError('学校已定位要求未逐项归纳，整批保留重试',code='school_action_coverage')
         return proposal,None
-    if len(matches)!=1 or matches[0]['id'] in assigned:
+    if len(matches)!=1 or matches[0]['id'] in assigned or noticed and matches[0]['id'] in noticed:
         raise AgentError('学校独立要求重复或合并，整批保留重试',code='school_action_coverage')
     action=matches[0]
     # Only the outcome a bound change names may be an update/cancel, and then only for review; siblings stay new.
@@ -6812,6 +6823,13 @@ def _school_native_saved(items,evidence):
     actions=_school_native_actions(evidence);lookup={a['id']:a for a in actions};assigned=set();entries={e['ref']:e for e in evidence}
     for item in items:
         plan=item.get('plan',{});saved=plan.get('school_native_action');brief=plan.get('school_task',{})
+        notice=plan.get('school_native_notice')
+        if notice:
+            # Located words kept as a review notice of one listed original (its saved task, or a program-bound pending item).
+            if (saved or plan.get('school_native_cover') or brief.get('state')!='review' or brief.get('change') not in ('update','same','append','cancel')
+                    or not (brief.get('target_id') or plan.get('school_pending_of')) or any(lookup.get(n.get('id'),{}).get('quote')!=n.get('quote') for n in notice)):
+                raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
+            assigned.update(n['id'] for n in notice);continue
         # A ready summary may not name another day than the date it is saved with (literal ledger text excepted).
         cover=plan.get('school_native_cover')
         if (brief.get('state')=='ready' and item.get('due') and 'school_action_anchor' not in plan and (not saved or saved.get('changes'))):
@@ -6872,7 +6890,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
     native_actions=_school_native_actions(evidence) if routing and school_existing is None else []
-    native_assigned=set();native_spans=set()
+    native_assigned=set();native_spans=set();native_noticed=set()
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': [{k:v for k,v in e.items() if k!='message_order'} for e in evidence]}
     # The program's late-standard proof is checked here, not shown to the model: its input stays unchanged.
     if routing: content.update(learning_goals=school_goals,school_tasks=[{k:v for k,v in t.items() if k not in ('shared_standard','facts','same_basis','same_complete','same_as')} for t in school_tasks])
@@ -6961,8 +6979,19 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # School selection chooses message identities; copying source text is the application's job.
             text = refs[ref][:600] if routing else _source_quote(refs, ref, _text(quote, 'quote', 600, True))
             cited.append({'ref': ref, 'text': text})
+        # A reply's pending target is kept only by the program's own proof, made here on the reply's own summary and cited
+        # originals, before any located outcome is allocated (_school_pending_link).
+        pending_target=pending_link=None;notice=None
+        if routing and not historical and str(proposal.get('task_target_id','')).startswith('pending:'):
+            pending_target=next((t for t in school_pending if t['id']==proposal['task_target_id']),None)
+            if pending_target is not None:
+                pending_link=_school_pending_link(pending_target,proposal.get('task_change'),dict(title=proposal.get('task_title'),goal=proposal.get('task_goal'),
+                    state=proposal.get('task_state')),[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],proposal.get('due',''))
+        if (routing and not historical and proposal.get('task_change') in ('update','same','append','cancel') and proposal.get('task_state')=='review'
+                and (pending_link or proposal.get('task_target_id') in {t['id'] for t in school_tasks})):notice=[]
         if native_actions:
-            proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned,{e['ref']:e for e in evidence},native_spans)
+            proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned,{e['ref']:e for e in evidence},native_spans,
+                                                       notice=notice,noticed=native_noticed)
             due=proposed_due=proposal['due']
         # Without the ledger's bound supplement, a pointed-back follow-up joins another message only under the same positive
         # identity; the model's merge alone, e.g. across one shared nickname, is no proof.
@@ -7067,8 +7096,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                and not _needs_task_details(e['text']) for e in evidence):
                 item['plan'] = {'school_learning': learning}
             raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
-            # A pending item is no saved task: its id never reaches the task-target checks, only the program's own proof below.
-            pending_target=next((t for t in school_pending if t['id']==raw_target),None) if str(raw_target).startswith('pending:') else None
+            # A pending item is no saved task: its id never reaches the task-target checks, only the program's own proof above.
             brief=_school_brief({key:'' if key=='target_id' and pending_target else proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True,
                                 others=[q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{c['ref'] for c in cited}])
@@ -7080,8 +7108,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 item.setdefault('plan',{})['school_selection_receipt']=mark.get('receipt') or {key:proposal.get('task_'+key,'') for key in
                     ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
                 if mark:item['plan']['school_split']=mark['split']
+            if notice:item.setdefault('plan',{})['school_native_notice']=notice
             if pending_target is not None:
-                link=_school_pending_link(pending_target,raw_change,brief,cited_evidence,due)
+                link=pending_link if pending_link and brief.get('state')!='reference' else None
                 if link:
                     # Bound to the earlier pending item's identity: shown on its one card, never accepted by this link.
                     item.setdefault('plan',{})['school_pending_of']=link
