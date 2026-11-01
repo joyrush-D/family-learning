@@ -848,3 +848,46 @@ class DateRoleCountMoveTests(ScopeSaveTests):
             agent.apply_school_change(self.app, self.store, form_request(self, item, task))
         self.assertEqual(refused.exception.status, 409)
         self.assertEqual(self.task(task)['action'], before, 'an unprovable summary is refused before any write')
+
+
+    def glass(self, goal, title):
+        task = self.original('881', '科学：周四实验课带两个透明塑料量杯和三把金属镊子；今晚不用填写记录表。', '17:00', self.ART,
+                             '科学：周四实验课带两个透明塑料量杯和三把金属镊子；今晚不用填写记录表', '科学：周四实验课带两个透明塑料量杯和三把金属镊子',
+                             '科学：周四实验课带两个透明塑料量杯和三把金属镊子；今晚不用填写记录表。', THU, purpose='admin', subject='')
+        notice = '周四科学课改到下周一，前面通知的透明塑料量杯改为两个玻璃量杯，三把金属镊子下周一再带；今晚仍不用填写记录表。'
+        self.saved('882', notice, '20:00', self.ART, notice.rstrip('。'), title, goal, MON, purpose='admin', subject='',
+                   state='review', change='update', target=task)
+        return task
+
+    def test_an_explicit_material_change_with_the_whole_requirement_is_the_latest_and_saves_so(self):
+        goal = '科学：下周一实验课带两个透明玻璃量杯和三把金属镊子；今晚不用填写记录表。'
+        task = self.glass(goal, '科学：下周一带两个透明玻璃量杯和三把金属镊子')
+        for row, in self.rows(MON, task):
+            version = row.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            words = '\n'.join(version['lines'])
+            for unit in ('实验课', '两个透明玻璃量杯', '三把金属镊子', '不用填写记录表'):
+                self.assertIn(unit, words)
+            self.assertNotIn('塑料', words, 'the explicitly cancelled material is never asked back')
+        item, = [i for i in self.items_for('message:%s:882' % SCI) if i['state'] == 'pending']
+        request = form_request(self, item, task)
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['school_changed'])
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['replayed'])
+        saved = self.task(task)
+        self.assertEqual(saved['action'], goal)
+        self.assertEqual(saved['agenda']['due_on'], MON)
+        for rows in self.rows(MON, task) + self.rows(THU, task):
+            for row in rows:
+                self.assertNotIn('塑料', '\n'.join(row.get('lines', [])), 'no old plastic after save and reopen')
+
+    def test_an_explicit_material_change_dropping_an_unchanged_qualifier_is_no_latest(self):
+        task = self.glass('科学：下周一实验课带两个玻璃量杯和三把金属镊子；今晚不用填写记录表。', '科学：下周一带两个玻璃量杯和三把金属镊子')
+        for day in (THU, MON):
+            for rows in self.rows(day, task):
+                for row in rows:
+                    self.assertNotEqual((row.get('version') or {}).get('state'), 'latest', '透明 is unchanged: a summary dropping it is incomplete')
+        item, = [i for i in self.items_for('message:%s:882' % SCI) if i['state'] == 'pending']
+        before = self.task(task)['action']
+        with self.assertRaises(agent.AgentError):
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        self.assertEqual(self.task(task)['action'], before)

@@ -875,6 +875,7 @@ class SchoolHistoryTests(unittest.TestCase):
         older = ExitStack()  # the release that saved them had neither the boundary nor the relation reread
         older.enter_context(patch.object(agent, '_school_relation_boundary', lambda store: None))
         older.enter_context(patch.object(agent, '_recover_school_pending_relations', return_value=dict(used=0, failed=0, created=0, linked=0)))
+        older.enter_context(patch.object(agent, '_stamp_pending_seen', lambda proposals, pending: None))
         with older:
             for index, k in enumerate(texts):
                 with self.app.connect() as c:
@@ -925,6 +926,93 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(set(cards), {first, after[refs['83']]['id']}, cards.keys())
         self.assertIn(after[refs['82']]['id'], [n['id'] for n in (cards[first].get('version') or {}).get('notices', [])])
         self.assertIn('范围待补', cards[first]['title'], 'the unknown range stays unknown')
+
+    TRIO = {'81': '英语：周四英语课进行《林间风》的听读展示，具体范围后续通知；今晚不用在家预习。',
+            '82': '提醒：周四英语课《林间风》的听读展示仍照常，具体范围还未公布；今晚不用在家预习。',
+            '83': '另外安排：周五英语课进行《林间风》第5段听读展示，这是独立的一次活动，和周四那场分别登记；今晚不用在家预习。'}
+
+    def _pending_batches(self, texts, *, older):
+        """Each text one batch saved as its own pending review by ordinary ticks; older: by a release with no relation
+        recovery and no pending-seen stamp (the natural r300 state)."""
+        import family_goals
+        self.stack.enter_context(patch.object(family_goals.Store, 'run', return_value=dict(used=0, created=0, failed=0, children=set())))
+        source = self.fixture.source;refs = {}
+        stack = ExitStack()
+        if older:
+            stack.enter_context(patch.object(agent, '_recover_school_pending_relations', return_value=dict(used=0, failed=0, created=0, linked=0)))
+            stack.enter_context(patch.object(agent, '_stamp_pending_seen', lambda proposals, pending: None))
+        with stack:
+            for index, (k, text) in enumerate(texts.items()):
+                refs[k] = 'message:%s:%s' % (source['id'], k)
+                with self.app.connect() as c:
+                    saved = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
+                payload = self.fixture.payload(expected=saved['cursor'] if saved else source['cursor'], cursor=k, offset=index * 20)
+                payload['messages'] = [dict(id=k, time=payload['checked_at'], kind='text', sender='虚构英语老师', sender_id='fictional-en-linfeng', text=text, unread=False)]
+                self.store.ingest(payload)
+                self.fresh_responses[(refs[k],)] = dict(proposals=[self._own_reply(refs[k], text, k)])
+                self.assertEqual(self._tick(index * 20)['failed'], 0)
+        return refs
+
+    def _own_reply(self, ref, text, k, **kw):
+        return fixtures.school_proposal(title_quote=text, evidence=[dict(ref=ref)], task_title='英语：虚构事项' + k, task_goal=text, task_state='review',
+                                        task_reason='课堂安排保留，范围尚待补充。', task_purpose='learning', learning_subject='英语', **kw)
+
+    def _rows(self):
+        with self.app.connect() as c:
+            return {json.loads(r['evidence'])[0]['ref']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")}
+
+    def test_a_target_dismissed_while_the_relation_reread_runs_gets_no_late_link(self):
+        refs = self._pending_batches(self.TRIO, older=True);rows = self._rows();first = rows[refs['81']]['id']
+        self.fresh_responses[(refs['82'],)] = dict(proposals=[self._own_reply(refs['82'], self.TRIO['82'], '82', task_change='same', task_target_id='pending:' + first)])
+
+        def dismissing(messages, schema, name, *args, **kwargs):
+            if [e['ref'] for e in json.loads(messages[-1]['content']).get('evidence', [])] == [refs['82']]:
+                self.store.act(dict(id=first, action='dismiss'))  # the parent's own decision while the reply is pending
+            return self._model(messages, schema, name, *args, **kwargs)
+        with patch.object(agent.family_llm, '_chat_json', side_effect=dismissing):
+            for minutes in (100, 120, 140):
+                self.assertEqual(self._tick(minutes)['failed'], 0)
+        after = self._rows()
+        self.assertEqual(after[refs['81']]['state'], 'dismissed', 'the parent decision stays')
+        self.assertNotIn('school_pending_of', json.loads(after[refs['82']]['plan']), 'no late link onto a dismissed target')
+        self.assertEqual({k: (r['id'], r['state'], r['updated']) for k, r in after.items() if k != refs['81']},
+                         {k: (r['id'], r['state'], r['updated']) for k, r in rows.items() if k != refs['81']})
+        with self.app.connect() as c:
+            job = [dict(r) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'school-pending-relation:%'")]
+        self.assertTrue(job and all(r['done'] == 1 for r in job))
+        self.assertTrue(any('未写入' in r['error'] for r in job), job)
+
+    def test_fresh_selections_that_read_the_pending_items_are_never_read_again(self):
+        calls = len(self.calls)
+        refs = self._pending_batches(self.TRIO, older=False)
+        self.assertEqual(len(self.calls) - calls, 3, 'one ordinary selection per batch, no relation reread of a fresh one')
+        for minutes in (100, 120):
+            self._tick(minutes)
+        self.assertEqual(len(self.calls) - calls, 3)
+        self.assertTrue(all('school_pending_seen' in json.loads(r['plan']) for r in self._rows().values()))
+
+    def test_later_pending_items_beyond_the_limit_never_hide_the_earlier_target(self):
+        texts = dict(self.TRIO)
+        for n in range(13):
+            texts[str(102 + n)] = '数学：今晚完成第%d号虚构练习单《星图%d》，这是独立的一次作业。' % (n + 2, n + 2)
+        refs = self._pending_batches(texts, older=True);rows = self._rows();first = rows[refs['81']]['id']
+        self.fresh_responses[(refs['82'],)] = dict(proposals=[self._own_reply(refs['82'], self.TRIO['82'], '82', task_change='same', task_target_id='pending:' + first)])
+        with self.app.connect() as c:
+            jobs = {r['id']: (r['attempts'], r['done']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+        calls = len(self.calls)
+        self._tick(400)
+        relation = [x for x in self.calls[calls:] if x['name'] == 'family_agent_selection']
+        self.assertEqual([e['ref'] for e in relation[0]['context']['evidence']], [refs['82']], 'the old pair goes first, never hidden by later items')
+        self.assertEqual([t['id'] for t in relation[0]['context']['school_pending_items']], ['pending:' + first])
+        for minutes in range(420, 420 + 20 * 16, 20):
+            self._tick(minutes)
+        after = self._rows()
+        self.assertEqual(json.loads(after[refs['82']]['plan'])['school_pending_of']['item_id'], first)
+        self.assertEqual([k for k, r in after.items() if json.loads(r['plan']).get('school_pending_of')], [refs['82']], 'the 14 others stay their own')
+        self.assertEqual({k: (r['id'], r['state'], r['updated']) for k, r in after.items()}, {k: (r['id'], r['state'], r['updated']) for k, r in rows.items()})
+        with self.app.connect() as c:
+            self.assertEqual({r['id']: (r['attempts'], r['done']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}, jobs)
+        calls = len(self.calls);self._tick(900);self.assertEqual(len(self.calls), calls, 'every bounded reread done once')
 
 if __name__ == '__main__':
     unittest.main()
