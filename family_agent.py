@@ -5293,9 +5293,10 @@ def _school_audit_boundary(store):
         c.execute("INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES('school-audit-boundary',?,1)",(_hash(marked),))
 
 
-def _school_untouched_review(c,row,old_key):
+def _school_untouched_review(c,row,old_key,*,linking=False):
     """Positive proof that only the Agent ever wrote this pending review of the old batch: its generated snapshot still matches,
-    and no parent decision, task, record, feedback, link or earlier reread exists. Unknown stays unknown (False)."""
+    and no parent decision, task, record, feedback, link or earlier reread exists. Unknown stays unknown (False). Only a
+    relation link (linking, which rewrites nothing) may be added to a learning review; its own routing stays as saved."""
     try:row=dict(row);plan=json.loads(row['plan'])
     except (ValueError,TypeError):return False
     if (row['kind']!='school' or row['job_id']!=old_key or row['state']!='pending' or row['task_id'] or row['record_id'] is not None
@@ -5303,7 +5304,7 @@ def _school_untouched_review(c,row,old_key):
     if not plan.get('school_generated_snapshot') or plan['school_generated_snapshot']!=_school_generated_snapshot(row):return False
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_first_batch_correction','school_previous_policy',
-                                 'school_learning','school_saved_reread','school_batch_reread','school_split','school_split_from')):return False
+                                 'school_saved_reread','school_batch_reread','school_split','school_split_from')+(() if linking else ('school_learning',)))):return False
     return not (c.execute('SELECT 1 FROM records WHERE source=? LIMIT 1',('Agent建议:'+row['id'],)).fetchone()
                 or c.execute('SELECT 1 FROM manual_tasks WHERE source LIKE ? LIMIT 1',('Agent建议:'+row['id']+'\n%',)).fetchone())
 
@@ -5574,7 +5575,7 @@ def _recover_school_pending_relations(app,store,config,now,budget):
             mark=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_relation_mark(old_key),)).fetchone()
             if not mark or mark['fingerprint']!=job['fingerprint']:continue
             try:
-                if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or not _school_untouched_review(c,r,old_key) for r in rows):continue
+                if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or not _school_untouched_review(c,r,old_key,linking=True) for r in rows):continue
                 refs=sorted({e['ref'] for r in rows for e in json.loads(r['evidence'])})
             except (ValueError,KeyError,TypeError):continue
             if not refs or any(not ref.startswith('message:') for ref in refs):continue
@@ -5621,7 +5622,7 @@ def _recover_school_pending_relations(app,store,config,now,budget):
                     if len(mine)!=1:continue
                     current=c.execute('SELECT * FROM agent_items WHERE id=?',(mine[0]['id'],)).fetchone()
                     if (current is None or current['updated']!=mine[0]['updated'] or current['state']!='pending'
-                            or json.loads(current['plan']).get('school_pending_of') or not _school_untouched_review(c,current,old_key)):continue
+                            or json.loads(current['plan']).get('school_pending_of') or not _school_untouched_review(c,current,old_key,linking=True)):continue
                     plan=json.loads(current['plan']);plan['school_pending_of']=dict(link,recovered_by=key)
                     c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=?",(_json(plan),current['id'],current['updated']))
                     linked+=1
