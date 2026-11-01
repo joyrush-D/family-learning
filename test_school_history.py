@@ -860,7 +860,7 @@ class SchoolHistoryTests(unittest.TestCase):
         batch with this child's earlier pending items links only the reminder; ids, words, state, jobs and cursor stay."""
         import family_goals
         # As Root's run: the learning-goal planner stays off at its call boundary (its own model call is not under test).
-        self.stack.enter_context(patch.object(family_goals.Store, 'run', return_value=dict(used=0, created=0, failed=0)))
+        self.stack.enter_context(patch.object(family_goals.Store, 'run', return_value=dict(used=0, created=0, failed=0, children=set())))
         source = self.fixture.source
         texts = {'81': '英语：周四英语课进行《林间风》的听读展示，具体范围后续通知；今晚不用在家预习。',
                  '82': '提醒：周四英语课《林间风》的听读展示仍照常，具体范围还未公布；今晚不用在家预习。',
