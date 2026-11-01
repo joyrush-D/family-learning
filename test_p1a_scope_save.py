@@ -330,7 +330,11 @@ class RelationScopeTests(ScopeSaveTests):
 
     def test_c_an_unlocated_quote_proves_no_scope_where_the_original_says_separate(self):
         self.rain_pending()
-        self.assert_own_card(self.wrong_update('周五英语课展示《雨后》第6段，这是独立的一次展示。', quote='周五展示《雨后》第6段'))
+        item = self.wrong_update('周五英语课展示《雨后》第6段，这是独立的一次展示。', quote='周五展示《雨后》第6段')
+        self.assertNotIn('school_pending_of', item['plan'], 'no located own words: the link is unproven')
+        # The unlocated quote grounds no day of its own either (the existing date guard): it stays its own visible card.
+        for view in self.views(FRI):
+            self.assertEqual(len(self.cards(view, '第6段')), 1, 'the Friday occurrence is its own card, not hidden in the pending one')
 
     def test_c_a_siblings_separateness_leaves_the_correction_joined(self):
         first = self.rain_pending()
