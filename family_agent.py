@@ -3347,7 +3347,8 @@ def _school_clause_negated(clause):
     negated=list(re.finditer(_NEGATED_LEAD+verbs,text))
     if not negated:return False
     rest=text
-    for m in reversed(negated):rest=rest[:m.start()]+re.sub(r'^[^，,。；;]*','',rest[m.start():])
+    # Only the negated predicate and its own object go (今晚不用抄写旧词); a contrasted or joined step (但要完成词表第2页) stays.
+    for m in reversed(negated):rest=rest[:m.start()]+re.sub(r'^.*?(?=但|而|可是|并且|并|然后|再|要|需|须|[，,。；;]|$)','',rest[m.end():])
     return not re.search(verbs,rest)
 
 
