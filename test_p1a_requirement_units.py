@@ -158,12 +158,36 @@ class P1aRequirementUnitTests(unittest.TestCase):
             v = self.view(d)
             self.assertEqual((week[d]['open'], week[d]['today'], week[d]['upcoming']), (v['counts']['open'], v['counts']['today'], v['counts']['upcoming']))
 
+    def complete_snapshot(self, word, goal):
+        """The stored update of one affair as a whole snapshot (every unchanged original unit kept), isolating later guards."""
+        with self.app.connect() as c:
+            for x in c.execute("SELECT id,plan FROM agent_items WHERE state='pending' AND kind='school'").fetchall():
+                plan = json.loads(x['plan'])
+                if plan['school_task'].get('change') == 'update' and word in plan['school_task']['title']:
+                    plan['school_task']['goal'] = goal
+                    c.execute('UPDATE agent_items SET plan=? WHERE id=?', (json.dumps(plan, ensure_ascii=False), x['id']))
+
     def test_b4_clear_same_publisher_update_shows_latest_on_the_one_card(self):
         self.whole_day()
         view = self.view()
         english = [r for r in self.rows(view) if 'Unit 9' in r['title'] and '听写' not in r['title']]
         self.assertEqual(len(english), 1, [r['title'] for r in self.rows(view)])
         row = english[0]
+        # Root's frozen updates drop unchanged original units (听音频; 空的…一个): never a silent latest, one card for review.
+        self.assertEqual(row['version']['state'], 'review', row['version'])
+        self.assertTrue(any(r.startswith('新要求的归纳缺少原要求中未改的部分') and '听音频' in r for r in row['version']['reasons']), row['version'])
+        self.assertTrue(any('三遍' in l for l in row['lines']), row['lines'])
+        self.assertTrue(any('两遍' in l for l in row['version']['notices'][0]['lines']))
+        self.assertFalse([r for r in self.rows(view) + view['upcoming'] if r['pending_review'] and '跟读' in r['title']])
+        bottle, = [u for u in view['upcoming'] if '透明塑料瓶' in u['title']] + [r for r in self.rows(view) if '透明塑料瓶' in r['title']]
+        thursday = self.by_title(self.view('2026-11-05'), '透明塑料瓶')
+        self.assertEqual(thursday['version']['state'], 'review')
+        self.assertTrue(any('空的透明塑料瓶一个' in r for r in thursday['version']['reasons']), thursday['version'])
+        # The same notices as whole snapshots (every unchanged unit kept) show the latest on the one card.
+        self.complete_snapshot('跟读', '今晚听音频跟读Unit 9第1到6个单词，每词两遍。\n只做口头跟读，不用抄写。')
+        self.complete_snapshot('透明塑料瓶', '下周一实验课带空的透明塑料瓶一个。\n今晚仍不用填写实验记录表。')
+        view = self.view()
+        row = self.english(view)
         self.assertEqual(row['version']['state'], 'latest', row['version'])
         self.assertIn('原三遍→两遍', row['version']['change'])
         self.assertTrue(any('两遍' in l for l in row['lines']), row['lines'])
@@ -261,6 +285,7 @@ class P1aRequirementUnitTests(unittest.TestCase):
     def test_b4_unread_original_on_the_notice_keeps_review_until_wholly_read(self):
         import family_media
         self.whole_day()
+        self.complete_snapshot('跟读', '今晚听音频跟读Unit 9第1到6个单词，每词两遍。\n只做口头跟读，不用抄写。')
         self.assertEqual(self.english(self.view())['version']['state'], 'latest')
         # An original (an unread PNG) linked straight to the read correction text: the text alone is not the whole notice.
         with self.app.connect() as c:
