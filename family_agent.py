@@ -618,6 +618,63 @@ def _school_outcome_objects(part):
     return found
 
 
+def _school_separate_lessons(proposals, evidence, pending=()):
+    """A lesson assessment its own original sets on its own day (周五课堂听写，范围由老师明天再说) that a reply merged into
+    another item's goal, or left out, is its own item from the original's words (Root run9).
+
+    Only a sentence of the item's one wholly read home original, outside the item's own quote and quoted by no proposal,
+    whose first clause is the assessment held at the lesson its one day heads (_school_lesson_assessment), on a day the
+    item's own quote does not hold. The merging item keeps only its own words: a goal line is dropped only when its own
+    first clause is that lesson on that day; a goal still naming the lesson elsewhere keeps the reply as it was. The run
+    forms one review item (its scope is the teacher's to give; nothing is borrowed from the merging item's own range) with
+    the message's own subject and the run's own day. When one pending item of this child is bound to it by the program's
+    own proof (_school_pending_link: same publisher and source, later, same object, same day), the run names that item as
+    its notice instead of a second card. Returns the proposals and marks (index -> dict(formed) / dict(receipt, split))."""
+    from family_agenda import sent_day
+    entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};taken=set()
+    quotes=[p['title_quote'].strip() if isinstance(p.get('title_quote'),str) else '' for p in proposals]
+    for index,p in enumerate(proposals):
+        if (not isinstance(p.get('task_goal'),str) or not isinstance(p.get('evidence'),list) or p.get('task_state')=='reference'
+                or any(not isinstance(q,dict) for q in p['evidence'])):continue
+        quote=quotes[index]
+        homes=[entries[q['ref']] for q in p['evidence'] if q.get('ref') in entries and quote and entries[q['ref']]['text'].count(quote)==1]
+        if len(homes)!=1:continue
+        home=homes[0];text=home['text'];sent=sent_day(str(home.get('time') or ''))
+        if not sent or home.get('kind','text')!='text' or home.get('unread') or home.get('content_incomplete') or home.get('attachments'):continue
+        q0=text.index(quote);q1=q0+len(quote);own=_school_clause_days(quote,sent) or set()
+        for m in re.finditer(r'[^。；;！!？?\n]+',text):
+            run=m[0].strip(' ，,');start=m.start()+m[0].find(run) if run else m.start()
+            if not run or start<q1 and q0<start+len(run) or (home['ref'],run) in taken or text.count(run)!=1:continue
+            first=re.split(r'[，,]',run)[0].strip()
+            days=_school_clause_days(first,sent)
+            if not _school_lesson_assessment(first) or not days or len(days)!=1 or days<=own:continue
+            if any(quotes[i] and (quotes[i] in run or run in quotes[i]) for i in range(len(proposals)) if i!=index):continue
+            day=next(iter(days))
+            def lesson_line(line):
+                head=re.split(r'[，,；;。]',line.strip())[0].strip()
+                return bool(head) and _school_lesson_assessment(head) and _school_clause_days(head,sent)=={day}
+            lines=[l for l in p['task_goal'].splitlines() if l.strip()]
+            kept=[l for l in lines if not lesson_line(l)]
+            if any(_school_lesson_assessment(c.strip()) and _school_clause_days(c.strip(),sent)=={day} for l in kept for c in re.split(r'[，,；;。]',l) if c.strip()):continue
+            subjects=_school_native_subjects(text);subject=next(iter(subjects)) if len(subjects)==1 else ''
+            title=(subject+'：' if subject else '')+first;goal=run+'。'
+            brief=dict(title=title,goal=goal,state='review')
+            bound=[t for t in pending if _school_pending_link(t,'same',brief,[home],day,run)]
+            if len(bound)>1:continue
+            taken.add((home['ref'],run))
+            if len(kept)!=len(lines):
+                out[index]=dict(out[index],task_goal='\n'.join(kept))
+                marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run)))
+            marks[len(out)]=dict(formed=dict(index=index,receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},ref=home['ref'],quote=run,
+                                             **({} if len(kept)!=len(lines) else {'omitted':True})))
+            out.append(dict(title_quote=run,focus='school',due=day,evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
+                task_title=title,task_goal=goal,task_advice='',task_state='review',
+                task_reason='原文另有独立的课堂安排，'+('模型并入同消息另一项' if len(kept)!=len(lines) else '模型回执未归纳')+'；已按原文单独成项，原文未写明的范围仍待补。',
+                task_change='same' if bound else 'new',task_target_id=bound[0]['id'] if bound else '',
+                task_purpose='learning' if subject else 'admin',task_submission=''))
+    return out,marks
+
+
 def _school_separate_outcomes(proposals, evidence, native_refs=(), source_later=None):
     """An explicit independent outcome in an item's own original gets its own action, from the original's words.
 
@@ -7230,6 +7287,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         # An explicit independent outcome the reply merged into another proposal is given its own action from the original.
         # school_later (the source's own later stored messages) only guards that compile; the model never sees it.
         result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions},source_later=school_later)
+        # So is a lesson assessment its own original sets on its own day (周五课堂听写), whatever item the reply put it in.
+        result['proposals'],lesson_marks=_school_separate_lessons(result['proposals'],evidence,school_pending)
+        for key,mark in lesson_marks.items():split_marks.setdefault(key,mark)
     # An anchor that ran on over a sibling's own clause is read as its own part; the model's quote stays with the item.
     sibling_scopes=(_school_sibling_scopes(result['proposals'],evidence,set(split_marks),{a['ref'] for a in native_actions})
                     if routing and not historical else {})
