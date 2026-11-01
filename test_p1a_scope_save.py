@@ -753,3 +753,16 @@ class DateRoleCountMoveTests(ScopeSaveTests):
                 version = row.get('version') or {}
                 self.assertNotIn('日期', version.get('change', ''), 'the same handback day moves nothing')
                 self.assertEqual([f['value'] for f in row.get('facts', []) if f.get('kind') == 'handback'], ['2026-11-18'])
+
+    def test_a_count_correction_restating_the_handback_with_still_keeps_both_date_roles(self):
+        task = self.original('841', '英语：今晚听录音跟读《松林小路》三遍并录音，明早交给英语老师。', '17:00', self.MATH,
+                             '今晚听录音跟读《松林小路》三遍并录音，明早交给英语老师', '英语：跟读《松林小路》三遍并录音',
+                             '今晚听录音跟读《松林小路》三遍并录音，明早交给英语老师。', '2026-11-18', subject='英语')
+        self.saved('842', '更正：明早仍交给英语老师，今晚只需听录音跟读《松林小路》两遍并录音。', '18:00', self.MATH,
+                   '更正：明早仍交给英语老师，今晚只需听录音跟读《松林小路》两遍并录音', '英语：跟读《松林小路》两遍并录音',
+                   '今晚听录音跟读《松林小路》两遍并录音，明早交给英语老师。', DAY, subject='英语', state='review', change='update', target=task)
+        for rows in self.rows(DAY, task) + self.rows('2026-11-18', task):
+            for row in rows:
+                version = row.get('version') or {}
+                self.assertNotIn('日期', version.get('change', ''), 'a count-only correction moves no date role')
+                self.assertEqual([f['value'] for f in row.get('facts', []) if f.get('kind') == 'handback'], ['2026-11-18'], row.get('facts'))
