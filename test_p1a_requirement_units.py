@@ -336,9 +336,14 @@ class P1aRequirementUnitTests(unittest.TestCase):
         for plain, double in (('今晚需要提交阅读卡，明早带到学校。', '今晚不是不需要提交阅读卡，明早带到学校。'),
                               ('今晚完成阅读卡，明天交给老师。', '今晚不能不完成阅读卡，明天交给老师。'),
                               ('今晚读课文，明天早读检查。', '今晚不是不用读课文，明天早读检查。')):
-            roles = agent._school_role_days(double, [dict(text=double, time=sent)], [])
+            handed, plain_handed = {}, {}
+            roles = agent._school_role_days(double, [dict(text=double, time=sent)], [], handbacks=handed)
             self.assertEqual(roles, ({'2026-11-03'}, '2026-11-04'), double)
-            self.assertEqual(roles, agent._school_role_days(plain, [dict(text=plain, time=sent)], []), plain)
+            self.assertEqual(roles, agent._school_role_days(plain, [dict(text=plain, time=sent)], [], handbacks=plain_handed), plain)
+            # Corrected truth (run4): the double negation keeps tonight's own action and day, nothing more. 今晚(不是不)需要提交 is a
+            # handback that evening, never work finished at home; the earlier day is named as a handback, not a completion.
+            self.assertEqual(set(handed), {'2026-11-03'} if '提交' in double else set(), double)
+            self.assertEqual(set(handed), set(plain_handed), plain)
             self.assertEqual(family_agenda._action_deadlines(double, '2026-11-03'), family_agenda._action_deadlines(plain, '2026-11-03'), double)
         # One evening handback with no later day keeps its own due; an ordinary negation still states no action or day.
         self.assertEqual(agent._school_role_days('今晚提交阅读卡。', [dict(text='今晚提交阅读卡。', time=sent)], []), (set(), '2026-11-03'))
@@ -346,6 +351,74 @@ class P1aRequirementUnitTests(unittest.TestCase):
         self.assertIsNone(agent._school_role_days('今晚提交电子版，明天交纸质版。', [dict(text='今晚提交电子版，明天交纸质版。', time=sent)], []))
         self.assertEqual(family_agenda.affirmed('今晚不用填写实验记录表'), '今晚不用填写实验记录表')
         self.assertFalse(family_agenda._action_deadlines('今晚不用填写实验记录表。', '2026-11-03'))
+
+    def test_p1a4_requirement_units_stay_bound_tuples(self):
+        # Developer type matrix (Root keeps its held-out variants): each actor/step/count/object/day unit is compared whole, so a
+        # swap between two units of one step is another requirement however equal the unions; reorder/omission stays the same.
+        original = '语文：学生抄写《竹叶》三遍，家长抄写《竹叶》一遍，明天检查。'
+        cases = [('语文：学生抄写《竹叶》一遍，家长抄写《竹叶》三遍，明天检查。', 'review'),  # counts swapped between actors
+                 ('语文：家长抄写《竹叶》一遍，学生抄写《竹叶》三遍，明天检查。', 'ready'),   # units reordered
+                 ('语文：学生抄写《竹叶》三遍，明天检查。', 'ready'),                       # one unit omitted
+                 ('语文：《竹叶》学生抄写三遍，家长抄一遍，明天检查。', 'ready'),           # shortened, object written once
+                 ('语文：学生抄写《竹叶》三遍，家长抄写《竹叶》两遍，明天检查。', 'review')]
+        for text, expected in cases:
+            self.assertEqual(self.same_trial(original, text)['state'], expected, text)
+        for old, new in (('语文：学生抄写《竹叶》三遍，家长抄写《松树》一遍，明天检查。', '语文：学生抄写《松树》三遍，家长抄写《竹叶》一遍，明天检查。'),
+                         ('语文：学生今晚抄写《竹叶》，家长明天抄写《松树》。', '语文：学生明天抄写《竹叶》，家长今晚抄写《松树》。')):
+            self.assertEqual(self.same_trial(old, old)['state'], 'ready', old)
+            trial = self.same_trial(old, new)
+            self.assertEqual(trial['state'], 'review', new); self.assertIn('由谁做哪一步', trial['reason'])
+        units = agent._school_units(original)[agent._SCHOOL_UNIT_STEPS.index(r'抄写|抄')]
+        self.assertEqual(sorted((u[0], sorted(u[1])) for u in units), [('child', [(3, '遍')]), ('parent', [(1, '遍')])])
+
+    def test_p1a4_explanatory_negation_and_sign_synonyms_by_type(self):
+        original = '语文：今晚孩子朗读《山间》两遍，家长签字，明天交。'
+        for text, expected in ((original + '这仍是同一件，不必另外重做一轮。', 'ready'),          # another round denied
+                               (original + '这只是同一件事，不用再单独做一遍。', 'ready'),
+                               (original + '无需另外再读一遍。', 'ready'),                     # its verb restated above
+                               ('语文：家长签字，明天交。无需另外再读一遍。', 'review'),         # 读 not restated: a change
+                               ('语文：原先朗读取消，不必读，家长签字，明天交。', 'review'),      # real cancellation
+                               (original + '不必读。', 'review'),                             # the work itself denied
+                               (original + '明天再读一遍。', 'review'),                       # real new round
+                               (original + '不用再读一遍，明天读三遍。', 'review')):
+            self.assertEqual(self.same_trial(original, text)['state'], expected, text)
+        signed = '班级：出行确认单请家长签好名字，周四交。'
+        for text, expected in (('班级：那张已签名的出行确认单，让学生周四交。', 'ready'),  # a signed state, no new actor step
+                               ('班级：那张已签名的《出行确认单》，让学生周四交。', 'ready'),
+                               ('班级：出行确认单请家长签上姓名，周四交。', 'ready'),
+                               ('班级：出行确认单请家长签好名字，让学生也签名，周四交。', 'review'),  # a real new signature
+                               ('班级：出行确认单请家长签好名字，周四交。另外请奶奶也签字。', 'review')):
+            self.assertEqual(self.same_trial(signed, text)['state'], expected, text)
+        unsigned = '班级：出行确认单请家长填好，周四交。'
+        self.assertEqual(self.same_trial(unsigned, '班级：那张已签名的出行确认单，让学生周四交。')['state'], 'review')
+
+    def test_p1a4_evening_handback_is_no_completion_and_parent_steps_keep_their_day(self):
+        import family_agenda
+        sent = '2026-11-03T16:51:00+08:00'
+        def roles(text):
+            handed = {}; found = agent._school_role_days(text, [dict(text=text, time=sent)], [], handbacks=handed)
+            return found, handed
+        for text in ('班级：今晚在线提交《活动卡》，明早交给班主任。', '今晚提交原件，明早交给班主任。', '今晚需要提交阅读卡，明早带到学校。'):
+            found, handed = roles(text)
+            self.assertEqual(found, ({'2026-11-03'}, '2026-11-04'), text); self.assertEqual(list(handed), ['2026-11-03'], text)
+            self.assertIn('提交', handed['2026-11-03'])
+        for text, due in (('今晚家长签名，明早交。', '2026-11-04'), ('今晚选择参加项目，明早交回。', '2026-11-04'),
+                          ('今晚完成阅读卡，明天交给老师。', '2026-11-04'),
+                          ('今晚监护人在《出行确认单》圈选‘同意’或‘不同意’，并签上姓名；本周五让学生交给班主任。', '2026-11-06')):
+            found, handed = roles(text)
+            self.assertEqual(found, ({'2026-11-03'}, due), text); self.assertEqual(handed, {}, text)
+        self.assertEqual(roles('今晚不必提交，明早交给老师。'), ((set(), '2026-11-04'), {}))
+        self.assertFalse(agent._school_clause_negated(agent._school_choices_read('今晚监护人在《出行确认单》圈选‘同意’或‘不同意’')))
+        for text in ('今晚提交电子版，明天交纸质版。', '今晚在线提交《活动卡》，明早科学课带放大镜。', '今晚提交活动卡，明早或后天交给班主任。'):
+            self.assertIsNone(roles(text)[0], text)
+        # The projection keeps both handbacks as two roles of the one item, the earlier never labelled 完成.
+        agenda = dict(published_at='2026-11-03T16:51:00+08:00', due_on='2026-11-04', due_kind='handback', submit_on='2026-11-03',
+                      submit_words='今晚在线提交《活动卡》')
+        facts = family_agenda.day_facts(agenda, '2026-11-03', '2026-11-03', True)
+        self.assertEqual([(f['role'], f['value']) for f in facts if f['role'] in ('complete', 'submit', 'due')],
+                         [('submit', '2026-11-03'), ('due', '2026-11-04')])
+        self.assertEqual(next(f for f in facts if f['role'] == 'submit')['words'], '今晚在线提交《活动卡》')
+        self.assertEqual((family_agenda.day_role(agenda, '2026-11-03'), family_agenda.day_role(agenda, '2026-11-04')), ('today', 'today'))
 
     def test_p1a3_structured_linked_feedback_keeps_the_original_version(self):
         # A parent observation saved on its own and then linked through the record API (source stays the parent's own words,

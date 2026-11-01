@@ -814,15 +814,20 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
                  if len(own)==1 and not focus.get('scheduled_on') and (not focus.get('version') or school_focus) else '')
     if complete_on and focus.get('version') and completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)!=complete_on:complete_on=''
     # The clock its own work clause gives that same day (20:00前) belongs to it on every card; the saved action stays.
-    words=completion_words(date_quote,heading,complete_on,action) if complete_on else None
+    words=completion_words(date_quote,heading,complete_on,action) if complete_on else None;submit={}
     if (not complete_on and len(own)==1 and due_on and date_siblings is not None and not focus.get('scheduled_on') and not focus.get('version')):
         # The same own-role reading the item was selected and saved with (今晚完成，明天早上交 / 今晚请家长签字，明天早上让孩子交给…):
         # its one earlier completion day is listed on that day; its handback/check due stays. Another item's quote or day gives none.
-        roles=family_agent._school_role_days(date_quote,messages,date_siblings)
-        if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:complete_on=next(iter(roles[0]))
+        # An earlier handback of the same thing (今晚在线提交《活动卡》，明早交给班主任) is its own handback role with its own words,
+        # never this item's completion: nothing says the work is done at home.
+        handed={};roles=family_agent._school_role_days(date_quote,messages,date_siblings,handbacks=handed)
+        if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:
+            earlier=next(iter(roles[0]))
+            if earlier in handed:submit=dict(submit_on=earlier,submit_words=handed[earlier])
+            else:complete_on=earlier
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',
-                **({'complete_words':words} if words else {}))
+                **({'complete_words':words} if words else {}),**submit)
 
 
 def _stored_date_quote(plan):
@@ -1023,11 +1028,11 @@ def enrich(app,c,tasks):
 def visible_on(item,day):
     m=item['agenda']
     if m.get('box')=='wish': return False
-    published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on'];complete=m.get('complete_on','')
+    published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on'];complete=m.get('complete_on','');submit=m.get('submit_on','')
     if published and day<published:return False
     if item['closed']:
-        return day in {published,scheduled,due,complete,item.get('closed_on','')}-{''} and (not item.get('closed_on') or day<=item['closed_on'])
-    if day==published or day==scheduled or (complete and day==complete):return True
+        return day in {published,scheduled,due,complete,submit,item.get('closed_on','')}-{''} and (not item.get('closed_on') or day<=item['closed_on'])
+    if day==published or day==scheduled or (complete and day==complete) or (submit and day==submit):return True
     # An undated item remains in the inbox; a deadline carries forward until a parent closes it.
     # Unknown publication stays unknown, but a known deadline must not hide from today's work.
     # A known teacher complete day with no handback day carries forward the same way; it is never made a handback/due day.
@@ -1202,7 +1207,8 @@ def _one_affair_versions(c,items,store):
             pubs=list(a.get('publications') or []);pubs+=[p for p in m.get('publications') or [] if p not in pubs]
             # A date-only update of the same lesson-day affair (带瓶改到下周一) keeps its own role; a new role is read when stated.
             kind=m.get('due_kind','') if m.get('due_kind') not in ('','deadline') or a.get('due_kind') in ('','deadline') else a['due_kind']
-            task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs)
+            task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs,
+                                submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''))
             task['agenda'].pop('complete_words',None)
             task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=rel['lines'],previous=previous,notices=listed,
                                  change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,previous['due_on'],m.get('due_on','')) or '要求有更新')
@@ -1246,7 +1252,7 @@ def subject_filed(rows, key_of):
 def _day_rank(item, day):
     a = item.get('agenda') or {}
     due, planned, published = exact_day(a.get('due_on')), exact_day(a.get('scheduled_on')), exact_day(a.get('published_on'))
-    if day in (due, planned) or exact_day(a.get('complete_on')) == day: return 0, day
+    if day in (due, planned) or day in (exact_day(a.get('complete_on')), exact_day(a.get('submit_on'))): return 0, day
     if due and due < day: return 1, due
     if due: return 2, due
     if planned and planned < day: return 3, planned
@@ -1268,6 +1274,9 @@ def day_facts(agenda, day, today, school):
     complete = exact_day(a.get('complete_on'))
     if complete and (complete != a.get('due_on') or a.get('due_kind') == 'handback'):
         facts.append(dict(role='complete', label='完成', value=complete, known=True, today=complete == today))
+    submit = exact_day(a.get('submit_on'))
+    if submit and submit != exact_day(a.get('due_on')):  # an earlier handback of the same thing, in its own words
+        facts.append(dict(role='submit', label='先提交', value=submit, known=True, today=submit == today, words=str(a.get('submit_words') or '')))
     due = exact_day(a.get('due_on'))
     if due:
         kind = a.get('due_kind') or 'deadline'
@@ -1282,7 +1291,7 @@ def day_facts(agenda, day, today, school):
 
 def day_role(agenda, day):
     a = agenda or {}
-    dates = [exact_day(a.get(k)) for k in ('due_on', 'scheduled_on', 'complete_on')]
+    dates = [exact_day(a.get(k)) for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')]
     if day in dates: return 'today'
     due = exact_day(a.get('due_on'))
     if due and due < day: return 'overdue'
@@ -1373,7 +1382,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                     origin='school' if school else 'oral' if oral else 'family',
                     origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
                     lines=lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
-                    today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on')),
+                    today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')),
                     when=day_role(a, day), publications=pubs, published_at=str(a.get('published_at') or ''),
                     publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),
                     # The task's own saved progress exactly as /api/state reads it (task_progress): feedback, linked wrong

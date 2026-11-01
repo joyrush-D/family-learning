@@ -2486,13 +2486,13 @@ def _school_append_brief(brief, evidence, targets):
     brief['input_basis']=_school_message_basis(evidence)
 
 
-_SCHOOL_SAME_CHANGED=re.compile(r'更正|取消|撤回|作废|改为|改成|改到|改在|改期|延期|推迟|提前|改做|换成|不用|无需|不再|选做|任选|自愿|重新布置|重新做'
+_SCHOOL_SAME_CHANGED=re.compile(r'更正|取消|撤回|作废|改为|改成|改到|改在|改期|延期|推迟|提前|改做|换成|不用|无需|无须|不必|不需要?|不再|选做|任选|自愿|重新布置|重新做'
     r'|再(?:交|做|读|录|写|背|练|抄|完成)一(?:次|遍|轮)|又布置|新一轮|下一轮|另(?:一)?项|另外|第二项|还要|增加|加做|补(?:充|交|做)|只补|仅补')
 # A discourse label (补充提醒：, 温馨提醒) and a quoted title or name are not commands; the words after a label still count.
 _SCHOOL_SAME_LABEL=re.compile(r'(?:^|(?<=[。！!？?；;\n]))\s*[【\[]?(?:补充|再次|温馨|友情|重要|特别|最后|再)?提醒(?:一下|下|大家|各位(?:家长|同学)?)?[】\]]?\s*[：:，,！!。]?')
 _SCHOOL_SAME_QUOTED=re.compile(r'《[^》]{0,40}》|“[^”]{0,40}”|「[^」]{0,40}」|『[^』]{0,40}』|"[^"\n]{0,40}"')
 # Concrete steps a reminder could add; one group is one step (交 = 上传 = 带来). Words outside the groups decide nothing.
-_SCHOOL_SAME_STEPS=(r'交|上传|带来|带到|带回|发到|发给|发送',r'读',r'录音|录制|音频|录像|视频',r'签字|签名|签好字|签上',r'打印',r'拍照|照片',
+_SCHOOL_SAME_STEPS=(r'交|上传|带来|带到|带回|发到|发给|发送',r'读',r'录音|录制|音频|录像|视频',r'签(?:好|上|过|了)?(?:字|名字?|姓名)|签上',r'打印',r'拍照|照片',
                     r'背诵|背熟|默背',r'默写',r'听写',r'抄写|抄',r'订正|改错',r'填写|填好',r'打卡',r'预习',r'复习',r'回复|接龙')
 _SCHOOL_COUNT_UNITS=r'遍|次|题|道|页|课|篇|首|段|行|单元|章|节|项|组|分钟|字|张|份|幅|本|支|件|句|天'
 _SCHOOL_CLOCK=re.compile(r'\d{4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}\s*[日号]?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|\d{1,2}\s*[日号]|\d{1,2}\s*[:：点]\s*\d{0,2}')
@@ -2553,6 +2553,13 @@ def _school_relation_clause(clause):
     if any(form.fullmatch(c) for form in _SCHOOL_RELATION_FORMS):return True,''
     m=re.fullmatch(r'(?:不用|无需|无须|不必|不需要?|不要)重复([一-鿿]{1,6})',c)
     if m:return (not _school_counts(m[1]) and not _SCHOOL_DATE_MENTION.search(m[1])),m[1]
+    # 不必另外重做一轮、不用再单独做一遍、无需另外再读一遍: what is denied is another round of the obligation (an extra-round
+    # marker and a round), never the work itself. A generic redo (做、重做、完成) is the whole affair's; a work verb (读) is relation
+    # only while this reminder's own requirement words restate it (as 不用重复X). 不必读、原先朗读取消 deny the work: a change.
+    m=re.fullmatch(r'(?:这|此|本条|这条|这次|此次)?(?:也|就|仍|还|都)?(?:不用|无需|无须|不必|不需要?|不要|别|勿|用不着)(?:再|另外|另行|额外|单独|重新|又)+'
+                   r'(重做|重复做?|做|完成|弄|来|[一-鿿]{1,2}?)(?:一(?:轮|遍|次|回|份)|第二(?:轮|遍|次|回|份)|新的一轮)',c)
+    if m and not _SCHOOL_DATE_MENTION.search(c) and not re.search(r'[《“「『"]',c):
+        return True,('' if re.fullmatch(r'重做|重复做?|做|完成|弄|来',m[1]) else m[1])
     return False,''
 
 
@@ -2561,7 +2568,7 @@ def _school_relation_clause(clause):
 # requirement or completion standard unless each of their content characters is already the task's own.
 _SCHOOL_SAME_REFERS=re.compile(r'(?:同一|同样一|那一?)(?:件|份|张|条|项)'+_SCHOOL_RELATION_NOUN+r'?')
 _SCHOOL_SAME_MODAL=re.compile(r'(?<![不无毋没])(?:必须|务必|一定要|须|需要|需|要求|应当|应该|记得|注意)')
-_SCHOOL_SAME_FILLER=re.compile(r'[把将来去上下好的了地得都也再并和与及给在一下请]')
+_SCHOOL_SAME_FILLER=re.compile(r'[把将来去上下好的了地得都也再并和与及给在一下请已]')
 
 
 def _school_same_unstated(text, facts):
@@ -2595,17 +2602,23 @@ def _school_unit_days(words):
             for d in _SCHOOL_UNIT_DAY.finditer(words)}
 
 
+# A sign word stating a thing's state (那张已签名的确认单、签好字的回执) modifies its noun: no actor's step is made of it.
+_SCHOOL_SIGNED_STATE=re.compile(r'(?:已经?)?签(?:好|过|了|上)?(?:字|名字?|姓名)?了?的(?=[^，,。；;！!？?\n的])')
+
+
 def _school_units(text):
-    """{step group: (actors, counts, named objects, days)} of the text's own requirement units.
+    """{step group: [(actor, counts, named objects, days), ...]} of the text's own requirement units, each kept whole.
 
     A clause's parts joined by 、/并/然后/以及 are its units: a part's one step takes the part's own counts, 《》/named objects
     and days (a part with no step belongs to the unit before it, or else after it; several steps in one part split it at each
     step). A unit's actor is the explicit actor last written before its step in the clause, and a unit stating no day keeps
-    the day written before it in that clause. Titles are names, never an actor or a step; a step written several times
-    gathers all its units' values."""
+    the day written before it in that clause. Titles are names, never an actor or a step. A step written several times keeps
+    each of its units apart: who does it, how many, to what and when stay bound to that one unit (学生抄写三遍、家长抄写一遍
+    is never 学生抄写一遍、家长抄写三遍), never one set per step whose union any swap would equal."""
     units={}
     for clause in re.split(r'[，,。；;！!？?\n]',text):
         blank=re.sub(r'《[^》]{0,40}》',lambda m:'《'+'_'*(len(m[0])-2)+'》',clause)
+        blank=_SCHOOL_SIGNED_STATE.sub(lambda m:'_'*len(m[0]),blank)
         actors=[(m.start(),_SCHOOL_UNIT_ACTORS[m.lastindex-1][0]) for m in _SCHOOL_UNIT_ACTOR.finditer(blank)]
         cuts=[0]+[m.end() for m in re.finditer(r'、|并且|并|然后|以及',blank)]+[len(blank)]
         found=[];loose=[]
@@ -2622,27 +2635,26 @@ def _school_units(text):
                 found.append([a+at,g,clause[a+(kept[n-1][1] if n else 0):a+(kept[n+1][0] if n+1<len(kept) else b-a)]])
         if found and loose:found[0][2]=''.join(loose)+found[0][2]
         for at,g,words in found:
-            unit=units.setdefault(g,(set(),set(),set(),set()))
-            actor=[a for p,a in actors if p<at]
-            if actor:unit[0].add(actor[-1])
-            unit[1].update(_school_counts(words));unit[2].update(_school_named_objects(words))
-            before=list(_SCHOOL_UNIT_DAY.finditer(clause[:at]))
-            unit[3].update(_school_unit_days(words) or (_school_unit_days(before[-1][0]) if before else set()))
+            actor=[a for p,a in actors if p<at];before=list(_SCHOOL_UNIT_DAY.finditer(clause[:at]))
+            units.setdefault(g,[]).append((actor[-1] if actor else '',frozenset(_school_counts(words)),frozenset(_school_named_objects(words)),
+                                           frozenset(_school_unit_days(words) or (_school_unit_days(before[-1][0]) if before else set()))))
     return units
 
 
 def _school_units_differ(text, facts):
     """Whether a step both texts state is, in the reminder, done by another actor or with another object, count or day.
 
-    The reminder's value of each such step must be one the task gives that same step (2 = 两, an unwritten unit matches); a
-    value the reminder leaves out is no difference. Same characters bound to other steps are another requirement."""
+    Each reminder unit of such a step must be one whole unit the task gives that same step: its actor, counts (2 = 两, an
+    unwritten unit matches), named objects and days all within that one task unit. A value the reminder leaves out is no
+    difference (reordered, shortened or omitted units stay the same affair); the same characters bound to another unit are
+    another requirement, however equal their unions."""
     said,own=_school_units(text),_school_units(facts)
     def counted(value,values):n,u=value;return any(n==m and (u==v or not u or not v) for m,v in values)
-    for g in said.keys()&own.keys():
-        (actors,counts,objects,days),(o_actors,o_counts,o_objects,o_days)=said[g],own[g]
-        if (actors and o_actors and not actors<=o_actors or counts and o_counts and not all(counted(c,o_counts) for c in counts)
-                or objects and o_objects and not objects<=o_objects or days and o_days and not days<=o_days):return True
-    return False
+    def fits(unit,other):
+        (actor,counts,objects,days),(o_actor,o_counts,o_objects,o_days)=unit,other
+        return ((not actor or not o_actor or actor==o_actor) and (not counts or not o_counts or all(counted(c,o_counts) for c in counts))
+                and (not objects or not o_objects or objects<=o_objects) and (not days or not o_days or days<=o_days))
+    return any(not any(fits(unit,other) for other in own[g]) for g in said.keys()&own.keys() for unit in said[g])
 
 
 # A relation unit says something about the message, never about the work: a speech act on the message itself (再发一遍、转一下、
@@ -3144,7 +3156,7 @@ def _school_complete_span(text,start,end):
 _SCHOOL_ARRANGEMENT=r'(?:抽查|检查|抽背|抽测|默写|听写|背诵|朗读|体检|测试|测验|考试|上交|交|带|穿)'
 # 签字 and 签名 are one signature (as _SCHOOL_NATIVE_STEPS reads a follow-up's steps): the role readers and their change and
 # withdrawal guards read either word the same.
-_SCHOOL_SIGN=r'签字|签名'
+_SCHOOL_SIGN=r'签(?:好|上|过|了)?(?:字|名字?|姓名)'  # 签字 = 签名 = 签上姓名 = 签好名字
 # The class session a day directly heads (周五课堂、明天历史课上、明天上课、周五的第二节体育课): what is done there is on that day.
 _SCHOOL_LESSON_PLACE=(r'\s*的?\s*(?:(?:早上|上午|下午)\s*)?(?:第[一二三四五六七八九\d]节\s*)?'
                       r'(?:课堂|课上|上课|(?:语文|数学|英语|科学|历史|地理|物理|化学|生物|道德与法治|道法|体育|美术|音乐|信息科技|劳动|书法)课)')
@@ -3360,7 +3372,7 @@ def _school_choices_read(text):
     return re.sub(_SCHOOL_CHOICE,'选项',text)
 
 
-def _school_role_days(quote,cited,others,words=False):
+def _school_role_days(quote,cited,others,words=False,handbacks=None):
     """The one due day of an ordinary item whose own words give it a completion role and a handback, check or own-action role.
 
     今晚完成，明天早上交 (or 今晚请家长签字，明天早上让孩子交给班主任, 今晚完成，明天早读检查记录本) is one item's two time roles,
@@ -3368,7 +3380,8 @@ def _school_role_days(quote,cited,others,words=False):
     The range is the quote's own sentence (a leading 另外，/此外， is only a connector) plus a directly following sentence
     made only of such role clauses, whose checked object the item's own sentence names. Another proposal quoting any of it,
     another cited original stating a day, a clause with two days or both roles, or any change, cancel or uncertain word
-    returns None, so the existing date protections decide. Returns (completion days, due day); with words, also the range's
+    returns None, so the existing date protections decide. Returns (earlier own role days: completion days and an earlier
+    handback of the same thing, which handbacks names, due day); with words, also the range's
     own words as its days were read (choices as one object), so the agenda reads that due's role from them and no others,
     and only while no other words of the item's originals may withdraw or change those roles (_school_range_withdrawn).
     """
@@ -3429,7 +3442,7 @@ def _school_role_days(quote,cited,others,words=False):
         while other and (at:=text.find(other,at))!=-1:
             if max(head,at)<min(end,at+len(other)):return None
             at+=len(other)
-    done,due,evening,bare=set(),set(),set(),set()
+    done,due,evening,bare,handed=set(),set(),set(),set(),{}
     # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
     work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包'
     from family_agenda import prepared_carry
@@ -3464,17 +3477,21 @@ def _school_role_days(quote,cited,others,words=False):
             back=bool(re.search(r'交|检查',clause))
             # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
             # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
-            finish=bool(re.search(r'完成|做完|写完|读完|签字',clause) or 'finish' in _school_clause_roles(clause) or step
+            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN,clause) or 'finish' in _school_clause_roles(clause) or step
                         or days=={published} and not back and re.search(work,clause) or prepared and n==prepared[0])
             if len(days)!=1 or (finish and back):return None
-            if not finish and back and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):evening.update(days)
+            if not finish and back and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):
+                evening.update(days);handed[next(iter(days))]=clause.strip()
             if (not finish and days and min(days)>published and re.fullmatch(role+r'(?:让孩子)?(?:带到学校|带来学校|带回学校|带到班里|带到班上|带去学校'
                                                                       r'|带来|带去|交回|上交|交给(?:老师|班主任|课代表|组长))\s*',clause)):bare.update(days)
             (done if finish else due).update(days)
-    # 今晚需要提交阅读卡，明早带到学校: that evening is at home, no handback at school. Only when the evening's own step is a
-    # handback and the later clause only carries or hands back that same thing (no other object, 明天科学课带放大镜 stays two
-    # days for review), the evening step is this item's completion and the later day its one due.
+    # 今晚在线提交《活动卡》，明早交给班主任 / 今晚需要提交阅读卡，明早带到学校: two handbacks of the one thing, each a real role
+    # action of this item; nothing says the evening one is work finished at home, and no place or way is guessed from 今晚. Only
+    # when the later clause only carries or hands back that same thing (no other object: 今晚提交电子版，明天交纸质版 or 明天科学课带
+    # 放大镜 stays two days for review) is the later day its due; the evening handback is kept with its own words as an earlier
+    # role day (handbacks: day -> clause), never relabelled as completion.
     if len(due)==2 and evening and min(due) in evening and max(due) in bare:
+        if handbacks is not None:handbacks[min(due)]=handed.get(min(due),'')
         done.add(min(due));due.discard(min(due))
     if len(due)!=1 or any(d>next(iter(due)) for d in done):return None
     for e,(named,body) in restated:
@@ -4535,9 +4552,10 @@ _SCHOOL_ROLE_DAY=(r'(?:\d{4}-\d{2}-\d{2}|(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1
                   r'|每天|每晚|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])')
 _SCHOOL_ROLE_HEAD=(_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?|\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上|早读|课前|到校后?))?'
                    r'\s*(?:之前|以前|前)?')
-_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|'+_SCHOOL_SIGN))
+# Choosing on the item's own form (圈选、勾选、选择) is the family's own step of it, finished like a signature.
+_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN))
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
-_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
+_SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:家长|监护人|父母|爸爸|妈妈|爸妈|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
                    r'(?:在[^，,在]{1,12}?(?:上|里|中|内)\s*)?(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
 
 
