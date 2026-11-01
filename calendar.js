@@ -238,11 +238,11 @@ function groveLearningHTML(v){
 }
 function groveRows(view){return [...(view?.groups||[]),...(view?.closed||[])].flatMap(g=>g.items||[])}
 function groveWide(){return matchMedia('(min-width: 900px)').matches}
-function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.role==='submit'&&f.today?'今天先提交':f.label+' '+(f.known?f.value:'日期未写明')}
+function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.role==='submit'&&f.today?'今天先提交':f.role==='check'&&f.today?'今天先检查':f.label+' '+(f.known?f.value:'日期未写明')}
 function groveChipsHTML(r){
  const chips=[];if(groveWhen[r.when])chips.push(`<span class="grove-chip is-soft" data-when="${esc(r.when)}">${groveWhen[r.when]}</span>`);
  for(const t of r.times||[])chips.push(`<span class="grove-chip is-leaf" data-plan-time="${esc(t.id)}">日程 ${esc(groveClock(t))}</span>`);
- for(const f of (r.facts||[]).filter(f=>f.role==='due'||f.role==='complete'||f.role==='submit'))
+ for(const f of (r.facts||[]).filter(f=>f.role==='due'||f.role==='complete'||f.role==='submit'||f.role==='check'))
   chips.push(`<span class="grove-chip${f.state==='next_morning'||f.state==='overdue'?' is-coral':f.known?'':' is-soft'}" data-fact="${esc(f.role)}">${esc(groveFactWords(f))}</span>`);
  if(r.pending_review)chips.push('<span class="grove-chip is-coral">待核对</span>');
  return chips.join('');
