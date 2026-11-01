@@ -3494,6 +3494,10 @@ def _school_own_clause_dates(quote,cited,others):
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return set()
     text=homes[0]['text'];start=text.index(quote);end=start+len(quote)
     published=sent_day(homes[0].get('time',''))
+    # A sentence going on only with clauses relating this item to another occurrence (…第4段，和周三的复述分开安排。) is still
+    # this quote's whole sentence: those clauses give the child nothing to do, and its days are read without them below.
+    tail=re.match(r'(?:[，,][^，,。；;！!？?\n]+)+(?=[。；;！!？?\n]|$)',text[end:])
+    if tail and all(_SCHOOL_APART.search(part) for part in re.split(r'[，,]',tail[0]) if part.strip()):end+=tail.end()
     span=_school_item_span(text,start,end,published)
     if not _school_complete_span(text,start,end):
         if not span:return set()
