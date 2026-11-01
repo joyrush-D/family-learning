@@ -384,7 +384,8 @@ class P1aRequirementUnitTests(unittest.TestCase):
                                (original + '这次只是重申，用不着另起一轮。', 'ready'),          # non-template wordings, same type
                                (original + '并不是要大家再做一次。', 'ready'),
                                (original + '无需额外再交一份。', 'ready'),
-                               (original + '不需要再背第二遍。', 'review')):                  # 背 not restated: a change
+                               (original + '不需要再背第二遍。', 'review'),                  # 背 not restated: a change
+                               (original + '不必担心，这是同一件事。', 'ready')):              # reassurance negates no work
             self.assertEqual(self.same_trial(original, text)['state'], expected, text)
         signed = '班级：出行确认单请家长签好名字，周四交。'
         for text, expected in (('班级：那张已签名的出行确认单，让学生周四交。', 'ready'),  # a signed state, no new actor step

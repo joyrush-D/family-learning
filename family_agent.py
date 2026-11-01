@@ -2486,7 +2486,7 @@ def _school_append_brief(brief, evidence, targets):
     brief['input_basis']=_school_message_basis(evidence)
 
 
-_SCHOOL_SAME_CHANGED=re.compile(r'更正|取消|撤回|作废|改为|改成|改到|改在|改期|延期|推迟|提前|改做|换成|不用|无需|无须|不必|不需要?|不再|选做|任选|自愿|重新布置|重新做'
+_SCHOOL_SAME_CHANGED=re.compile(r'更正|取消|撤回|作废|改为|改成|改到|改在|改期|延期|推迟|提前|改做|换成|不用|无需|(?:无须|不必|不需要?)(?=[^，,。；;！!？?\n]{0,8}?(?:做|写|读|交|背|抄|签|带|填|上传|完成|打卡|录|练|默|订正|预习|复习|打印))|不再|选做|任选|自愿|重新布置|重新做'
     r'|再(?:交|做|读|录|写|背|练|抄|完成)一(?:次|遍|轮)|又布置|新一轮|下一轮|另(?:一)?项|另外|第二项|还要|增加|加做|补(?:充|交|做)|只补|仅补')
 # A discourse label (补充提醒：, 温馨提醒) and a quoted title or name are not commands; the words after a label still count.
 _SCHOOL_SAME_LABEL=re.compile(r'(?:^|(?<=[。！!？?；;\n]))\s*[【\[]?(?:补充|再次|温馨|友情|重要|特别|最后|再)?提醒(?:一下|下|大家|各位(?:家长|同学)?)?[】\]]?\s*[：:，,！!。]?')
