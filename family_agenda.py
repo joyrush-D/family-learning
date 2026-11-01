@@ -1276,7 +1276,7 @@ def _count_only_latest(old_lines,old_title,shown,said,moved):
 
 # Words a notice uses to narrate a move of the original itself (前面通知带的瓶也下周一再带，今晚仍不用填写): a move verb, a
 # pointer to the earlier notice and a continuity word state no requirement of their own.
-_MOVE_NARRATION=re.compile(r'(?:由|从)?\s*(?:改|调|调整|推迟|延后|延期|提前|挪|换|移)\s*(?:到|至|为|在)'
+_MOVE_NARRATION=re.compile(r'(?:由|从)?\s*(?:改|调|调整|推迟|延后|延期|提前|挪|换|移)\s*(?:到|至|为|在)(?=\s*(?:'+_UNIT_DAY_WORDS.pattern+'))'
                            r'|(?:前面|刚才|之前|上面|此前|原来|原先)(?:通知|说|发|布置|安排)?|仍然|仍旧|仍|还是|照旧|依旧|照常|更正')
 
 
@@ -1287,9 +1287,8 @@ _NUMERAL=re.compile(r'(\d+|[一二两三四五六七八九十百千]+)\s*([\u4e0
 
 def _counted_objects(text,narration):
     """(number, measure word, object words) of every number in text, its days (and a notice's move narration) aside."""
-    found=[]
-    for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
-        if narration:piece=_MOVE_NARRATION.sub(' ',piece)
+    found=[];text=(text or '').lower()
+    for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',_MOVE_NARRATION.sub(' ',text) if narration else text)):
         for m in _NUMERAL.finditer(piece):
             words=_unit_chars(re.match(r'\S*',piece[m.end():])[0]) or _unit_chars(re.search(r'\S*$',piece[:m.start()].rstrip())[0])
             found.append((m[1].translate(_UNIT_DIGITS),m[2],words))
@@ -1307,6 +1306,25 @@ def _counts_unchanged(said,old):
         best=max((k for k,_ in near),default=0)
         if not best or any(n!=number for k,n in near if k==best):return False
     return True
+
+
+def _requirement_pieces(text,shared=True):
+    """The words of each enumerated piece of text's clauses (带两个透明塑料杯｜三根玻璃棒), days aside. A clause's lead before
+    its first counted object (科学：实验课带) is shared by every piece it enumerates."""
+    found=[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
+        pieces=re.split(r'、|以及|和|及|与',clause);first=_NUMERAL.search(pieces[0]) if shared and len(pieces)>1 else None
+        lead=_unit_chars(pieces[0][:first.start()]) if first else set()
+        found+=[_unit_chars(piece)|lead for piece in pieces if _unit_chars(piece)]
+    return found
+
+
+def _units_restated(said,old):
+    """Whether each piece of the notice, its move narration and days aside, restates one requirement unit of the original:
+    all its words held by one original piece. Words pieced together from another object (两个玻璃杯 from 两个透明塑料杯 and
+    三根玻璃棒) or a change verb naming no day (改为两个玻璃杯) are a changed unit, never a date-only move."""
+    held=_requirement_pieces(old)
+    return all(any(words<=unit for unit in held) for words in _requirement_pieces(_MOVE_NARRATION.sub(' ',(said or '').lower()),False))
 
 
 def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent,new_sent):
@@ -1328,8 +1346,7 @@ def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent
             else:kept|=held
     if len(moved)!=1:return None
     if any(days(t[0],new_sent) not in ({old_day},{new_day},*({d} for d in kept)) for t in _UNIT_DAY_WORDS.finditer(said)):return None
-    if not _unit_chars(_MOVE_NARRATION.sub(' ',_UNIT_DAY_WORDS.sub(' ',said.lower())))<=_unit_chars(old_title+'\n'+'\n'.join(old_lines)+'\n'+original):
-        return None
+    if not _units_restated(said,old_title+'\n'+'\n'.join(old_lines)+'\n'+original):return None
     # An exemption the notice names again without its negation (今晚要填写记录表 after 今晚不用填写) is a changed unit.
     if any(verb in said for verb in _negated_actions('\n'.join(old_lines))-_negated_actions(said)):return None
     # So is any number it states that is not the original's own number of the same object (透明塑料杯改为三个).

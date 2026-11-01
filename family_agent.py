@@ -3140,7 +3140,12 @@ def apply_school_change(app, store, obj, *, school_auto=False):
                 title=task['title'];due=agenda['due_on']
                 merged=task['action']+'\n补充要求：'+body
                 if len(merged)>4000: raise AgentError('原要求与补充过长，未截断或覆盖原要求，请家长核对',409)
-            else: merged=_school_update_whole(task,title,body,due,'\n'.join(said),plan,row)
+            else:
+                # A notice moving no date role of the task (今晚只需跟读两遍、明早仍交) keeps the task's own days when the form keeps
+                # the notice's own day; a day the parent writes is the family's own.
+                moves=_school_notice_moves(c,task,due,plan,row)
+                if not moves and due==(row['due'] or ''):due=agenda['due_on']
+                merged=_school_update_whole(task,title,body,due,'\n'.join(said),plan,row,connection=c,moves=moves)
             if not duplicate:
                 family_task_focus.save(app,dict(id=target_id,version=focus['version'],request_key='school-change-'+_hash(ident)[:32],
                     **{k:focus[k] for k in ('mode','next_action','waiting_for','review_on','scheduled_on','box')},
@@ -3167,7 +3172,22 @@ def apply_school_change(app, store, obj, *, school_auto=False):
     return result
 
 
-def _school_update_whole(task, title, body, due, said, plan, row):
+def _school_notice_moves(c, task, due, plan, row):
+    """Whether this notice moves a date role of the task, read as the day projection reads it (family_agenda._role_days):
+    its own quoted clauses and the day it is saved with against the task's saved dates and own words."""
+    from family_agenda import _DATE_ROLES,_role_days,_saved_quote,_stored_date_quote,sent_day
+    try:
+        ref=json.loads(row['evidence'])[0]['ref'];source_id,message_id=ref[8:].rsplit(':',1)
+        message=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+        sent=sent_day(str(json.loads(message['payload']).get('time') or '')) if message else ''
+    except (ValueError,KeyError,TypeError,IndexError):sent=''
+    a=task['agenda']
+    old=_role_days(a,_saved_quote(c,task_id=task['id']),sent_day(str(a.get('published_at') or '')))
+    new=_role_days(dict(due_on=due),_stored_date_quote(plan),sent)
+    return any(new[role]-old[role] for role in _DATE_ROLES)
+
+
+def _school_update_whole(task, title, body, due, said, plan, row, *, connection=None, moves=None):
     """The whole requirement a confirmed update saves, read as the day projection reads its latest (_one_affair_versions).
 
     Words the parent wrote are the family's own and saved as written. The notice's own candidate words (its saved summary,
@@ -3183,7 +3203,16 @@ def _school_update_whole(task, title, body, due, said, plan, row):
     old=[line.strip() for line in str(task.get('action') or '').splitlines() if line.strip()];shown=title+'\n'+body
     lost=_unchanged_lost(old,shown,said)
     if not lost:return body
-    fixed=_count_only_latest(old,task['title'],shown,said,bool(exact_day(due)) and due!=task['agenda'].get('due_on',''))
+    moved=bool(exact_day(due)) and due!=task['agenda'].get('due_on','') if moves is None else moves
+    fixed=_count_only_latest(old,task['title'],shown,said,moved)
+    if fixed is None and moved and connection is not None:
+        # The same date-only composition the day projection shows (_day_moved_latest), from the task's own original.
+        from family_agenda import _day_moved_latest,_message,sent_day
+        a=task['agenda'];own=[p.get('ref','') for p in a.get('publications') or [] if str(p.get('ref','')).startswith('message:')][:1]
+        original=str((_message(connection,own[0])[0] or {}).get('text') or '') if own else ''
+        notice=_message(connection,json.loads(row['evidence'])[0]['ref'])[0] or {}
+        fixed=_day_moved_latest(old,task['title'],original,said,a.get('due_on',''),due,sent_day(str(a.get('published_at') or '')),
+                                sent_day(str(notice.get('time') or '')))
     if fixed is not None:return '\n'.join(fixed)
     # Not composable: in the clause whose count the notice itself restates (完成…第1至5题 → 只做1至3题) only its doing verb may
     # be worded anew, once the candidate states every count the notice gives; its method and objects and each other clause
