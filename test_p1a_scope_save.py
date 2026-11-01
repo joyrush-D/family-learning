@@ -713,3 +713,43 @@ class DateRoleCountMoveTests(ScopeSaveTests):
             for unit in ('两个纸盘', '三支彩笔', '下周一', '不用画草图'):
                 self.assertIn(unit, words)
             self.assertNotIn('周四', words)
+
+    def cups(self, notice, goal):
+        task = self.original('821', '美术：周四手工课带两个纸盘和三个纸杯；今晚不用画草图。', '17:00', self.ART,
+                             '美术：周四手工课带两个纸盘和三个纸杯；今晚不用画草图', '美术：周四手工课带两个纸盘和三个纸杯',
+                             '美术：周四手工课带两个纸盘和三个纸杯；今晚不用画草图。', THU, purpose='admin', subject='')
+        self.saved('822', notice, '20:00', self.ART, notice.rstrip('。'), '美术：下周一带纸盘和纸杯', goal, MON, purpose='admin', subject='',
+                   state='review', change='update', target=task)
+        return task
+
+    def test_one_measure_word_counting_two_objects_binds_each_number_to_its_own_noun(self):
+        task = self.cups('周四手工课改到下周一，前面通知的两个纸盘和三个纸杯下周一再带；今晚仍不用画草图。', '下周一带纸盘和纸杯。今晚不用画草图。')
+        for row, in self.rows(MON, task):
+            version = row.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            words = '\n'.join(version['lines'])
+            for unit in ('两个纸盘', '三个纸杯', '下周一', '不用画草图'):
+                self.assertIn(unit, words)
+
+    def test_a_count_moved_onto_the_other_object_s_number_is_no_move_only_change(self):
+        task = self.cups('周四手工课改到下周一，前面通知的纸盘改为三个，纸杯仍三个，下周一再带；今晚仍不用画草图。',
+                         '下周一带三个纸盘和三个纸杯。今晚不用画草图。')
+        for day in (THU, MON):
+            for rows in self.rows(day, task):
+                for row in rows:
+                    if (row.get('version') or {}).get('state') == 'latest':
+                        self.assertNotIn('两个纸盘', '\n'.join(row['version']['lines']), 'the cups\' 三个 never vouches for the plates')
+
+    def test_a_correction_restating_the_same_handback_moves_no_date(self):
+        task = self.original('831', '数学：今晚完成《松石练习册》第6页第1题，写出解题步骤，明早交给数学老师。', '17:00', self.MATH,
+                             '今晚完成《松石练习册》第6页第1题，写出解题步骤，明早交给数学老师', '数学：完成《松石练习册》第6页第1题',
+                             '今晚完成《松石练习册》第6页第1题，写出解题步骤，明早交给数学老师。', '2026-11-18', subject='数学')
+        self.saved('832', '更正：今晚完成《松石练习册》第6页第1题，写出解题步骤，仍是明早交给数学老师。', '18:00', self.MATH,
+                   '今晚完成《松石练习册》第6页第1题，写出解题步骤，仍是明早交给数学老师', '数学：完成《松石练习册》第6页第1题',
+                   '今晚完成《松石练习册》第6页第1题，写出解题步骤，明早交给数学老师。', '2026-11-18', subject='数学', state='review',
+                   change='update', target=task)
+        for rows in self.rows(DAY, task) + self.rows('2026-11-18', task):
+            for row in rows:
+                version = row.get('version') or {}
+                self.assertNotIn('日期', version.get('change', ''), 'the same handback day moves nothing')
+                self.assertEqual([f['value'] for f in row.get('facts', []) if f.get('kind') == 'handback'], ['2026-11-18'])
