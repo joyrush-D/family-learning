@@ -854,5 +854,74 @@ class SchoolHistoryTests(unittest.TestCase):
                     self.assertEqual([dict(row) for row in c.execute('SELECT * FROM agent_jobs ORDER BY id')], jobs)
 
 
+    def test_an_old_batch_holding_a_later_notice_of_an_earlier_pending_item_is_linked_once(self):
+        """Root run6 (the natural r300 state): an unknown-range lesson, its same-affair reminder and an independent part-5
+        activity, each saved as its own pending card by a release with no relation recovery. One bounded reread per later
+        batch with this child's earlier pending items links only the reminder; ids, words, state, jobs and cursor stay."""
+        source = self.fixture.source
+        texts = {'81': '英语：周四英语课进行《林间风》的听读展示，具体范围后续通知；今晚不用在家预习。',
+                 '82': '提醒：周四英语课《林间风》的听读展示仍照常，具体范围还未公布；今晚不用在家预习。',
+                 '83': '另外安排：周五英语课进行《林间风》第5段听读展示，这是独立的一次活动，和周四那场分别登记；今晚不用在家预习。'}
+        titles = {'81': '英语：《林间风》听读展示（范围待补）', '82': '英语：《林间风》听读展示提醒（范围待补）', '83': '英语：《林间风》第5段独立听读展示'}
+        refs = {k: 'message:%s:%s' % (source['id'], k) for k in texts}
+
+        def reply(k, **kw):
+            return fixtures.school_proposal(title_quote=texts[k], evidence=[dict(ref=refs[k])], task_title=titles[k], task_goal=texts[k],
+                                            task_state='review', task_reason='课堂安排保留，范围尚待补充。', task_purpose='learning',
+                                            learning_subject='英语', **kw)
+        older = ExitStack()  # the release that saved them had neither the boundary nor the relation reread
+        older.enter_context(patch.object(agent, '_school_relation_boundary', lambda store: None))
+        older.enter_context(patch.object(agent, '_recover_school_pending_relations', return_value=dict(used=0, failed=0, created=0, linked=0)))
+        with older:
+            for index, k in enumerate(texts):
+                with self.app.connect() as c:
+                    saved = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
+                payload = self.fixture.payload(expected=saved['cursor'] if saved else source['cursor'], cursor=k, offset=index * 20)
+                payload['messages'] = [dict(id=k, time=payload['checked_at'], kind='text', sender='虚构英语老师',
+                                            sender_id='fictional-en-linfeng', text=texts[k], unread=False)]
+                self.store.ingest(payload)
+                self.fresh_responses[(refs[k],)] = dict(proposals=[reply(k)])
+                self.assertEqual(self._tick(index * 20)['failed'], 0)
+
+        def rows():
+            with self.app.connect() as c:
+                return {json.loads(r['evidence'])[0]['ref']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' ORDER BY rowid")}
+        before = rows()
+        self.assertEqual(set(before), set(refs.values()))
+        self.assertTrue(all(r['state'] == 'pending' for r in before.values()))
+        with self.app.connect() as c:
+            jobs = {r['id']: (r['attempts'], r['done']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}
+            cursor = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source['id'],)).fetchone()['cursor']
+        first = before[refs['81']]['id']
+        self.fresh_responses[(refs['82'],)] = dict(proposals=[reply('82', task_change='same', task_target_id='pending:' + first)])
+        self.fresh_responses[(refs['83'],)] = dict(proposals=[reply('83')])
+        calls = len(self.calls)
+        for minutes in (100, 120, 140):
+            self.assertEqual(self._tick(minutes)['failed'], 0)
+        reread = [x for x in self.calls[calls:] if x['name'] == 'family_agent_selection']
+        self.assertEqual([sorted(e['ref'] for e in x['context']['evidence']) for x in reread], [[refs['82']], [refs['83']]])
+        self.assertEqual([t['id'] for t in reread[0]['context']['school_pending_items']], ['pending:' + first], 'own and later rows are no targets')
+        after = rows()
+        keep = lambda r: (r['id'], r['state'], r['title'], r['body'], r['due'], r['updated'], r['job_id'])
+        self.assertEqual({k: keep(r) for k, r in after.items()}, {k: keep(r) for k, r in before.items()})
+        self.assertEqual(json.loads(after[refs['82']]['plan'])['school_pending_of']['item_id'], first)
+        self.assertNotIn('school_pending_of', json.loads(after[refs['83']]['plan']), 'the independent part-5 activity stays its own')
+        self.assertNotIn('school_pending_of', json.loads(after[refs['81']]['plan']))
+        with self.app.connect() as c:
+            self.assertEqual({r['id']: (r['attempts'], r['done']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}, jobs)
+            self.assertEqual(c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source['id'],)).fetchone()['cursor'], cursor)
+            relation = sorted((r['done'], r['attempts']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'school-pending-relation:%'"))
+        self.assertEqual(relation, [(1, 1), (1, 1)], 'one bounded reread per affected batch, never again')
+        cards = {}
+        for offset in range(8):
+            day = (self.fixture.now.date() + dt.timedelta(days=offset)).isoformat()
+            view = self.app.day_view(source['child_id'], day)
+            for r in [r for g in view['groups'] for r in g['items']] + list(view['upcoming']):
+                if '林间风' in r.get('title', ''):cards.setdefault(r['id'], r)
+        self.assertNotIn(after[refs['82']]['id'], cards, 'the reminder is the lesson's notice, not a second card')
+        self.assertEqual(set(cards), {first, after[refs['83']]['id']}, cards.keys())
+        self.assertIn(after[refs['82']]['id'], [n['id'] for n in (cards[first].get('version') or {}).get('notices', [])])
+        self.assertIn('范围待补', cards[first]['title'], 'the unknown range stays unknown')
+
 if __name__ == '__main__':
     unittest.main()
