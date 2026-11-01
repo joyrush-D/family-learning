@@ -647,6 +647,46 @@ class CorrectionUnitTests(ScopeSaveTests):
             sci, = self.row(view, sci_task)
             self.assertIn('空的透明塑料瓶一个', '\n'.join(sci['lines']))
 
+    def test_live_shape_a_lesson_kept_in_the_reading_goal_is_its_own_item_and_the_count_correction_composes(self):
+        """Root run9 live none shape: the reply kept 周五课堂听写 in the reading item's goal and gave no lesson proposal; the
+        later count correction's summary dropped 听音频 and reworded the lesson's unknown scope."""
+        r3, r7 = 'message:%s:103' % EN, 'message:%s:107' % EN
+        self.batch(EN, [msg('103', '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。', '16:20', **self.EN_T)],
+                   lambda targets, pending: [proposal(r3, '今晚听音频跟读Unit 9第1到6个单词，每词三遍', '英语：跟读Unit 9第1—6个单词',
+                                                      '今晚听音频跟读Unit 9第1到6个单词，每词三遍。\n只做口头跟读，不用抄写。\n周五课堂听写，范围由老师明天再说。')])
+        home = next(i for i in self.items_for(r3) if '跟读' in i['title'])
+        if home['state'] == 'pending':
+            self.store.act(dict(id=home['id'], action='accept')); home = next(i for i in self.items_for(r3) if '跟读' in i['title'])
+        task = home['task_id']
+        lesson, = [i for i in self.items_for(r3) if '听写' in i['title']]
+        self.assertEqual((lesson['state'], lesson['due']), ('pending', FRI))
+        self.assertNotIn('听写', self.task(task)['action'], 'the reading item keeps only its own words')
+        self.batch(EN, [msg('107', '更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定，等明天另行通知。', '17:10', **self.EN_T)],
+                   lambda targets, pending: [proposal(r7, 'Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写', '英语：跟读Unit 9第1—6个单词两遍',
+                                                      '今晚跟读Unit 9第1到6个单词，每个单词跟读两遍。\n只做口头跟读，不用抄写。\n周五课堂听写，范围等老师明天另行通知。',
+                                                      state='review', change='update', target=task)])
+        for view in self.views(DAY):
+            en, = self.row(view, task)
+            version = en.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            words = '\n'.join(version['lines'])
+            for unit in ('听音频', 'Unit 9第1到6个单词', '两遍', '只做口头跟读', '不用抄写'):
+                self.assertIn(unit, words)
+            self.assertNotIn('三遍', words)
+            self.assertNotIn('听写', words)
+            self.assertFalse([r for g in view['groups'] for r in g['items'] if '听写' in r['title']], 'the lesson is no to-do today')
+        for view in self.views(FRI):
+            cards = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
+            self.assertEqual(len(cards), 1, 'the restated lesson is one card')
+            self.assertNotIn('Unit 9', '\n'.join(cards[0]['lines']), 'the lesson scope is never borrowed from the reading item')
+            self.assertEqual([f.get('kind') for f in cards[0]['facts'] if f.get('role') == 'due'], ['inspection'])
+        item, = [i for i in self.items_for(r7) if i['state'] == 'pending' and '跟读' in i['title']]
+        self.assertTrue(agent.apply_school_change(self.app, self.store, form_request(self, item, task))['school_changed'])
+        saved = self.task(task)['action']
+        for unit in ('听音频', '两遍', '只做口头跟读', '不用抄写'):
+            self.assertIn(unit, saved)
+        self.assertNotIn('三遍', saved)
+
     def test_a_move_notice_adding_its_own_requirement_stays_under_review(self):
         en_task, sci_task = self.originals()
         r8 = 'message:%s:108' % EN

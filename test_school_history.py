@@ -409,19 +409,33 @@ class SchoolHistoryTests(unittest.TestCase):
         self.assertEqual(len(self.calls), count)
         self.assertEqual(len(self._history_rows()), 1)
 
-    def test_empty_legacy_learning_material_ambiguity_remains_review_not_automatic_task(self):
+    def test_empty_legacy_clear_carry_requirement_is_organized_without_parent_confirmation(self):
+        """Carrying one named workbook to school by a stated day (2月12日前带《英语练习册》1份到校) is a complete, explicit
+        logistics requirement: under the current PRD it is organized automatically, as one task with its own words and day,
+        not left for the parent to confirm item by item (the earlier expectation predates that rule)."""
         group = self._empty_legacy(texts=['2月12日前带《英语练习册》1份到校。'])
         self.history_response = self._empty_response(group)
         self.assertEqual((self._tick(10)['failed'], len(self._history_rows())), (0, 1))
         row = self._history_rows()[0]
-        self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'review')
-        self.assertEqual((row['state'], row['task_id']), ('pending', ''))
-        self.assertEqual(row['body'], group['values'][0]['text'])
+        self.assertEqual(json.loads(row['plan'])['school_task']['state'], 'ready')
+        self.assertEqual(row['state'], 'accepted')
         self.assertEqual(row['due'], '2026-02-12')
-        accepted = self.store.act(dict(id=row['id'], action='accept'))
-        self.assertEqual(accepted['state'], 'accepted')
         with self.app.connect() as c:
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM manual_tasks').fetchone()[0], 1)
+            tasks = [dict(r) for r in c.execute('SELECT * FROM manual_tasks')]
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]['id'], row['task_id'])
+
+    def test_empty_legacy_completion_with_unknown_range_stays_review(self):
+        """A learning completion whose range the teacher has not given (具体页码老师另行通知) stays review even when the reply
+        calls it ready: the requirement is not complete enough to organize."""
+        group = self._empty_legacy(texts=['2月12日前完成《英语练习册》，具体页码老师另行通知。'])
+        self.history_response = self._empty_response(group)
+        self.assertEqual(self._tick(10)['failed'], 0)
+        rows = self._history_rows()
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertNotEqual(json.loads(row['plan'])['school_task']['state'], 'ready')
+            self.assertEqual((row['state'], row['task_id']), ('pending', ''))
 
     def test_empty_legacy_receipt_changed_after_scope_discovery_makes_no_model_call(self):
         group = self._empty_legacy()
