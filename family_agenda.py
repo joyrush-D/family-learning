@@ -1200,8 +1200,9 @@ def _short_change(old_text,new_text,shifts=()):
 def _role_days(agenda,quote,sent):
     """Each date role's days for one item: its saved due by its meaning (老师要求交回、老师检查; any other due is the work's
     own day), its saved completion or earlier submission, and every day its own quoted clauses tie to a predicate of that
-    role (明早交给数学老师 is the handback's, 今晚完成 the work's). A clause with no handback or check predicate dates the work
-    itself; a negated one (今晚不用填写) dates nothing. The same day can hold two roles; a role is never read off another's."""
+    role (明早交给数学老师 is the handback's, 今晚完成 the work's). A clause dates only the role its own predicate names: one whose
+    predicate is none of them (改到下周一、明早仍交… where no predicate is read) or is negated (今晚不用填写) dates nothing, and
+    its day is left to the saved dates. The same day can hold two roles; a role is never read off another's."""
     roles={role:set() for role in _DATE_ROLES}
     due,kind=exact_day(agenda.get('due_on','')),agenda.get('due_kind','')
     if due:roles['handback' if kind=='handback' else 'check' if kind=='inspection' else 'work'].add(due)
@@ -1210,7 +1211,8 @@ def _role_days(agenda,quote,sent):
     for clause in re.split(r'[，,；;。！!？?\n]+',quote or ''):
         days=family_agent._school_clause_days(clause,sent) if exact_day(sent) and clause.strip() else None
         if not days or family_agent._school_negated_day(clause) or _negated_actions(clause):continue
-        for role in family_agent._school_clause_roles(clause)&{'handback','check'} or {'work'}:roles[role]|=days
+        own=family_agent._school_clause_roles(clause)
+        for role in own&{'handback','check'} or ({'work'} if 'finish' in own else ()):roles[role]|=days
     return roles
 
 
