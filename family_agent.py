@@ -3164,7 +3164,7 @@ def _school_update_whole(task, title, body, due, said, plan, row):
     drops a method, range or quantity is refused before any write: the requirement and the pending notice stay as they were,
     and the same notice can be confirmed again once the whole requirement is written. Advice never adds a standard.
     """
-    from family_agenda import _count_only_latest,_unchanged_lost,exact_day
+    from family_agenda import _count_only_latest,_count_token,_unchanged_lost,exact_day
     clean=lambda text:re.sub(r'\s+','',str(text or ''))
     brief=plan.get('school_task') or {}
     if clean(body) not in {clean(x) for x in (brief.get('goal'),(plan.get('approved') or {}).get('action'),row['body']) if clean(x)}:return body
@@ -3172,9 +3172,17 @@ def _school_update_whole(task, title, body, due, said, plan, row):
     lost=_unchanged_lost(old,shown,said)
     if not lost:return body
     fixed=_count_only_latest(old,task['title'],shown,said,bool(exact_day(due)) and due!=task['agenda'].get('due_on',''))
-    if fixed is None:
+    if fixed is not None:return '\n'.join(fixed)
+    # Not composable: in the clause whose count the notice itself restates (完成…第1至5题 → 只做1至3题) only its doing verb may
+    # be worded anew, once the candidate states every count the notice gives; its method and objects and each other clause
+    # must still be carried.
+    told=[(n,u) for n,u in _school_counts(said) if u];units={u for _,u in told}
+    if units and set(told)<=_school_counts(shown):
+        lost=_unchanged_lost([re.sub(r'完成|做完|做','',c) if _count_token(units).search(c) else c
+                              for c in re.split(r'[，,；;。！!？?\n]+','\n'.join(old))],shown,said)
+    if lost:
         raise AgentError('新要求的归纳缺少原要求中未改的部分（'+'；'.join(lost)[:60]+'）；原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
-    return '\n'.join(fixed)
+    return body
 
 
 def _school_submission_step(brief, activity):

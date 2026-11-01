@@ -260,6 +260,14 @@ class SchoolChangeWholeTests(ScopeSaveTests):
         if row['version']['state'] == 'latest':
             self.assertEqual(action, shown, 'the write saves the very whole requirement the day projection showed')
 
+    def test_a_restated_count_does_not_let_the_candidate_drop_that_clauses_method(self):
+        # The notice restates the count and moves the record; the candidate drops the thermometer method of the restated clause.
+        task_id, item = self.science('更正：水温改测2次，结果改记在记录单上。', '水温改测2次，结果改记在记录单上', '测2次水温，结果记在记录单上。')
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_change(self.app, self.store, self.request(item, task_id, item['plan']['school_task']['goal']))
+        self.assertIn('温度计', str(refused.exception))
+        self.assertIn('温度计', self.task(task_id)['action'])
+
     def test_parent_edited_words_are_the_familys_own(self):
         task_id, item = self.science('更正：水温结果改记在记录单上，不用记在练习册。', '水温结果改记在记录单上，不用记在练习册',
                                      '用温度计测水温，结果记在记录单上，不用记在练习册。')
