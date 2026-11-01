@@ -1284,9 +1284,9 @@ _NUMERAL=re.compile(r'(\d+|[一二两三四五六七八九十百千]+)\s*([\u4e0
 
 def _counts_unchanged(said,old):
     """Whether every number the notice states is the original's own number of that same object: each piece of the notice
-    (its days and move narration aside) holding a number (透明塑料杯改为三个、铅笔仍三支) meets every original piece naming its
-    object words with that measure word, and each holds that very number. An old number of another object (三支铅笔) never
-    vouches for a changed one (两个杯→三个); an object or measure the original never counted is beyond it."""
+    (its days and move narration aside) holding a number (透明塑料杯改为三个、铅笔仍三支) meets the original pieces counting that
+    measure word that share the most of its words, and each holds that very number. An old number of another object (三支
+    铅笔) never vouches for a changed one (两个杯→三个); an object or measure the original never counted is beyond it."""
     def pieces(text,narration):
         found=[]
         for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
@@ -1296,8 +1296,9 @@ def _counts_unchanged(said,old):
     held=pieces(old,False)
     for numbers,words in pieces(said,True):
         for number,unit in numbers:
-            same=[n for counted,named in held if words<=named for n,u in counted if u==unit]
-            if not same or any(n!=number for n in same):return False
+            near=[(len(words&named),n) for counted,named in held for n,u in counted if u==unit and words&named]
+            best=max((k for k,_ in near),default=0)
+            if not best or any(n!=number for k,n in near if k==best):return False
     return True
 
 
