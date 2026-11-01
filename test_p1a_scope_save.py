@@ -600,6 +600,19 @@ class CorrectionUnitTests(ScopeSaveTests):
             '科学课由周四改到下周一。\n前面通知带的空透明塑料瓶一个也下周一再带。\n今晚仍不用填写实验记录表。', DAY)
         self.assert_whole(en_task, sci_task)
 
+    def test_a_count_correction_restating_its_own_tonight_names_no_date_change(self):
+        en_task, sci_task = self.corrections(
+            ('英语：跟读Unit 9第1—6个单词', '今晚听音频跟读Unit 9第1到6个单词两遍。\n不用抄写。'),
+            '科学课由周四改到下周一。\n前面通知带的空透明塑料瓶一个也下周一再带。\n今晚仍不用填写实验记录表。', DAY)
+        for view in self.views(DAY):
+            en, = self.row(view, en_task)
+            self.assertEqual(en['version']['state'], 'latest', en['version'])
+            self.assertIn('原三遍→两遍', en['version']['change'])
+            self.assertNotIn('日期', en['version']['change'], 'the original already did this work 今晚: no date changed')
+        for view in self.views(MON):
+            sci, = self.row(view, sci_task)
+            self.assertIn('日期 原11-19→11-23', sci['version']['change'], 'only the day the notice moved is named')
+
     def test_a_move_notice_adding_its_own_requirement_stays_under_review(self):
         en_task, sci_task = self.originals()
         r8 = 'message:%s:108' % EN
@@ -621,3 +634,82 @@ class CorrectionUnitTests(ScopeSaveTests):
         for view in self.views(THU):
             sci, = self.row(view, sci_task)
             self.assertEqual(sci['version']['state'], 'review', 'the notice names the exempted step again: no move-only change')
+
+
+class DateRoleCountMoveTests(ScopeSaveTests):
+    """E: a same-publisher notice moves only the date role its own words move, and a stated day move is move-only only
+    when every number it states is the original's own number of that same object (Root run5, newly made variants). A
+    handback moved onto the original's own completion day is a move although that day was already the original's; an
+    old number of another object never vouches for a changed count. Replies are handcrafted correct proposals; no product
+    model is called."""
+    MATH = dict(sender='虚构丙数学老师', sender_id='fic-math3-teacher')
+    ART = dict(sender='虚构丙美术老师', sender_id='fic-art3-teacher')
+
+    def saved(self, ident, text, clock, who, quote, title, goal, due, **kw):
+        ref = 'message:%s:%s' % (SCI, ident)
+        self.batch(SCI, [msg(ident, text, clock, **who)], lambda targets, pending: [proposal(ref, quote, title, goal, due=due, **kw)])
+        return self.items_for(ref)
+
+    def original(self, ident, *args, **kw):
+        item, = self.saved(ident, *args, **kw)
+        if item['state'] == 'pending':
+            self.store.act(dict(id=item['id'], action='accept')); item, = self.items_for('message:%s:%s' % (SCI, ident))
+        self.assertEqual(item['state'], 'accepted')
+        return item['task_id']
+
+    def rows(self, day, task_id):
+        return [[r for g in view['groups'] for r in g['items'] if r.get('task_id') == task_id] +
+                [u for u in view['upcoming'] if u.get('task_id') == task_id] for view in self.views(day)]
+
+    def test_a_handback_moved_onto_the_own_completion_day_is_the_latest_handback(self):
+        task = self.original('801', '数学：今晚完成《松石练习册》第5页第3、4题，写出解题步骤，明早交给数学老师。', '17:00', self.MATH,
+                             '今晚完成《松石练习册》第5页第3、4题，写出解题步骤，明早交给数学老师', '数学：完成《松石练习册》第5页第3、4题',
+                             '今晚完成《松石练习册》第5页第3、4题，写出解题步骤，明早交给数学老师。', '2026-11-18', subject='数学')
+        self.saved('802', '更正：今晚完成《松石练习册》第5页第3、4题，写出解题步骤，改为今晚交给数学老师。', '18:00', self.MATH,
+                   '今晚完成《松石练习册》第5页第3、4题，写出解题步骤，改为今晚交给数学老师', '数学：完成《松石练习册》第5页第3、4题',
+                   '今晚完成《松石练习册》第5页第3、4题，写出解题步骤，今晚交给数学老师。', DAY, subject='数学', state='review',
+                   change='update', target=task)
+        for row, in self.rows(DAY, task):
+            version = row.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            handbacks = [f['value'] for f in row['facts'] if f.get('kind') == 'handback']
+            self.assertEqual(handbacks, [DAY], row['facts'])
+            self.assertIn('交回日期 原11-18→11-17', version['change'])
+            words = '\n'.join(version['lines'])
+            for unit in ('今晚完成', '《松石练习册》', '第5页', '第3、4题', '解题步骤', '今晚交给数学老师'):
+                self.assertIn(unit, words)
+        for rows in self.rows('2026-11-18', task):
+            self.assertFalse([f for r in rows for f in r.get('facts', []) if f.get('kind') == 'handback' and f['value'] == '2026-11-18'],
+                             'the old handback day holds no current handback')
+
+    def art(self, notice, goal):
+        task = self.original('811', '美术：周四手工课带两个纸盘和三支彩笔；今晚不用画草图。', '17:00', self.ART,
+                             '美术：周四手工课带两个纸盘和三支彩笔；今晚不用画草图', '美术：周四手工课带两个纸盘和三支彩笔',
+                             '美术：周四手工课带两个纸盘和三支彩笔；今晚不用画草图。', THU, purpose='admin', subject='')
+        self.saved('812', notice, '20:00', self.ART, notice.rstrip('。'), '美术：下周一带纸盘和彩笔', goal, MON, purpose='admin', subject='',
+                   state='review', change='update', target=task)
+        return task
+
+    def test_a_day_move_changing_one_count_never_keeps_the_old_count_as_latest(self):
+        task = self.art('周四手工课改到下周一，前面通知的纸盘改为三个，彩笔仍三支，下周一再带；今晚仍不用画草图。',
+                        '下周一带三个纸盘和三支彩笔。今晚不用画草图。')
+        for day in (THU, MON):
+            for rows in self.rows(day, task):
+                for row in rows:
+                    version = row.get('version') or {}
+                    if version.get('state') == 'latest':
+                        words = '\n'.join(version['lines'])
+                        self.assertNotIn('两个纸盘', words, 'an old count of another object never vouches for the changed one')
+                        self.assertIn('三个纸盘', words)
+
+    def test_a_day_move_restating_every_count_still_composes_the_whole_original(self):
+        task = self.art('周四手工课改到下周一，前面通知的两个纸盘和三支彩笔下周一再带；今晚仍不用画草图。',
+                        '下周一带纸盘和三支彩笔。今晚不用画草图。')
+        for row, in self.rows(MON, task):
+            version = row.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            self.assertEqual(version.get('composed'), 'original_with_stated_change')
+            words = '\n'.join(version['lines'])
+            for unit in ('两个纸盘', '三支彩笔', '下周一', '不用画草图'):
+                self.assertIn(unit, words)
+            self.assertNotIn('周四', words)
