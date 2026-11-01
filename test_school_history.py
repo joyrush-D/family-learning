@@ -1014,5 +1014,15 @@ class SchoolHistoryTests(unittest.TestCase):
             self.assertEqual({r['id']: (r['attempts'], r['done']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'messages:%'")}, jobs)
         calls = len(self.calls);self._tick(900);self.assertEqual(len(self.calls), calls, 'every bounded reread done once')
 
+    def test_a_reply_merging_the_independent_part5_activity_is_refused_by_the_link_proof(self):
+        refs = self._pending_batches(self.TRIO, older=True);rows = self._rows();first = rows[refs['81']]['id']
+        self.fresh_responses[(refs['82'],)] = dict(proposals=[self._own_reply(refs['82'], self.TRIO['82'], '82', task_change='same', task_target_id='pending:' + first)])
+        self.fresh_responses[(refs['83'],)] = dict(proposals=[self._own_reply(refs['83'], self.TRIO['83'], '83', task_change='same', task_target_id='pending:' + first)])
+        for minutes in (100, 120, 140):
+            self.assertEqual(self._tick(minutes)['failed'], 0)
+        after = self._rows()
+        self.assertEqual(json.loads(after[refs['82']]['plan'])['school_pending_of']['item_id'], first)
+        self.assertNotIn('school_pending_of', json.loads(after[refs['83']]['plan']), 'a reply alone never merges another occurrence')
+
 if __name__ == '__main__':
     unittest.main()
