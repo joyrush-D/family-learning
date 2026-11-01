@@ -1092,8 +1092,13 @@ def snapshot(app,start,end):
                 relation=(dict(change=brief['change'],target_id=brief['target_id'],refs=refs,title=str(brief.get('title') or row['title']),
                                lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12])
                           if brief.get('change') in ('update','append') and brief.get('target_id') else None)
+                link=plan.get('school_pending_of') if isinstance(plan.get('school_pending_of'),dict) else None
+                link=dict(target=str(link.get('item_id') or ''),change=str(link.get('change') or ''),refs=refs,title=str(brief.get('title') or row['title']),
+                          lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12]) if link else None
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
-                    agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {})))
+                    agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {}),
+                    **({'pending_link':link} if link else {})))
+            items=_one_pending_affair(c,items)
             items=_one_affair_versions(c,items,store)
         study=[]
         if 'study_items' in tables:
@@ -1184,6 +1189,91 @@ def _short_change(old_text,new_text,old_due,new_due):
     return '；'.join(parts)
 
 
+# A notice's latest requirement is the original's whole requirement with only what the notice itself changes put in. Each
+# original clause, its own day words aside (days are the saved date roles) and any count whose unit the notice restates
+# (三遍 replaces 四遍) or object it renames, must still be carried by the latest words: a dropped method, range, quantity,
+# qualifier, step or exemption is a lost unit, never a silent latest (PRD 3.2; one contract with the selection prompt).
+_DAY_WORDS=re.compile(r'(?:下下|下|本|这|上)?个?(?:周|星期|礼拜)[一二三四五六日天末]|今[天日晚早]|明[天日晚早]|后天|当[天晚]|\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?')
+_UNIT_FILLER=re.compile(r'[^\u4e00-\u9fffa-z0-9]|[的了地得着过也都再请需须要把将]')
+_UNIT_DIGITS=str.maketrans('一二两三四五六七八九','1223456789')
+
+
+def _unit_chars(text):
+    return set(_UNIT_FILLER.sub('',_DAY_WORDS.sub(' ',(text or '').lower())).translate(_UNIT_DIGITS))
+
+
+def _count_token(units):
+    return re.compile(r'(?:\d+|[一二两三四五六七八九十]+)\s*(?:'+'|'.join(sorted(map(re.escape,units),key=len,reverse=True))+')')
+
+
+def _unchanged_lost(old_lines,shown,said):
+    """Original clauses the latest shown words no longer carry beyond the notice's own changes; [] when every one is kept."""
+    units={u for _,u in family_agent._school_counts(said) if u}
+    renamed=bool(family_agent._school_named_objects(said)-family_agent._school_named_objects('\n'.join(old_lines)))
+    have=_unit_chars(shown);lost=[]
+    for clause in re.split(r'[，,；;。！!？?\n]+','\n'.join(old_lines)):
+        core=clause.lower()
+        if units:core=_count_token(units).sub(' ',core)
+        if renamed:core=family_agent._SCHOOL_NAMED.sub(' ',core)
+        if _unit_chars(core)-have:lost.append(clause.strip()[:24])
+    return lost
+
+
+def _count_only_latest(old_lines,old_title,shown,said,moved):
+    """The original lines with only the notice's own count change put in, else None. Each changed unit has one count in the
+    latest words that the notice itself states, and one old count of that unit written once in the original; the model's
+    latest must say nothing beyond the original and that change. A moved date would leave dated original words stale."""
+    old='\n'.join(old_lines)
+    if not old_lines or moved and _DAY_WORDS.search(old):return None
+    counts=family_agent._school_counts;told=counts(said);new=counts(shown);before=counts(old);lines=list(old_lines);changed=False
+    for unit in sorted({u for _,u in told if u}):
+        a=[n for n,u in before if u==unit];b=[n for n,u in new if u==unit]
+        if len(b)!=1 or (b[0],unit) not in told:continue
+        if len(a)!=1 or a[0]==b[0]:return None
+        tokens=[(i,t) for i,l in enumerate(lines) for t in _count_token({unit}).finditer(l) if counts(t[0])=={(a[0],unit)}]
+        written=next((t[0] for t in _count_token({unit}).finditer(shown) if counts(t[0])=={(b[0],unit)}),'')
+        if len(tokens)!=1 or not written:return None
+        i,t=tokens[0];lines[i]=lines[i][:t.start()]+written+lines[i][t.end():];changed=True
+    if not changed or not _unit_chars(shown)<=_unit_chars(old_title+'\n'+'\n'.join(lines)):return None
+    return lines
+
+
+def _one_pending_affair(c,items):
+    """A later notice bound to an earlier pending school item (school_pending_of, the program's own proof at selection) is
+    that affair's notice, never a second card. While the earlier item is pending, its one card keeps its own title, lines
+    and dates, gains every notice's publications and a review note, and all stay pending for the parent; once the earlier
+    item became a task, the notice is that task's notice under the version rules below; dismissed or gone, its own card."""
+    links={x['id']:x.pop('pending_link') for x in items if x.get('pending_link')}
+    if not links:return items
+    pending={x['id']:x for x in items if x['kind']=='school'};groups={}
+    for x in items:
+        link=links.get(x['id'])
+        if not link:continue
+        target,seen=link['target'],{x['id']}
+        while target in links and links[target]['target'] in pending and target not in seen:
+            seen.add(target);target=links[target]['target']
+        root=pending.get(target)
+        if root is not None and root is not x and root['child_ids']==x['child_ids']:
+            groups.setdefault(target,[]).append(x);continue
+        try:row=c.execute("SELECT task_id,child_id FROM agent_items WHERE id=? AND kind='school' AND state='accepted'",(target,)).fetchone()
+        except Exception:row=None
+        if row and row['task_id'] and [row['child_id']]==x['child_ids'] and not x.get('relation'):
+            x['relation']=dict(change=link['change'],target_id=row['task_id'],refs=link['refs'],title=link['title'],lines=link['lines'])
+    for target,group in groups.items():
+        root=pending[target];a=root['agenda'];pubs=list(a.get('publications') or [])
+        for n in group:pubs+=[p for p in n['agenda'].get('publications') or [] if p not in pubs]
+        root['agenda']=dict(a,publications=pubs)
+        root['version']=dict(state='review',pending_id=group[0]['id'],
+            previous=dict(title=root['title'],lines=[l.strip() for l in str(root.get('body') or '').splitlines() if l.strip()][:12],
+                          due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on','')),
+            notices=[dict(id=n['id'],change=links[n['id']]['change'],title=links[n['id']]['title'],lines=links[n['id']]['lines'],
+                          publications=publications(n['agenda']),published_at=str(n['agenda'].get('published_at') or '')) for n in group],
+            reasons=['同一待核事项有后续通知'],
+            note='同一事项有后续通知（'+str(len(group))+'条）待核对；原要求、日期和全部原文都保留，原文未写明的范围和日期仍未知，确认后才改。')
+    attached={n['id'] for g in groups.values() for n in g}
+    return [x for x in items if x['id'] not in attached]
+
+
 def _one_affair_versions(c,items,store):
     tasks={x['task_id']:x for x in items if x['kind']=='task'};notices={}
     for x in items:
@@ -1199,7 +1289,7 @@ def _one_affair_versions(c,items,store):
         said='\n'.join(str((_message(c,r)[0] or {}).get('text') or '') for r in rel['refs'])
         senders={_read_publisher(c,r) for r in rel['refs']}
         if len(group)>1:why.append('同一事项有多条新通知')
-        if rel['change']!='update':why.append('是补充要求')
+        if rel['change']!='update':why.append({'same':'是同一事项的再次提醒','cancel':'含取消或停止原要求'}.get(rel['change'],'是补充要求'))
         if task['closed'] or task.get('touched'):why.append('家庭已有完成、状态或修改')
         else:
             try:
@@ -1219,6 +1309,14 @@ def _one_affair_versions(c,items,store):
             why.append('新要求的归纳与通知原文对不上')
         if not (m.get('published_at') and a.get('published_at') and m['published_at']>a['published_at']):why.append('不是原发布者之后的通知')
         if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
+        # The latest is a whole requirement: every unchanged original unit kept, or only a proven count change put in.
+        old_lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()];lines=list(rel['lines']);composed=False
+        moved=bool(exact_day(m.get('due_on',''))) and m.get('due_on')!=a.get('due_on','')
+        lost=_unchanged_lost(old_lines,shown,said) if rel['change']=='update' and not why else []
+        if lost:
+            fixed=_count_only_latest(old_lines,task['title'],shown,said,moved)
+            if fixed is None:why.append('新要求的归纳缺少原要求中未改的部分（'+'；'.join(lost)[:60]+'）')
+            else:lines,composed=fixed,True
         previous=dict(title=task['title'],lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()][:12],
                       due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on',''))
         listed=[dict(id=n['id'],change=n['relation']['change'],title=n['relation']['title'],lines=n['relation']['lines'],
@@ -1227,10 +1325,14 @@ def _one_affair_versions(c,items,store):
             pubs=list(a.get('publications') or []);pubs+=[p for p in m.get('publications') or [] if p not in pubs]
             # A date-only update of the same lesson-day affair (带瓶改到下周一) keeps its own role; a new role is read when stated.
             kind=m.get('due_kind','') if m.get('due_kind') not in ('','deadline') or a.get('due_kind') in ('','deadline') else a['due_kind']
-            task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs,
-                                submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''),submit_role=m.get('submit_role',''))
-            task['agenda'].pop('complete_words',None)
-            task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=rel['lines'],previous=previous,notices=listed,
+            if any(exact_day(m.get(k,'')) for k in ('due_on','complete_on','submit_on')):
+                task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs,
+                                    submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''),submit_role=m.get('submit_role',''))
+                task['agenda'].pop('complete_words',None)
+            # A notice stating no day of its own (跟读改每词三遍) changes no date role: the original's days stay as they were.
+            else:task['agenda']=dict(a,publications=pubs)
+            task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=lines,previous=previous,notices=listed,
+                                 **({'composed':'original_with_stated_change'} if composed else {}),
                                  change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,previous['due_on'],m.get('due_on','')) or '要求有更新')
         else:
             task['version']=dict(state='review',pending_id=x['id'],previous=previous,notices=listed,reasons=why,

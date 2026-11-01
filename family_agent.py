@@ -90,6 +90,16 @@ SCHOOL_TASK_PROMPT += '\nchange首先描述与已保存school_tasks的关系。�
 SCHOOL_TASK_PROMPT += '\n首次同批明确包含同孩、同源、稳定同publisher发布的完整原要求及其对应补充/更正，具体对象唯一，且没有已保存原事项时，将本批这些消息归纳成一项new，target_id为空；引用原要求、补充/更正与本项材料，保留原发布日期、更正时间及原文支持的完成日期，不把本批尚未保存的原要求写成空target_id的update。当前所需原件尚未读全时仍new但state=review，已读要求保留，reason仅列具体未读部分；所需内容和适用条件已读清才ready。同批明确取消整项行动时不能用new/ready生成执行任务，沿取消待核流程保留。仅对已保存的同源同publisher明确唯一原事项，纯增加步骤/标准的补充可选append：target_id选原事项，goal只写本条新增要求，不复制旧内容或借旧截止日；补充未声明新日期时due留空，原事项的截止由系统保持；未新增提交要求时submission留空。只补朗读/仅补教材作业在同publisher对应活动仅一项时可明确匹配；两项竞争或publisher未知则review。对已保存事项的替换、撤销、改期、必做/选做变化用update/cancel并review，不用append。归纳的每项提交、签字、数量、截止要求都必须由当前原消息或已读完整原件支持，不能从打印、签字或参考说明补造提交动作。完成时间不等于交回时间；交回对象和提交去处分开，不能把交数学本改成提交至数学本。'
 SCHOOL_SAME_PROMPT = '\n同一孩子已保存的同一件具体事项被再次提醒或转述（换说法、换渠道、由另一发布人转达）时，若对象、范围、次数、完成标准和截止都与该原事项一致，没有新增或改变要求，change填same，target_id选该原事项；goal写本条提醒的完整要求，due按本条原文和发送日换算，未写日期留空。仅同科目、相似标题或同一本书/单元/文件名不能证明是同一事项；不同题号/页码/次数、另一孩子、重新布置或再交一次的新一轮、补充新步骤（append）、更正/改期/取消（update/cancel）都不是same。不同发布人只说明谁提醒，不能认定为同一人。'
 SCHOOL_TASK_PROMPT += SCHOOL_SAME_PROMPT
+# One update contract for every request that lists an original (a saved task or a pending item), the same one a bound native
+# change explains: the latest requirement replaces only what the new words change. Requests listing none keep their prompt.
+SCHOOL_UPDATE_SNAPSHOT=('\n列出原事项时，update的task_title/task_goal是绑定该原事项后本项最终有效的完整要求，不是新通知摘要：'
+    '前述“未明确保留的旧要求不补造”仅指新原文实际替换、改写或取消的部分；新原文给出的新次数、日期或对象取代旧值，旧值只留在原事项历史，不再写成要求；'
+    '原事项未被改变的方法、范围、数量、提交、检查、附件、适用条件和时间照常写入task_goal，没写“其余不变”也不撤销；'
+    '不写更正经过，不把旧要求和新要求拼成矛盾的两套；原事项的可选方法不升级为要求；新原文没写的新要求不补造。只增加步骤的补充仍用append。')
+SCHOOL_PENDING_PROMPT=('\nschool_pending_items是本孩子尚待家长核对、还没有成为任务的学校事项，编号以pending:开头，不是school_tasks里的已保存任务。'
+    '后发消息明确是其中同一具体事项的再次提醒、补充或更正（同一发布者、同一具体对象或活动）时，task_target_id填该pending编号，change按same/append/update/cancel，'
+    'state=review，不另建新事项；原事项未写明的范围、日期仍是未知，不按本条或其他事项猜补。不同对象、另一项活动或测验、不同发布者、另一孩子或对应不唯一时task_target_id留空。'
+    'school_tasks的编号不能填成pending编号，pending编号也不能当作已保存任务。')
 _school_fields['required'] += ['task_change','task_target_id']
 _school_fields['properties'].update(task_change=TASK_BRIEF_SCHEMA['properties']['change'],task_target_id=TASK_BRIEF_SCHEMA['properties']['target_id'])
 _school_fields['required'] += ['task_state','task_reason']
@@ -2316,6 +2326,54 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
                 except (AgentError,ValueError,KeyError,TypeError):proof=None
                 if proof:task['shared_standard']=proof
         return result
+
+
+_SCHOOL_PENDING_PRIVATE=('refs','latest')
+
+
+def school_pending_targets(store, child_id, connection=None, *, limit=12):
+    """This child's latest school items still pending the parent's decision (not yet tasks), for the same selection call.
+
+    Listed apart from the saved tasks as pending:<item id>, so a reply can never pass one off as a task id, and a later notice
+    is linked to one only by the program's own proof (_school_pending_link), never by the reply alone. Each keeps its own
+    identity, title, requirement and date; references, unreadable rows and items already linked as a notice are not listed.
+    """
+    result=[]
+    with store._db() if connection is None else nullcontext(connection) as c:
+        rows=c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' AND child_id=? AND (task_id='' OR task_id IS NULL) "
+                       "ORDER BY created DESC,id DESC",(child_id,)).fetchall()
+        for row in rows:
+            try:
+                plan=json.loads(row['plan']);brief=plan.get('school_task') or {}
+                if brief.get('state')=='reference' or plan.get('school_pending_of'):continue
+                publishers=set();refs=[];times=[]
+                for quote in json.loads(row['evidence']):
+                    source_id,message_id=quote['ref'][8:].rsplit(':',1)
+                    source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
+                    publishers.add((source_id,_publisher(source_id,message)));refs.append(quote['ref']);times.append(str(message.get('time') or ''))
+            except (AgentError,ValueError,KeyError,TypeError,AttributeError):continue
+            if not refs:continue
+            source,publisher=next(iter(publishers)) if len(publishers)==1 else ('','')
+            result.append(dict(id='pending:'+row['id'],title=str(brief.get('title') or row['title'])[:200],goal=str(brief.get('goal') or row['body'] or '')[:400],
+                               due=row['due'] or '',state='pending',source_id=source,publisher=publisher,refs=refs,latest=max(times)))
+            if len(result)>=limit:break
+    return result
+
+
+def _school_pending_link(target, change, brief, cited, due):
+    """The program's own proof that a later notice is a listed pending item's same affair, else None (its own card, as before).
+
+    The reply's pending target and a change of that affair (never new); every cited message the same stable publisher's in
+    the item's source, strictly later than the item's own and none of them; a concrete object of the item's own requirement
+    words in this notice's own summary (never the whole message, which may hold a sibling); a 'same' reminder on no other day.
+    """
+    if change not in ('same','append','update','cancel') or not target.get('publisher') or not cited or brief.get('state')=='reference':return None
+    for e in cited:
+        if (e['ref'][8:].rsplit(':',1)[0]!=target['source_id'] or e.get('publisher')!=target['publisher'] or e['ref'] in target['refs']
+                or not str(e.get('time') or '')>target['latest']):return None
+    if not _school_same_object(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''),target['title']+'\n'+target['goal']):return None
+    if change=='same' and due and target['due'] and due!=target['due']:return None
+    return dict(item_id=target['id'].removeprefix('pending:'),change=change,publisher=target['publisher'])
 
 
 def _school_scope(result, evidence, limit=24, complete=True):
@@ -6805,7 +6863,7 @@ def _school_native_saved(items,evidence):
         raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None,school_later=None):
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None,school_later=None,school_pending=()):
     original_pointers=[]
     if mode == 'school':
         original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
@@ -6818,6 +6876,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     content = {'mode': mode, 'as_of': as_of, 'child': profile or {}, 'evidence': [{k:v for k,v in e.items() if k!='message_order'} for e in evidence]}
     # The program's late-standard proof is checked here, not shown to the model: its input stays unchanged.
     if routing: content.update(learning_goals=school_goals,school_tasks=[{k:v for k,v in t.items() if k not in ('shared_standard','facts','same_basis','same_complete','same_as')} for t in school_tasks])
+    if routing and school_pending:content['school_pending_items']=[{k:v for k,v in t.items() if k not in _SCHOOL_PENDING_PRIVATE} for t in school_pending]
     if native_actions:content['required_native_actions']=[_school_native_view(a) for a in native_actions]
     schema=_evidence_schema(SCHOOL_SCHEMA if routing else SCHEMA,evidence)
     historical=routing and school_existing is not None
@@ -6826,11 +6885,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         fields=schema['properties']['proposals']['items']
         fields['required']+=['action_quote','existing_item_id']
         fields['properties'].update(action_quote={'type':'string','maxLength':600},existing_item_id={'type':'string','enum':['']+[r['id'] for r in school_existing]})
-    if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]
+    if routing: schema['properties']['proposals']['items']['properties']['task_target_id']['enum']=['']+[t['id'] for t in school_tasks]+[t['id'] for t in school_pending]
     prompt=SCHOOL_PROMPT if routing else PROMPT
     if native_actions:prompt+='\nrequired_native_actions是程序按原文定位的独立成果及其完整条件，不要求老师写明总数或编号。每项必须单独返回一次，title_quote逐字使用该项quote，或conditions中包含动作和对象的一段原句，不加段首标签或相邻文字，不能拼接片段；格式示例不是行动或截止。task_purpose与本项purpose一致；没有purpose而给出purpose_options的写入成果，按完整原消息的实际用途从中选择，科目词或把/将写入句式本身不决定用途。打印、作答、自查、签字等同一份资料的步骤已归本项，不另起任务。shared_conditions是本消息明确适用于所有本项的共同标准，每项都须保留。supplements是同一稳定发布者明确点名的本项补充，必须一起引用对应ref，不分给其他作业；shared_supplements是同一发布者紧接本清单发出、明确适用于本清单每一项的共同标准，每项都须保留并引用对应ref，不另起任务；不能合并独立成果，也不能只引用消息编号后漏掉要求。完整标准由程序保留，日期只按该项header/quote/conditions/shared_conditions和各自原发送日核对，不借同通知另一项的截止。清单只列程序能逐字定位的行动，不一定齐全：同一消息里未列出的其他独立行动仍须各自单独返回，title_quote按锚点规则只引用它自己的那段原文，不能包含或重叠任一已列项的quote和conditions，即使它们同在一句、只隔分号或逗号。'
     # Only a request sending a bound change explains it; every other request keeps its exact prompt.
     if any(a['changes'] for a in native_actions):prompt+='\nchanges是同一发布者随后明确针对本项的变更原文，必须一起引用对应ref。变更只改动原要求中实际被替换、改写或取消的部分，前述“未明确保留的旧要求不补造”仅指这部分，变更未涉及的原要求照常写入task_goal；明确取消整项时仍按前述整项取消规则。带waived的change是部分免除：只免去waived写明的那一步，写明角色时只免该角色的这一步；原要求其余的对象、角色、步骤、范围、数量、日期和条件都不变，同一步骤的其他角色仍须完成，task_goal全部保留并写明已免去的这一步，不按整项更正或取消处理。除整项取消外，task_goal只写变更后最终有效的完整要求：被替换、改写、取消或免去的旧内容不能仍作为要做的要求出现，已免去的步骤只简要写明不用做；不能先照抄原要求再接“后续更正……”拼成变更经过。原话和变更由ref保留为依据，变更经过可写在task_reason。'
+    if routing and not historical and (school_tasks or school_pending) and not any(a['changes'] for a in native_actions):prompt+=SCHOOL_UPDATE_SNAPSHOT
+    if routing and not historical and school_pending:prompt+=SCHOOL_PENDING_PROMPT
     if historical: prompt+='\n这是已处理消息的独立行动补漏。逐项对照existing_actions，保留家长当前修改与accepted/dismissed/pending决定，不恢复原任务。action_quote逐字引用包含本项动作和对象的完整原句，不将多个独立事项合并；existing_item_id只有同一具体行动才填旧编号，新漏项填空。已归纳/已忽略事项也返回以覆盖输入，但不会另建。不能按标题相似合并；同消息另项仍单独返回。due只从本项action_quote按原发送日换算，不能借用同通知另一项或旧任务日期。适用性/原件仍未读保留具体缺口。'
     result = family_llm._chat_json([{'role': 'system', 'content': prompt},
         {'role': 'user', 'content': _json(content)}], schema, 'family_agent_selection', timeout=45, data_path=data_path)
@@ -7006,7 +7067,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                and not _needs_task_details(e['text']) for e in evidence):
                 item['plan'] = {'school_learning': learning}
             raw_change=proposal.get('task_change','new');raw_target=proposal.get('task_target_id','')
-            brief=_school_brief({key:proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
+            # A pending item is no saved task: its id never reaches the task-target checks, only the program's own proof below.
+            pending_target=next((t for t in school_pending if t['id']==raw_target),None) if str(raw_target).startswith('pending:') else None
+            brief=_school_brief({key:'' if key=='target_id' and pending_target else proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True,
                                 others=[q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{c['ref'] for c in cited}])
             mark=split_marks.get(index,{})
@@ -7017,6 +7080,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 item.setdefault('plan',{})['school_selection_receipt']=mark.get('receipt') or {key:proposal.get('task_'+key,'') for key in
                     ['title','goal','advice','state','reason','change','target_id','purpose','submission']}
                 if mark:item['plan']['school_split']=mark['split']
+            if pending_target is not None:
+                link=_school_pending_link(pending_target,raw_change,brief,cited_evidence,due)
+                if link:
+                    # Bound to the earlier pending item's identity: shown on its one card, never accepted by this link.
+                    item.setdefault('plan',{})['school_pending_of']=link
+                    if brief['state']=='ready':brief['state']='review'
+                    brief['reason']=str(brief.get('reason') or '')[:300]+' 本条是尚待核对的同一事项由同一发布者发出的后续通知，同卡待核，两条原文都保留；原文未写明的范围和日期仍未知。'
             if not due and not proposed_due and not historical and not native_action and not void:
                 due=_school_explicit_action_due(brief,cited_evidence)
                 # Nor one another cited original changes, defers or cancels (another teacher, 另行通知, 不用交).
@@ -8899,7 +8969,7 @@ def run_once(app, now=None):
                     try:
                         proposals = _select('school', evidence, profiles[source['child_id']], as_of=now.date().isoformat(), data_path=store.data,
                                             school_goals=goals.school_candidates(source['child_id']),school_tasks=school_targets(app,store,source['child_id'],shared=True,evidence=[e['text'] for e in evidence]),
-                                            school_later=later)
+                                            school_later=later,school_pending=school_pending_targets(store,source['child_id']))
                         anchors = {entry['ref']: entry for entry in evidence}
                         for item in proposals:
                             for quote in item['evidence']:
