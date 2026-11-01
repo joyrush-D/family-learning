@@ -918,7 +918,7 @@ class SchoolHistoryTests(unittest.TestCase):
             view = self.app.day_view(source['child_id'], day)
             for r in [r for g in view['groups'] for r in g['items']] + list(view['upcoming']):
                 if '林间风' in r.get('title', ''):cards.setdefault(r['id'], r)
-        self.assertNotIn(after[refs['82']]['id'], cards, 'the reminder is the lesson's notice, not a second card')
+        self.assertNotIn(after[refs['82']]['id'], cards, 'the reminder is a notice of the lesson, not a second card')
         self.assertEqual(set(cards), {first, after[refs['83']]['id']}, cards.keys())
         self.assertIn(after[refs['82']]['id'], [n['id'] for n in (cards[first].get('version') or {}).get('notices', [])])
         self.assertIn('范围待补', cards[first]['title'], 'the unknown range stays unknown')
