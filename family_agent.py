@@ -5540,9 +5540,9 @@ def _school_relation_mark(old_key):
 
 
 def _school_relation_boundary(store):
-    """Fix once, before the first permitted round's intake of this release, which done batches predate the selection's
-    pending items: only those may be read again for a relation (_recover_school_pending_relations). A batch saved later was
-    already selected with them and is never added; no model call happens here."""
+    """Fix once, at the first round that finds an old batch to read again for a relation, which done batches exist: only
+    those may be read again (_recover_school_pending_relations); a batch saved later is never added. Nothing is written
+    while no batch qualifies, and no model call happens here."""
     with store._db() as c:
         c.execute('BEGIN IMMEDIATE')
         if c.execute("SELECT 1 FROM agent_jobs WHERE id='school-relation-boundary'").fetchone():return
@@ -5575,8 +5575,6 @@ def _recover_school_pending_relations(app,store,config,now,budget):
         for old_key,rows in groups.items():
             job=c.execute('SELECT fingerprint,done FROM agent_jobs WHERE id=?',(old_key,)).fetchone()
             if not job or not job['done']:continue
-            mark=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_relation_mark(old_key),)).fetchone()
-            if not mark or mark['fingerprint']!=job['fingerprint']:continue
             try:
                 if any(r['state']!='pending' or json.loads(r['plan']).get('school_pending_of') or not _school_untouched_review(c,r,old_key,linking=True) for r in rows):continue
                 refs=sorted({e['ref'] for r in rows for e in json.loads(r['evidence'])})
@@ -5599,6 +5597,11 @@ def _recover_school_pending_relations(app,store,config,now,budget):
             done=c.execute('SELECT done,attempts FROM agent_jobs WHERE id=?',(key,)).fetchone()
             if done and (done['done'] or done['attempts']>=MAX_ATTEMPTS):continue
             candidates.append((old_key,job['fingerprint'],source,values,rows,targets,key))
+    if not candidates:return dict(used=0,failed=0,created=0,linked=0)
+    _school_relation_boundary(store)
+    with store._db() as c:
+        candidates=[x for x in candidates if (mark:=c.execute('SELECT fingerprint FROM agent_jobs WHERE id=?',(_school_relation_mark(x[0]),)).fetchone())
+                    and mark['fingerprint']==x[1]]
     from family_goals import Store as Goals
     for old_key,fingerprint,source,values,rows,targets,key in candidates:
         fp=store._job(key,dict(kind='pending-relation',origin=[old_key,fingerprint],source=source['id'],messages=values,
@@ -9239,7 +9242,6 @@ def run_once(app, now=None):
             recovered=_recover_school_ack_originals(store,config,now)
             created+=recovered['created'];failed+=recovered['failed']
             _school_audit_boundary(store)  # before this round's intake; fixed once, zero model calls
-            _school_relation_boundary(store)
             history_scopes=_history_scopes(store,config,now)
             # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
             history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
@@ -9312,10 +9314,11 @@ def run_once(app, now=None):
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
-            relation=_recover_school_pending_relations(app,store,config,now,min(1,max(0,budget-1)));budget-=relation['used'];processed+=relation['used'];failed+=relation['failed']
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
             # Fresh batches above go first; saved repeats of one affair are revisited only with a call to spare.
             same=_reconcile_school_same(app,store,now,min(1,max(0,budget-1)));budget-=same['used'];processed+=same['used'];failed+=same['failed']
+            # Old batches holding a later notice of an earlier pending item go last: every existing recovery path keeps its turn.
+            relation=_recover_school_pending_relations(app,store,config,now,min(1,max(0,budget-1)));budget-=relation['used'];processed+=relation['used'];failed+=relation['failed']
             created += goals.route_school()
             progress = goals.run(now, budget)
             budget -= progress['used']; created += progress['created']; processed += progress['used']; failed += progress['failed']
