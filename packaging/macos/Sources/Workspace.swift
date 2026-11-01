@@ -685,10 +685,10 @@ struct ItemRow: View {
                 if let first = item.lines.first {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
                     Text(item.lines.joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
+                        .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
                     if let v = item.version {
                         Text(v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version")
                     }
-                        .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
                 } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
                 FlowRow(spacing: 6, lineSpacing: 4) {
                     if !item.whenLabel.isEmpty { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
