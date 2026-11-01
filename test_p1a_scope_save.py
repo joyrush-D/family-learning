@@ -35,6 +35,18 @@ def proposal(ref, quote, title, goal, *, state='ready', change='new', target='',
     return p
 
 
+def form_request(case, item, task_id):
+    """The confirm form's own default payload (app.js schoolChangeForm): the candidate's title, summary and day."""
+    with case.app.connect() as c:
+        task = next(t for t in case.app.tasks(c) if t['id'] == task_id)
+        update = c.execute('SELECT updated FROM task_updates WHERE id=?', (task_id,)).fetchone()
+        row = c.execute('SELECT updated,due FROM agent_items WHERE id=?', (item['id'],)).fetchone()
+    brief = item['plan']['school_task']
+    return dict(action='school_change', id=item['id'], target_id=task_id, change='update', title=brief['title'], body=brief['goal'],
+                due=row['due'] or '', expected_updated=row['updated'], target_version=task['focus']['version'],
+                target_updated=update['updated'] if update else '')
+
+
 class ScopeSaveTests(unittest.TestCase):
     config = test_agent.AgentTests.config
 
@@ -613,6 +625,28 @@ class CorrectionUnitTests(ScopeSaveTests):
             sci, = self.row(view, sci_task)
             self.assertIn('日期 原11-19→11-23', sci['version']['change'], 'only the day the notice moved is named')
 
+    def test_confirming_the_composed_day_move_saves_the_whole_original_once(self):
+        en_task, sci_task = self.corrections(
+            ('英语：跟读Unit 9第1—6个单词两遍', '今晚听音频跟读Unit 9第1到6个单词，每个单词跟读两遍。\n只做口头跟读，不用抄写。'),
+            '科学实验课由周四改到下周一。\n前面通知要带的空透明塑料瓶改为下周一再带。\n今晚仍不用填写实验记录表。', '')
+        item, = [i for i in self.items_for('message:%s:108' % EN) if i['state'] == 'pending']
+        request = form_request(self, item, sci_task)
+        self.assertEqual(request['due'], MON)
+        result = agent.apply_school_change(self.app, self.store, request)
+        self.assertTrue(result['school_changed'])
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['replayed'], 'a lost receipt retried writes nothing twice')
+        saved = self.task(sci_task)
+        for unit in ('空的透明塑料瓶一个', '下周一', '不用填写实验记录表'):
+            self.assertIn(unit, saved['action'])
+        self.assertNotIn('周四', saved['action'])
+        self.assertEqual(saved['agenda']['due_on'], MON)
+        with self.assertRaises(agent.AgentError):
+            agent.apply_school_change(self.app, self.store, dict(request, body='另写的要求'))
+        self.assertEqual(self.task(sci_task)['action'], saved['action'])
+        for view in self.views(MON):
+            sci, = self.row(view, sci_task)
+            self.assertIn('空的透明塑料瓶一个', '\n'.join(sci['lines']))
+
     def test_a_move_notice_adding_its_own_requirement_stays_under_review(self):
         en_task, sci_task = self.originals()
         r8 = 'message:%s:108' % EN
@@ -766,3 +800,51 @@ class DateRoleCountMoveTests(ScopeSaveTests):
                 version = row.get('version') or {}
                 self.assertNotIn('日期', version.get('change', ''), 'a count-only correction moves no date role')
                 self.assertEqual([f['value'] for f in row.get('facts', []) if f.get('kind') == 'handback'], ['2026-11-18'], row.get('facts'))
+
+
+    def still(self):
+        task = self.original('861', '英语：今晚听录音跟读《竹溪小路》三遍并录音，明早交给英语老师。', '17:00', self.MATH,
+                             '今晚听录音跟读《竹溪小路》三遍并录音，明早交给英语老师', '英语：跟读《竹溪小路》三遍并录音',
+                             '今晚听录音跟读《竹溪小路》三遍并录音，明早交给英语老师。', '2026-11-18', subject='英语')
+        self.saved('862', '更正：明早仍交给英语老师，今晚只需听录音跟读《竹溪小路》两遍并录音。', '18:00', self.MATH,
+                   '更正：明早仍交给英语老师，今晚只需听录音跟读《竹溪小路》两遍并录音', '英语：跟读《竹溪小路》两遍并录音',
+                   '今晚听录音跟读《竹溪小路》两遍并录音，明早交给英语老师。', DAY, subject='英语', state='review', change='update', target=task)
+        return task
+
+    def test_confirming_a_count_only_correction_keeps_the_task_s_own_days(self):
+        task = self.still()
+        item, = [i for i in self.items_for('message:%s:862' % SCI) if i['state'] == 'pending']
+        request = form_request(self, item, task)
+        self.assertEqual(request['due'], DAY, 'the form carries the notice\'s own day')
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['school_changed'])
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['replayed'])
+        saved = self.task(task)
+        self.assertIn('两遍', saved['action'])
+        self.assertEqual(saved['agenda']['due_on'], '2026-11-18', 'saving keeps the handback the page kept')
+        for rows in self.rows(DAY, task) + self.rows('2026-11-18', task):
+            for row in rows:
+                self.assertEqual([f['value'] for f in row.get('facts', []) if f.get('kind') == 'handback'], ['2026-11-18'], row.get('facts'))
+
+    def tools(self, notice, goal, title):
+        task = self.original('871', '科学：周四实验课带两个塑料量杯和三把金属镊子；今晚不用填写记录表。', '17:00', self.ART,
+                             '科学：周四实验课带两个塑料量杯和三把金属镊子；今晚不用填写记录表', '科学：周四实验课带两个塑料量杯和三把金属镊子',
+                             '科学：周四实验课带两个塑料量杯和三把金属镊子；今晚不用填写记录表。', THU, purpose='admin', subject='')
+        self.saved('872', notice, '20:00', self.ART, notice.rstrip('。'), title, goal, MON, purpose='admin', subject='',
+                   state='review', change='update', target=task)
+        return task
+
+    def test_a_day_move_changing_one_object_s_material_never_keeps_the_old_material(self):
+        task = self.tools('周四科学课改到下周一，前面通知的塑料量杯改为两个金属量杯，三把金属镊子下周一再带；今晚仍不用填写记录表。',
+                          '下周一带两个金属量杯和三把金属镊子。今晚不用填写记录表。', '科学：下周一带两个金属量杯和三把金属镊子')
+        for day in (THU, MON):
+            for rows in self.rows(day, task):
+                for row in rows:
+                    version = row.get('version') or {}
+                    if version.get('state') == 'latest':
+                        self.assertNotIn('塑料量杯', '\n'.join(version['lines']), 'another object\'s 金属 never vouches for the cups')
+        item, = [i for i in self.items_for('message:%s:872' % SCI) if i['state'] == 'pending']
+        before = self.task(task)['action']
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual(self.task(task)['action'], before, 'an unprovable summary is refused before any write')
