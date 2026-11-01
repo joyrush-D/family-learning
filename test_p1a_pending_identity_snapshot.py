@@ -97,7 +97,7 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
         reading = self.task_for(r201)
         self.assertTrue(reading, 'the clear home reading is collected as a task')
         first = [i for i in self.items_for(r201) if i['state'] == 'pending']
-        self.assertEqual([i['title'] for i in first], ['待核对：本周五课堂听写，范围另通知'], 'the range-pending classroom item stays pending')
+        self.assertEqual([i['title'] for i in first], ['英语：周五课堂听写'], 'the range-pending classroom item stays pending')
         if touched:
             with self.app.connect() as c:
                 c.execute('INSERT INTO task_updates(id,status,updated) VALUES(?,?,?)', (reading, '进行中', DAY + 'T19:00:00+08:00'))
@@ -192,7 +192,7 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
         items = self.batch(EN, other, replies)
         self.assertFalse([i for i in items if i['plan'].get('school_pending_of')], 'no unproven binding is kept')
         for view in self.views(FRI):
-            original, = [r for r in self.rows(view) if r['title'] == '待核对：本周五课堂听写，范围另通知']
+            original, = [r for r in self.rows(view) if r['title'] == '英语：周五课堂听写']
             self.assertNotIn('version', original)
             self.assertEqual(len([r for r in self.rows(view) if '测验' in r['title']]), 1)
             self.assertEqual(len([r for r in self.rows(view) if '复习' in r['title']]), 1, 'another publisher stays apart')
@@ -213,8 +213,9 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
         for view in self.views(MON):
             row, = [r for r in self.rows(view) if '纸盒' in r['title']]
             self.assertEqual(row['version']['state'], 'latest', row['version'])
-            self.assertIn('两个干净的空纸盒', '\n'.join(row['lines'])); self.assertIn('下周一', '\n'.join(row['lines']))
-            self.assertIn('周四', '\n'.join(row['version']['previous']['lines']))
+            shown = row['title'] + '\n' + '\n'.join(row['lines'])  # a line repeating the title is shown as the title
+            self.assertIn('两个干净的空纸盒', shown); self.assertIn('下周一', shown); self.assertIn('今晚不填写观察表', shown)
+            self.assertIn('周四', row['version']['previous']['title'] + '\n'.join(row['version']['previous']['lines']))
         for view in self.views(DAY):
             self.assertFalse([r for r in self.rows(view) if '观察表' in r['title']], '今晚不填 never becomes a todo')
             self.assertEqual(len(self.cards(view, '纸盒')), 1)
@@ -225,7 +226,8 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
             row, = [r for r in self.rows(view) if '纸盒' in r['title']]
             self.assertEqual(row['version']['state'], 'review', row['version'])
             self.assertTrue(any(r.startswith('新要求的归纳缺少原要求中未改的部分') for r in row['version']['reasons']), row['version']['reasons'])
-            self.assertIn('两个干净的空纸盒', '\n'.join(row['lines'])); self.assertIn('周四', '\n'.join(row['lines']))
+            shown = row['title'] + '\n' + '\n'.join(row['lines'])
+            self.assertIn('两个干净的空纸盒', shown); self.assertIn('周四', shown)
 
 
 if __name__ == '__main__':
