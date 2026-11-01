@@ -207,6 +207,126 @@ class PendingOtherOccurrenceTests(ScopeSaveTests):
 
 
 
+WED = '2026-11-18'
+
+
+class RelationScopeTests(ScopeSaveTests):
+    """run3: a relation note needs no demonstrative (A); an original saying its occurrence is separate refuses a pending link
+    its short summary leaves unsaid, while a sibling's words in the same message do not (C). Newly made fictional cases."""
+    QUOTE = '周五第二节英语课复述《风筝》第4段'
+    LESSON = QUOTE + '。这两次分开安排。'
+
+    def wednesday(self):
+        r1 = 'message:%s:701' % EN
+        self.batch(EN, [msg('701', '周三英语课复述《风筝》第1段。', '17:00')], lambda targets, pending: [
+            proposal(r1, '周三英语课复述《风筝》第1段', '英语：周三英语课复述《风筝》第1段', '周三英语课复述《风筝》第1段。', due=WED)])
+        wednesday, = self.items_for(r1)
+        self.assertEqual((wednesday['state'], wednesday['due']), ('accepted', WED), wednesday)
+        return wednesday
+
+    def friday(self, goal, text=LESSON):
+        ref = 'message:%s:702' % EN
+        self.batch(EN, [msg('702', text, '20:00')], lambda targets, pending: [proposal(ref, self.QUOTE, '英语：' + self.QUOTE, goal, due=FRI)])
+        item, = self.items_for(ref)
+        return item
+
+    def assert_apart(self, wednesday, item):
+        self.assertEqual((item['state'], item['due']), ('accepted', FRI), item['plan'].get('school_task'))
+        self.assertNotEqual(item['task_id'], wednesday['task_id'], 'the independent occurrence is its own task')
+        for day, word in ((WED, '第1段'), (FRI, '第4段')):
+            for view in self.views(day):
+                self.assertEqual([r['when'] for r in self.cards(view, word)], ['today'], (day, word))
+
+    def test_a_nominal_reference_without_a_demonstrative_dates_the_other_occurrence(self):
+        wednesday = self.wednesday()
+        self.assert_apart(wednesday, self.friday(self.QUOTE + '，与周三的复述属于两个独立安排。'))
+
+    def test_the_other_word_order_reads_the_same(self):
+        wednesday = self.wednesday()
+        self.assert_apart(wednesday, self.friday(self.QUOTE + '；周三的复述与本次是两个独立安排。'))
+
+    def test_a_demonstrative_reference_reads_the_same(self):
+        wednesday = self.wednesday()
+        self.assert_apart(wednesday, self.friday(self.QUOTE + '；和周三那次复述分开安排。'))
+
+    def test_a_relation_day_no_original_or_listed_item_grounds_is_still_read(self):
+        self.wednesday()
+        # No listed item is dated Thursday: the model's own day stays a day of this summary.
+        item = self.friday(self.QUOTE + '，与周四的复述属于两个独立安排。')
+        self.assertNotEqual((item['state'], item['due']), ('accepted', FRI))
+
+    def test_a_listed_day_without_the_originals_own_separateness_is_still_read(self):
+        self.wednesday()
+        item = self.friday(self.QUOTE + '，与周三的复述属于两个独立安排。', text=self.QUOTE + '。')
+        self.assertNotEqual((item['state'], item['due']), ('accepted', FRI))
+
+    def test_this_items_own_two_day_split_is_no_relation(self):
+        for clause in ('周三和周五分别完成《风筝》第4段', '周三和周五两次分开完成复述', '和同学独立完成复述', '周三预习，周五上课'):
+            self.assertIsNone(agent._SCHOOL_APART.search(clause), clause)
+        for clause in ('与周三的复述属于两个独立安排', '和周三复述第1段的安排分开', '周三的复述与本次是两个独立安排',
+                       '和周四朗读第2段那场分别登记', '与周四朗读第2段那场是两项独立活动', '跟周三那次不是同一次'):
+            self.assertIsNotNone(agent._SCHOOL_APART.search(clause), clause)
+        cited = [dict(ref='message:x:1', text='周三预习《风筝》第4段生词，周五第二节英语课复述第4段。', time=DAY + 'T20:00:00+08:00')]
+        goal = '周三预习《风筝》第4段生词，周五第二节英语课复述第4段。'
+        self.assertEqual(agent._school_goal_dates(goal, cited, frozenset({WED})), agent._school_goal_dates(goal, cited),
+                         'a listed day never changes a summary that relates nothing')
+
+    def rain_pending(self):
+        r1 = 'message:%s:801' % EN
+        self.batch(EN, [msg('801', '周三英语课做《雨后》听读展示，明晚补具体段落。', '17:00')], lambda targets, pending: [
+            proposal(r1, '周三英语课做《雨后》听读展示，明晚补具体段落', '英语：周三英语课做《雨后》听读展示',
+                     '周三英语课做《雨后》听读展示，具体段落明晚补充。', state='review')])
+        first, = self.items_for(r1)
+        self.assertEqual((first['state'], first['due']), ('pending', ''), 'the scalar day is unknown')
+        return first
+
+    def wrong_update(self, text, quote='周五英语课展示《雨后》第6段'):
+        ref = 'message:%s:802' % EN
+
+        def replies(targets, pending):
+            target = next(p['id'] for p in pending if '展示' in p['title'])
+            return [proposal(ref, quote, '英语：' + quote, quote, change='update', target=target, due=FRI)]
+        self.batch(EN, [msg('802', text, '20:00')], replies)
+        item, = self.items_for(ref)
+        return item
+
+    def assert_own_card(self, item):
+        self.assertNotIn('school_pending_of', item['plan'], 'the separate occurrence is no notice of the pending item')
+        for view in self.views(FRI):
+            self.assertEqual([r['when'] for r in self.cards(view, '第6段')], ['today'], 'the Friday occurrence keeps its own dated card')
+
+    def test_c_the_originals_own_separateness_refuses_the_link_its_summary_omits(self):
+        self.rain_pending()
+        self.assert_own_card(self.wrong_update('周五英语课展示《雨后》第6段，这是独立的一次展示，单独安排。'))
+
+    def test_c_a_following_sentence_referring_back_is_the_same_occurrences_words(self):
+        self.rain_pending()
+        self.assert_own_card(self.wrong_update('周五英语课展示《雨后》第6段。这是另一场展示。'))
+
+    def test_c_a_siblings_separateness_leaves_the_correction_joined(self):
+        first = self.rain_pending()
+        ref = 'message:%s:803' % EN
+        text = '周三英语课《雨后》听读展示的段落定为第2段。另外安排周五英语课展示《雨后》第6段，单独安排。'
+
+        def replies(targets, pending):
+            target = next(p['id'] for p in pending if '展示' in p['title'])
+            return [proposal(ref, '周三英语课《雨后》听读展示的段落定为第2段', '英语：周三英语课《雨后》听读展示第2段',
+                             '周三英语课《雨后》听读展示第2段。', state='review', change='update', target=target, due=WED),
+                    proposal(ref, '另外安排周五英语课展示《雨后》第6段', '英语：周五英语课展示《雨后》第6段', '周五英语课展示《雨后》第6段。', due=FRI)]
+        self.batch(EN, [msg('803', text, '20:10')], replies)
+        items = {i['title']: i for i in self.items_for(ref)}
+        correction = next(i for t, i in items.items() if '第2段' in t)
+        other = next(i for t, i in items.items() if '第6段' in t)
+        self.assertEqual(correction['plan'].get('school_pending_of', {}).get('item_id'), first['id'], 'the correction joins the pending card')
+        self.assertNotIn('school_pending_of', other['plan'])
+        self.assertEqual(other['due'], FRI)
+
+    def test_c_a_true_range_supplement_still_joins_the_pending_card(self):
+        first = self.rain_pending()
+        item = self.wrong_update('周三英语课《雨后》听读展示的段落定为第2段。', quote='周三英语课《雨后》听读展示的段落定为第2段')
+        self.assertEqual(item['plan'].get('school_pending_of', {}).get('item_id'), first['id'])
+
+
 class SchoolChangeWholeTests(ScopeSaveTests):
     """B: the ordinary school_change write (POST /api/agent/action dispatches apply_school_change) keeps what the read keeps."""
 

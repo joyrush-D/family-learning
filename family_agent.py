@@ -2360,7 +2360,7 @@ def school_pending_targets(store, child_id, connection=None, *, limit=12):
     return result
 
 
-def _school_pending_link(target, change, brief, cited, due):
+def _school_pending_link(target, change, brief, cited, due, quote=''):
     """The program's own proof that a later notice is a listed pending item's same affair, else None (its own card, as before).
 
     The reply's pending target and a change of that affair (never new); every cited message the same stable publisher's in
@@ -2375,11 +2375,14 @@ def _school_pending_link(target, change, brief, cited, due):
     if change=='same' and due and target['due'] and due!=target['due']:return None
     # The item's own day binds its notices: another day of the same object (周五再展示朗读一次《小树林》第5段 after a pending
     # 周四…展示朗读) is another occurrence unless the notice itself moves this item there (改到周五); a reply whose own words
-    # say it is separate (另外安排、和周四那场分别登记) is never this item's notice, while a sibling in the same message that
-    # says so leaves this reply's proof as it is. A notice stating no day of its own keeps the proof above.
+    # say it is separate (另外安排、和周四那场分别登记) is never this item's notice, nor is one whose own original words say so
+    # (周五…第6段，这是独立的一次展示，单独安排) though its short summary leaves that out: an unknown pending day is no wildcard
+    # for it. A sibling in the same message that says so leaves this reply's proof as it is (_school_own_range). A notice
+    # stating no day of its own keeps the proof above.
     from family_agenda import deadlines,sent_day
     said='\n'.join(str(e.get('text') or '') for e in cited);words=str(brief.get('title') or '')+'\n'+str(brief.get('goal') or '')
-    if _SCHOOL_APART.search(words) or re.search(r'另外安排|另一次|另一场',words):return None
+    own=_school_own_range(quote,cited)
+    if any(_SCHOOL_APART.search(text) or _SCHOOL_SEPARATE.search(text) for text in (words,own)):return None
     if change!='same' and target['due']:
         own={due} if due else set().union(*(deadlines(str(e.get('text') or ''),sent_day(e.get('time',''))) for e in cited))
         if own and target['due'] not in own and not re.search(_SCHOOL_MOVED,said):return None
@@ -3313,10 +3316,23 @@ def _school_handback_day(text,published,values):
     return late
 
 
-# A note relating an item to another occurrence (和周四朗读第2段那场分别登记、与周四那场是两项独立活动) names that occurrence
-# and its day, never a day of this item: the clause holding it is set aside only where this item's own days are read.
-_SCHOOL_APART=re.compile(r'(?:与|和|跟|同)\s*[^，,。；;！!？?\n]{0,16}?(?:那场|那次|那节|那项|那一场|那一次)\s*[^，,。；;！!？?\n]{0,10}?'
-                         r'(?:分别|分开|不是同一|两项|两次|独立)')
+# A note relating an item to another occurrence (和周四朗读第2段那场分别登记、与周三的复述属于两个独立安排、和周三复述第1段的安排分开)
+# names that occurrence and its day, never a day of this item. It is a comitative reference, demonstrative or not, whose clause
+# ends in a relation predicate (registered or arranged apart, not the same one, two independent ones): that clause relates two
+# occurrences and gives the child nothing to do. A doing verb after it (周三和周五分别完成、两次分开完成、和同学独立完成) is this
+# item's own work and keeps every day. The clause holding it is set aside only where this item's own days are read.
+_SCHOOL_APART=re.compile(r'(?:与|和|跟|同)\s*[^，,。；;！!？?\n]{1,20}?\s*(?:'
+                         r'(?:分别|分开|单独|各自|另外)\s*(?:登记|安排|记录|统计)'
+                         r'|(?:不是|并非|不属于|不算)\s*同一\s*(?:次|场|项|个|件|回)?\s*(?:的\s*[^，,。；;！!？?\n]{0,4}|活动|安排|事项|任务)?'
+                         r'|(?:(?:是|属于|算|为)\s*)?(?:两|二)\s*(?:项|次|个|场|件|回)\s*(?:相互|彼此|各自)?\s*(?:独立|不同|分开|单独)'
+                         r'\s*(?:的\s*[^，,。；;！!？?\n]{0,4}|活动|安排|事项|任务)?'
+                         r'|(?:是|属于|算|为)\s*(?:两|二)\s*(?:项|次|个|场|件|回)\s*(?:活动|安排|事项|任务)?'
+                         r'|(?:(?:是|属于)\s*)?(?:相互|彼此|各自)?\s*独立\s*(?:的|安排|登记)?'
+                         r'|分开|区分开)\s*[)）]?\s*(?=[，,。；;！!？?\n]|$)')
+# This occurrence's own words saying it is separate, with or without the other one named (这两次分开安排、这是独立的一次展示，单独安排).
+_SCHOOL_SEPARATE=re.compile(r'另外安排|另一(?:次|场|项|回)|单独(?:安排|登记)|分开(?:安排|登记)|分别登记|独立的一(?:次|场|项|回)|(?:是|属于)独立的'
+                            r'|(?:两|二)\s*(?:项|次|个|场|回)\s*(?:相互|彼此|各自)?\s*(?:独立|不同|分开)\s*(?:的|安排|登记|活动|事项)?\s*(?=[，,。；;！!？?\n]|$)'
+                            r'|(?:不是|并非)\s*同一')
 # A notice moving an item's own day (改到周五、调整到下周一、推迟到11月20日) states the move in its own words.
 _SCHOOL_MOVED=r'(?:改|调|调整|推迟|延后|延期|提前|挪|换|移)\s*(?:到|至|为|在)'
 
@@ -3328,6 +3344,43 @@ def _school_apart_free(text):
 
 
 _SCHOOL_DAY_OFFSET={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
+
+
+def _school_clause_days(text,published):
+    """Every day one clause names (周三、11月18日、明天), read on its sending day; None when a day it names is not one date."""
+    from family_agenda import _relative_weekday,date
+    def iso(match):
+        year,month,day=match.groups();value=f'{int(year or published[:4]):04d}-{int(month):02d}-{int(day):02d}'
+        return value if date(value) else match[0]
+    text=_relative_weekday(re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]?',iso,text),published)
+    if re.search(r'昨天|前天|每天|每晚|(?:周|星期|礼拜)[一二三四五六日天]|\d{1,2}\s*月\s*\d{1,2}',text):return None
+    return set(re.findall(r'\d{4}-\d{2}-\d{2}',text))|{(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+                                                        for word,offset in _SCHOOL_DAY_OFFSET.items() if word in text}
+
+
+def _school_own_range(quote,cited):
+    """This reply's own words in its cited original: from its quote to the end of that clause, and each directly following
+    clause that only refers back to it (这两次分开安排、这是独立的一次展示，单独安排、和周四那场分别登记). A sibling action of the
+    same message (另外安排周五…) starts its own range. Empty when the quote is found in no cited original."""
+    quote=re.sub(r'\s+','',str(quote or ''))
+    for e in cited:
+        flat=re.sub(r'\s+','',str(e.get('text') or ''));at=flat.find(quote) if quote else -1
+        if at<0:continue
+        first,*rest=re.split(r'[，,。；;！!？?\n]',flat[at+len(quote):]);own=[quote+first]
+        for part in filter(None,rest):
+            if not re.match(r'(?:这|此|本|该|两|与|和|跟|同|单独|分开|分别|独立|属于|是|不是|并非)',part):break
+            own.append(part)
+        return '，'.join(own)
+    return ''
+
+
+def _school_listed_apart(quote,cited,goal,tasks,pending):
+    """Days of the listed earlier items this reply's own original words set apart from it (这两次分开安排): each such item's own
+    saved day where it shares this summary's concrete object. None unless those own words say this occurrence is separate."""
+    own=_school_own_range(quote,cited)
+    if not (_SCHOOL_APART.search(own) or _SCHOOL_SEPARATE.search(own)):return frozenset()
+    return frozenset(str(t['due']) for t in [*tasks,*pending] if t.get('due')
+                     and _school_same_object(goal,str(t.get('title') or '')+'\n'+str(t.get('goal') or '')))
 
 
 def _school_own_dates(quote,published,summary=False):
@@ -3364,7 +3417,7 @@ def _school_own_dates(quote,published,summary=False):
     return {value} if value>=published else set()
 
 
-def _school_goal_dates(goal,cited):
+def _school_goal_dates(goal,cited,others=frozenset()):
     """Dates a summary declares for itself, read on each of its originals' sending days.
 
     Several sending days are not guessed, but a declared date is not an undeclared one: every reading is kept,
@@ -3385,16 +3438,17 @@ def _school_goal_dates(goal,cited):
         return '' if old and named(m[0])<=stated and not old&rest and named(m[0])-old<=rest else m[0]
     goal=re.sub(r'[（(]\s*原(?:为|定|是)[^（）()]*[）)]',history,goal)
     # A note relating this item to another occurrence (与周四朗读第2段那场是两项独立活动) names that occurrence's day: it is set
-    # aside only when a cited original relates the same day the same way (和周四朗读第2段那场分别登记) and no other clause of the
-    # summary names it. A day the originals do not relate so, or this item's own second day, is still read.
+    # aside only when a cited original relates the same day the same way (和周四朗读第2段那场分别登记), or the day is a listed
+    # earlier item's own that this reply's own original words set apart (others: 这两次分开安排), and no other clause of the
+    # summary names it. A day neither grounds (a model's own unlisted day), or this item's own second day, is still read.
     from family_agenda import deadlines
     def apart(published):
-        related=set().union(*(deadlines(part,published) for e in cited if sent_day(e.get('time',''))==published
-                              for part in re.split(r'[，,。；;！!？?\n]',str(e.get('text') or '')) if _SCHOOL_APART.search(part)))
+        related=set(others).union(*(_school_clause_days(part,published) or set() for e in cited if sent_day(e.get('time',''))==published
+                                    for part in re.split(r'[，,。；;！!？?\n]',str(e.get('text') or '')) if _SCHOOL_APART.search(part)))
         parts=re.split(r'([，,。；;！!？?\n])',goal);kept=[]
         for i,part in enumerate(parts):
             rest=''.join(parts[:i]+parts[i+1:])
-            if (i%2==0 and _SCHOOL_APART.search(part) and (days:=deadlines(part,published)) and days<=related
+            if (i%2==0 and _SCHOOL_APART.search(part) and (days:=_school_clause_days(part,published)) and days<=related
                     and not days&(deadlines(rest,published)|_school_own_dates(rest,published,True))):continue
             kept.append(part)
         return ''.join(kept)
@@ -7056,7 +7110,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             pending_target=next((t for t in school_pending if t['id']==proposal['task_target_id']),None)
             if pending_target is not None:
                 pending_link=_school_pending_link(pending_target,proposal.get('task_change'),dict(title=proposal.get('task_title'),goal=proposal.get('task_goal'),
-                    state=proposal.get('task_state')),[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],proposal.get('due',''))
+                    state=proposal.get('task_state')),[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],proposal.get('due',''),title)
         if (routing and not historical and proposal.get('task_change') in ('update','same','append','cancel') and proposal.get('task_state')=='review'
                 and (pending_link or proposal.get('task_target_id') in {t['id'] for t in school_tasks})):notice=[]
         if native_actions:
@@ -7093,6 +7147,9 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         uncertain_due=ambiguous_due=False
         from family_agenda import date, deadlines, sent_day
         cited_evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
+        # Days of listed earlier items this reply's own original words set apart from it (这两次分开安排) date those items.
+        apart_days=(_school_listed_apart(proposal.get('title_quote',''),cited_evidence,str(proposal.get('task_goal','')),school_tasks,school_pending)
+                    if routing and not historical else frozenset())
         def anchored(e):
             # A history action states its own day, or reads the one rule every path uses: a day its notice's header or
             # leading deadline gives the items after it, never another independent item's own day.
@@ -7121,23 +7178,23 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 if routing and not historical and not native_action and dated_quote else set())
         sent={sent_day(e.get('time','')) for e in cited_evidence}
         owned=(bool(clause) and clause=={due} and len(sent)==1 and all(sent)
-               and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)=={due} and not borrowed(due))
+               and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence,apart_days)=={due} and not borrowed(due))
         # One item's own completion day and its handback/check day are two roles of one item, not two candidate days.
         roles=(_school_role_days(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:])
                if routing and due and not historical and not native_action and dated_quote and len(sent)==1 and all(sent) else None)
         role_days=roles[0]|{roles[1]} if roles else set()
         if (roles and due in roles[0] and due!=roles[1] and (not clause or clause<=role_days) and not borrowed(roles[1])
-                and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=role_days):
+                and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence,apart_days)<=role_days):
             # The one day the reply or the single-day shortcut chose is only this item's own completion day, while its own
             # words also prove its later handback/check (今晚完成…，明早交练习册): its roles decide, whatever that scalar was.
             due=roles[1];owned=True
         if (not owned and roles and roles[1]==due and (not clause or clause<=role_days) and not borrowed(due)
-                and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=role_days):
+                and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence,apart_days)<=role_days):
             owned=True
         if recovered and not owned and not borrowed(due):
             # A day read from the item's own words is its own unless its own clause or its summary names another.
             own_days=role_days if roles and roles[1]==due else {due}
-            owned=clause<=own_days and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence)<=own_days
+            owned=clause<=own_days and _school_goal_dates(str(proposal.get('task_goal','')),cited_evidence,apart_days)<=own_days
         if due:
             # One notice may carry several dated requirements; the model's date must be one the sending day grounds.
             grounded=due in relative if mode=='school' else any(due in item['text'] for item in cited)
@@ -7248,7 +7305,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     and len(_school_native_dates(native_action))>1):
                 brief.update(state='review',reason=brief['reason'][:300]+' 本项原文含多个日期，未能确定截止；原日期待核对，未自动选择。')
             if brief['state']=='ready' and not historical and (not native_action or native_action['changes'] or set(native_action.get('linked',[]))&{q['ref'] for q in cited}):
-                declared=_school_goal_dates(brief['goal'],cited_evidence)
+                declared=_school_goal_dates(brief['goal'],cited_evidence,apart_days)
                 if native_action and len(_school_native_dates(native_action))>1:
                     brief.update(state='review',reason=brief['reason'][:300]+' 更正涉及另一日期，原日期与更正日期待核对；未自动改期。')
                 elif due and declared and declared!={due}:
