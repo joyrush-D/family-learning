@@ -68,7 +68,13 @@ struct DayItem: Decodable, Hashable, Identifiable {
     let same_affair: SameAffair?
     /// 同一事项在日历里的时段（服务端按 task_id 只并入本孩子当天已列的这一项，不另列不另计）。
     let times: [PlanTime]?
+    /// 同一原事项的老师后发通知（服务端 day_view 同一投影）：latest 已显示最新要求与简短变化；review 保旧要求待核。
+    let version: ItemVersion?
 }
+
+struct ItemVersion: Decodable, Hashable { let state: String; let change: String?; let note: String? }
+/// 以后课堂/待补范围的事项：发生日完整列出，此前只在“即将/待补”一行提到（服务端同一规则，不另计入当天）。
+struct UpcomingItem: Decodable, Hashable { let id: String; let title: String; let subject: String; let day: String; let pending_review: Bool; let change: String? }
 
 /// 所选日的课表与日程：服务端 Store.snapshot 已展开（重复、逐次改动、多时段、课表有效期），取消/完成已排除并计数。
 /// 课表节次是原文，不写钟点；排课不代表出勤。较早后台没有这些字段时为 nil，按“未提供”显示。
@@ -118,6 +124,7 @@ struct DayView: Decodable {
     let schedule_error: String?
     let week: [WeekDay]?
     let learning: Learning?
+    let upcoming: [UpcomingItem]?
 }
 
 /// 一份原作业的资料，服务端 /api/print/homework/materials 原样：出处（学校消息原件、孩子报来的作业……）与已保存的读取状态

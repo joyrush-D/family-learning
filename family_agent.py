@@ -2515,6 +2515,47 @@ def _school_counts(value):
     return found
 
 
+# Relation meta-discourse (元话语): what a reminder says about its own relation to an earlier notice (这就是QQ群里数学老师布置的
+# 那份、和QQ群语文老师那条是同一件事、同QQ群通知那一张、提醒一次、不是新增表格、不另加作业、不用重复朗读) is no requirement unit:
+# no action, object, count or step of its own. Only whole clauses of the original's own words are set aside (never the
+# model's), each proven to hold nothing but the relation; every remaining requirement word still meets every change, count,
+# step, object and date guard below. A clause also saying anything else (改为三遍、明天不用交、再读一遍、两张) stays a requirement,
+# and 不用重复X is relation only while this reminder's own requirement words restate X (a negated original action stays a change).
+_SCHOOL_RELATION_ONE=re.compile(r'(?:同一|同样一|那一?|这一?)(?:件|份|张|条|项|个)(?:事情?|作业|任务|通知|消息|回执|表格?)?')
+_SCHOOL_RELATION_SAID=re.compile(r'(?:今天|今日|刚才|刚刚|上午|下午|早上|中午|昨天|之前|前面|原来)?(?:布置|发布?|通知|说|讲)(?:的|过的)?')
+
+
+def _school_relation_clause(clause):
+    """(True, X) when one clause only states the reminder's relation to an earlier notice; X is an action it says not to repeat."""
+    c=re.sub(r'\s+','',_SCHOOL_SAME_QUOTED.sub('',clause)).strip('。；;！!？?，,、')
+    if not c:return False,''
+    if re.fullmatch(r'(?:再|重复|特此|只是|仅)?提醒(?:一(?:次|下|遍))?(?:大家|各位(?:家长|同学)?)?',c):return True,''
+    if re.fullmatch(r'并?(?:不是|并非|不属于|不算)(?:新(?:增|加|布置)?|另(?:外|加)?一?|额外)(?:的)?(?:作业|任务|表格?|回执|通知|一项|一份|一张|要求)?',c):return True,''
+    if re.fullmatch(r'不(?:另(?:外)?|额外|再)(?:加|增加|布置|留|发)(?:作业|任务|表格?|回执)?',c):return True,''
+    m=re.fullmatch(r'(?:不用|无需|无须|不必|不需要?|不要)重复(.{0,6})',c)
+    if m:return (not _school_counts(m[1]) and not _SCHOOL_DATE_MENTION.search(m[1])),m[1]
+    rest=_SCHOOL_RELATION_SAID.sub('',_SCHOOL_RELATION_ONE.sub('',c))
+    if (_SCHOOL_RELATION_ONE.search(c) and re.match(r'(?:这|此|本条|也)?(?:就|即)?(?:是|为)?(?:和|与|跟|同)|这就|就是|即是|同一',c)
+            and not _school_counts(rest) and not _SCHOOL_DATE_MENTION.search(rest) and not _SCHOOL_SAME_CHANGED.search(rest)
+            and not any(re.search(group,rest) for group in _SCHOOL_SAME_STEPS)):
+        return True,''
+    return False,''
+
+
+def _school_relation_body(text):
+    """The reminder's requirement words with its proven relation clauses set aside, and those clauses verbatim."""
+    parts=re.split(r'([，,。；;！!？?\n])',text);clauses=[(parts[i],parts[i+1] if i+1<len(parts) else '') for i in range(0,len(parts),2)]
+    judged=[(c,mark)+_school_relation_clause(c) for c,mark in clauses]
+    body=''.join(c+mark for c,mark,meta,_ in judged if not meta)
+    kept=[]
+    for c,mark,meta,repeat in judged:
+        if not meta:continue
+        if repeat and repeat not in _SCHOOL_SAME_QUOTED.sub(' ',body):
+            body+=c+mark;continue  # 不用重复X while X is not restated: a negated action, still a requirement unit
+        kept.append(c.strip())
+    return body,[q for q in kept if q]
+
+
 def _school_same_spoken(text):
     """The reminder's own instructions: quoted titles/names and discourse labels removed."""
     return _SCHOOL_SAME_LABEL.sub(' ',_SCHOOL_SAME_QUOTED.sub(' ',text))
@@ -2567,14 +2608,16 @@ def _school_same_brief(brief, evidence, targets):
             uncertain('提醒含未读全的内容，可能带来新要求；原事项和提醒原文都保留。');return
         attached=attached or bool(entry.get('attachments'));texts.append(entry['text'])
     text='\n'.join(texts);facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
-    if _school_same_changes(text,facts) or brief.get('purpose') not in ('learning','admin'):
+    # Requirement units only: the reminder's proven relation clauses (元话语) state no change, count or step of this affair.
+    said,relation=_school_relation_body(text)
+    if _school_same_changes(said,facts) or brief.get('purpose') not in ('learning','admin'):
         uncertain('提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。');return
     old=_school_counts(facts)
-    for value in (text,brief['title']+' '+brief['goal']):
+    for value in (said,brief['title']+' '+_school_relation_body(brief['goal'])[0]):
         if (not _school_named_objects(value).issubset(_school_named_objects(facts))
                 or any(not any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(value))):
             uncertain('提醒中的单元、篇目、题号、页码或次数与原事项不一致，可能是另一项；原事项和提醒原文都保留。');return
-    spoken,saved=_school_same_spoken(text),_school_same_spoken(facts)
+    spoken,saved=_school_same_spoken(said),_school_same_spoken(facts)
     if any(re.search(group,spoken) and not re.search(group,saved) for group in _SCHOOL_SAME_STEPS):
         # Same object, counts and dates, plus a clear step the task does not state: a supplement of this one affair. It is
         # confirmed onto the same task through the existing append review (version checked), never a second affair or dropped.
@@ -2583,11 +2626,28 @@ def _school_same_brief(brief, evidence, targets):
     # Ambiguity proof within the complete evidence scope: another listed task (not a verified member of this affair) that
     # fits the same reminder on the same date leaves the choice to the parent.
     group={selected['id']}|({selected['same_as']} if selected.get('same_as') else set())
-    if any(t['id'] not in group and not (t.get('same_as') and t['same_as'] in group) and (t.get('due') or '')==(selected.get('due') or '') and _school_same_peer(text,t) for t in targets):
+    if any(t['id'] not in group and not (t.get('same_as') and t['same_as'] in group) and (t.get('due') or '')==(selected.get('due') or '') and _school_same_peer(said,t) for t in targets):
         uncertain('提醒同样符合另一项已保存事项，不能确定是哪一件；原事项和提醒原文都保留。');return
     brief['target_basis']=copy.deepcopy(selected.get('same_basis') or selected['append_basis'])
     brief['input_basis']=_school_message_basis(evidence)
+    if relation: brief['relation_quotes']=relation  # verbatim relation clauses set aside, kept for the trace layer
     if attached: brief['same_attachments']=True
+
+
+def _school_same_words_day(evidence, target):
+    """The one day a reminder's own dated requirement clauses give on its own sending day, '' unless each is the target's words."""
+    from family_agenda import sent_day
+    days=set();own=target['title']+' '+target['goal']+' '+str(target.get('facts') or '')
+    for e in evidence:
+        published=sent_day(e.get('time',''))
+        for clause in re.split(r'[，,。；;！!？?\n]',_school_relation_body(e.get('text',''))[0]):
+            words=_SCHOOL_DATE_MENTION.findall(clause)
+            if not words:continue
+            if not published or any(w not in own for w in words):return ''
+            day=_school_clause_day(clause,published)
+            if not day:return ''
+            days.add(day)
+    return next(iter(days)) if len(days)==1 else ''
 
 
 def _school_same_peer(text, target):
@@ -3242,6 +3302,8 @@ def _school_role_days(quote,cited,others,words=False):
         for n,clause in enumerate(clauses):
             # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
             clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
+            # 今晚不用填写实验记录表: a clause whose every own predicate is negated states no action and no day (AC03).
+            if re.search(day,clause) and _school_clause_negated(clause):continue
             days=_school_own_dates(clause,published) if re.search(day,clause) else set()
             own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
             roles=_school_clause_roles(clause) if own_day else set()
@@ -3276,6 +3338,17 @@ def _school_role_days(quote,cited,others,words=False):
     if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]
                                                                          and all(e is not r for r,_ in restated)]):return None
     return (done,next(iter(due)),span) if words else (done,next(iter(due)))
+
+
+def _school_clause_negated(clause):
+    """Whether every work, sign, handback, check or carry predicate of one clause is negated (今晚不用填写记录表、明天不交)."""
+    from family_agenda import _COMPLETION_VERB,_NEGATED_LEAD,_titles_read_as_objects
+    text=_titles_read_as_objects(clause);verbs=r'(?:'+_COMPLETION_VERB+r'|填写|填|上交|提交|交|检查|带|准备|'+_SCHOOL_SIGN+r')'
+    negated=list(re.finditer(_NEGATED_LEAD+verbs,text))
+    if not negated:return False
+    rest=text
+    for m in reversed(negated):rest=rest[:m.start()]+re.sub(r'^[^，,。；;]*','',rest[m.start():])
+    return not re.search(verbs,rest)
 
 
 def _school_range_withdrawn(span,texts):
@@ -4323,7 +4396,7 @@ def _school_clause_roles(clause):
     """The time roles (finish, handback, check) of one clause's own predicates, never of a character inside an object."""
     from family_agenda import _titles_read_as_objects
     text=_titles_read_as_objects(clause)
-    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(r'并且|并|且|然后|同时|再|后',text)}
+    starts={0}|{m.end() for m in re.finditer(_SCHOOL_ROLE_HEAD,text)}|{m.end() for m in re.finditer(r'并且|并|且|然后|同时|再|后|、(?=\s*(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+'))',text)}
     roles=set()
     for at in starts:  # a leading label (英语：、提交要求：) names the clause, not its predicate
         rest=re.sub('^'+_SCHOOL_ROLE_LEAD,'',re.sub(r'^\s*[^：:，,]{1,6}[：:]','',text[at:]) if at==0 else text[at:])
@@ -6758,6 +6831,11 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     and not any(deadlines(e['text'],sent_day(e.get('time',''))) for e in cited_evidence)
                     and all(word in target['title']+' '+target['goal'] for e in cited_evidence for word in _SCHOOL_DATE_MENTION.findall(e['text']))):
                 # The reminder repeats the verified task's own date words (周五 → 周五) and the model its date: no new deadline.
+                uncertain_due=False;item['due']=proposed_due
+            if (uncertain_due and brief.get('change')=='same' and brief['state']=='ready' and brief.get('target_basis') and target
+                    and date(proposed_due) and proposed_due==brief['target_basis']['due'] and _school_same_words_day(cited_evidence,target)==proposed_due):
+                # 明天早读查登记本 sent the same evening as 明天早读检查登记本: the reminder's own dated requirement words, each the
+                # target's own date words, ground on its own sending day to the target's very day; relation clauses state none.
                 uncertain_due=False;item['due']=proposed_due
             if brief.get('change')=='same' and brief['state']=='ready' and (why:=_school_same_due(item['due'],target or {},cited_evidence)):
                 brief.update(state='review',reason=why);brief.pop('target_basis',None);brief.pop('input_basis',None)

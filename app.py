@@ -501,7 +501,7 @@ def day_projection(inbox,cal,schedule_error,ts,records,child,day,today,learning=
     for d in week_days(day):
         v=family_agenda.day_view(inbox,ts,records,child,d,today,family_wrong_review.SOURCE)
         s=day_schedule(cal,child['id'],d,[i for g in v['groups']+v['closed'] for i in g['items']])
-        week.append(dict(day=d,open=v['counts']['open'],today=v['counts'].get('today',0),overdue=v['counts'].get('overdue',0),closed=v['counts']['closed'],
+        week.append(dict(day=d,open=v['counts']['open'],today=v['counts'].get('today',0),overdue=v['counts'].get('overdue',0),closed=v['counts']['closed'],upcoming=v['counts'].get('upcoming',0),
                          schedule=None if s is None else sum(len(t['sessions']) for t in s['lessons'])+len(s['plans'])))
         if d==day: out=dict(v,schedule=s,schedule_error=schedule_error)
     out['week']=week

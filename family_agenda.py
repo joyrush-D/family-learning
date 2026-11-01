@@ -1024,7 +1024,8 @@ def snapshot(app,start,end):
             u=updates.get(task['id'],{});status=app.task_status(task,u.get('status'))
             items.append(dict(id=task['id'],task_id=task['id'],kind='task',child_ids=[owners[task['child']]],
                 title=task['title'],agenda=task['agenda'],status=status,closed=status in app.TASK_CLOSED,
-                closed_on=date(u.get('updated','')[:10]),body=task['action']))
+                closed_on=date(u.get('updated','')[:10]),body=task['action'],
+                touched=bool(u.get('status') or (task.get('focus') or {}).get('version'))))
         if 'agent_items' in tables:
             store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False);cited_by=_cited_by(c)
             for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id DESC"):
@@ -1040,8 +1041,12 @@ def snapshot(app,start,end):
                            originals=family_agent.school_original_requirements(store,c,dict(row)))
                 m['category']=category
                 m.update(subject_fields(row['title'],_stored_date_quote(plan),saved=str((plan.get('school_learning') or {}).get('subject') or '')))
+                relation=(dict(change=brief['change'],target_id=brief['target_id'],refs=refs,title=str(brief.get('title') or row['title']),
+                               lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12])
+                          if brief.get('change') in ('update','append') and brief.get('target_id') else None)
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
-                    agenda=m,status='待核对',closed=False,closed_on='',body=row['body']))
+                    agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {})))
+            items=_one_affair_versions(c,items)
         study=[]
         if 'study_items' in tables:
             for row in c.execute('SELECT * FROM study_items ORDER BY day,rowid'):
@@ -1071,6 +1076,89 @@ def snapshot(app,start,end):
         day=(first+dt.timedelta(days=offset)).isoformat()
         agenda.extend(dict(item,day=day) for item in items if visible_on(item,day))
     return dict(agenda=agenda,study=study,inbox=items+plans,**({'plan_error':plan_error} if plan_error else {}))
+
+
+# B4: a teacher's later notice about one saved affair (change update/append, its target a listed task of the same child) is
+# that affair's new version on its one card, never a second card. Only an update by the same verified publisher, strictly
+# later, same subject or the same subject-free affair, the only notice on it, wholly read text, no cancel or newly negated
+# original action, and an affair the family has not touched (no status, edit, feedback or wrong record) shows its latest
+# requirement and dates with one short change line; every other notice stays for the parent on the same card, the old
+# requirement, dates and family state kept as they are. Read only: the pending item stays the one place it is confirmed.
+_VERSION_CANCEL=r'取消|撤回|作废|停办|不再需要|不用(?:再)?(?:做|交|带|读|写|完成|参加)了|不需要(?:做|交|带)了'
+_CN_NUMBER={1:'一',2:'两',3:'三',4:'四',5:'五',6:'六',7:'七',8:'八',9:'九',10:'十'}
+
+
+def _message(c,ref):
+    try:source_id,message_id=ref[8:].rsplit(':',1)
+    except ValueError:return None,''
+    row=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+    try:return (json.loads(row['payload']),source_id) if row else (None,'')
+    except (ValueError,TypeError):return None,''
+
+
+def _read_publisher(c,ref):
+    """The verified publisher of one wholly read text message, '' otherwise."""
+    message,source_id=_message(c,ref)
+    if not message or message.get('unread') or message.get('kind','text')!='text' or not str(message.get('text') or '').strip():return ''
+    return family_agent._publisher(source_id,message)
+
+
+def _negated_actions(text):
+    verbs=r'('+_COMPLETION_VERB+r'|填写|填|上交|提交|交|检查|带|准备|签字|签名)'
+    return {m[1] for m in re.finditer(_NEGATED_LEAD+verbs,_titles_read_as_objects(text or ''))}
+
+
+def _short_change(old_text,new_text,old_due,new_due):
+    """One short provable change line (原三遍→两遍；日期 原11-05→11-09); '' when no count or date difference is provable."""
+    parts=[];old,new=family_agent._school_counts(old_text),family_agent._school_counts(new_text)
+    for unit in sorted({u for _,u in old|new if u}):
+        a=sorted(n for n,u in old if u==unit and isinstance(n,int));b=sorted(n for n,u in new if u==unit and isinstance(n,int))
+        if len(a)==1 and len(b)==1 and a!=b:parts.append('原'+_CN_NUMBER.get(a[0],str(a[0]))+unit+'→'+_CN_NUMBER.get(b[0],str(b[0]))+unit)
+    if exact_day(new_due) and new_due!=old_due:parts.append('日期 原'+(old_due[5:] if exact_day(old_due) else '未写明')+'→'+new_due[5:])
+    return '；'.join(parts)
+
+
+def _one_affair_versions(c,items):
+    tasks={x['task_id']:x for x in items if x['kind']=='task'};notices={}
+    for x in items:
+        rel=x.get('relation')
+        if rel and rel['target_id'] in tasks and tasks[rel['target_id']]['child_ids']==x['child_ids']:notices.setdefault(rel['target_id'],[]).append(x)
+    attached=set()
+    for task_id,group in notices.items():
+        task=tasks[task_id];a=task['agenda'];why=[]
+        attached.update(x['id'] for x in group)
+        x=group[0];rel=x['relation'];m=x['agenda']
+        own=[p.get('ref','') for p in a.get('publications') or [] if str(p.get('ref','')).startswith('message:')][:1]
+        original=(_message(c,own[0])[0] or {}).get('text','') if own else ''
+        said='\n'.join(str((_message(c,r)[0] or {}).get('text') or '') for r in rel['refs'])
+        senders={_read_publisher(c,r) for r in rel['refs']}
+        if len(group)>1:why.append('同一事项有多条新通知')
+        if rel['change']!='update':why.append('是补充要求')
+        if task['closed'] or task.get('touched'):why.append('家庭已有完成、状态或修改')
+        else:
+            try:
+                if c.execute("SELECT 1 FROM records WHERE source=? LIMIT 1",('事项:'+task_id,)).fetchone():why.append('家庭已有反馈')
+            except Exception:why.append('家庭记录暂时无法核对')
+        if subject_key(a)!=subject_key(m) or a.get('subject_state') not in ('known','general'):why.append('科目或事务不能确认相同')
+        if not own or '' in senders or senders!={_read_publisher(c,own[0])}:why.append('发布者不同或未核实')
+        if not (m.get('published_at') and a.get('published_at') and m['published_at']>a['published_at']):why.append('不是原发布者之后的通知')
+        if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
+        previous=dict(title=task['title'],lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()][:12],
+                      due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on',''))
+        listed=[dict(id=n['id'],change=n['relation']['change'],title=n['relation']['title'],lines=n['relation']['lines'],
+                     publications=publications(n['agenda']),published_at=str(n['agenda'].get('published_at') or '')) for n in group]
+        if not why:
+            pubs=list(a.get('publications') or []);pubs+=[p for p in m.get('publications') or [] if p not in pubs]
+            # A date-only update of the same lesson-day affair (带瓶改到下周一) keeps its own role; a new role is read when stated.
+            kind=m.get('due_kind','') if m.get('due_kind') not in ('','deadline') or a.get('due_kind') in ('','deadline') else a['due_kind']
+            task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs)
+            task['agenda'].pop('complete_words',None)
+            task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=rel['lines'],previous=previous,notices=listed,
+                                 change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,previous['due_on'],m.get('due_on','')) or '要求有更新')
+        else:
+            task['version']=dict(state='review',pending_id=x['id'],previous=previous,notices=listed,reasons=why,
+                                 note='有新通知待核对（'+'、'.join(why)+'）；原要求、日期和家庭状态保留，确认后才改。')
+    return [x for x in items if x['id'] not in attached]
 
 
 # One child's one day, read once on the server for every client (the web home and the Mac workbench): the same selection,
@@ -1218,6 +1306,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
 
     def row(x):
         task = by_task.get(x.get('task_id')) if x.get('task_id') else None
+        version = x.get('version')
         a = x.get('agenda') or {}; school = x.get('kind') == 'school' or bool((task or {}).get('school_origin'))
         oral = bool(task) and task.get('source') in family_study.CAPTURE_SOURCES
         lines = (task.get('action_lines') or [l.strip() for l in str(task.get('action') or '').splitlines() if l.strip()]) if task else \
@@ -1225,7 +1314,9 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         saved = sorted(feedback.get(x.get('task_id') or '', []), key=lambda r: (r.get('created') or '', r['id']))
         notes = [dict(wrong_row(r), task_id=x['task_id']) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
         pubs = publications(a)
-        return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=x.get('title', ''), subject=subject_key(a),
+        if version and version['state'] == 'latest': lines = list(version['lines'])
+        return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=version['title'] if version and version['state'] == 'latest' else x.get('title', ''), subject=subject_key(a),
+                    **({'version': version} if version else {}),
                     category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
                     status=x.get('status', ''), closed=bool(x.get('closed')), pending_review=x.get('kind') == 'school',
                     origin='school' if school else 'oral' if oral else 'family',
@@ -1285,7 +1376,21 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         return open_out, closed_out
 
     rows, closed_rows = group([(row(x), False) for x in open_rows] + [(row(x), True) for x in closed_rows])
+    # A later lesson-day item (bring, in-class check, event) or a later item still waiting for its scope (待核对) the family
+    # has not touched is not this day's work: it is listed in full on its own day and only named in one short 即将/待补 line
+    # before it. Anything with family progress, a record, a new version or no exact later date stays listed every day.
+    def upcoming(r):
+        due = next((f for f in r['facts'] if f.get('role') == 'due' and f.get('known')), None)
+        return (r['when'] == 'later' and not r['closed'] and not r['records'] and not r['wrong'] and not r.get('progress')
+                and (r.get('version') or {}).get('state', 'latest') == 'latest'
+                and not r.get('members') and not r.get('times') and r['status'] in ('', '待跟进', '待办', '待核对', '未开始')
+                and (r['pending_review'] or bool(due and due.get('kind') in ('event', 'inspection', 'arranged'))))
+    later = [dict(id=r['id'], task_id=r['task_id'], title=r['title'], subject=r['subject'], pending_review=r['pending_review'],
+                  change=(r.get('version') or {}).get('change', ''),
+                  day=min(f['value'] for f in r['facts'] if f.get('known') and exact_day(f.get('value')) and f['value'] > day)) for r in rows if upcoming(r)]
+    rows = [r for r in rows if not upcoming(r)]
     return dict(groups=[dict(subject=key, items=list(items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
                 closed=[dict(subject=key, items=list(items)) for key, items in subject_filed(closed_rows, lambda r: r['subject'])],
                 wrong=[dict(subject=key, items=list(items)) for key, items in subject_filed([wrong_row(r) for r in wrong], lambda r: SUBJECT_GENERAL if str(r.get('subject') or '').strip() == '综合' else str(r.get('subject') or '').strip())],
-                counts=dict(open=len(rows), closed=len(closed_rows), **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))
+                upcoming=sorted(later, key=lambda u: (u['day'], u['subject'])),
+                counts=dict(open=len(rows), closed=len(closed_rows), upcoming=len(later), **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))
