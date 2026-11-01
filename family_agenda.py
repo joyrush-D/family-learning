@@ -1179,14 +1179,48 @@ def _negated_actions(text):
     return {m[1] for m in re.finditer(_NEGATED_LEAD+verbs,text) if not _negation_negated(text[:m.start()])}
 
 
-def _short_change(old_text,new_text,old_due,new_due):
-    """One short provable change line (原三遍→两遍；日期 原11-05→11-09); '' when no count or date difference is provable."""
+_DATE_ROLES={'work':'日期','handback':'交回日期','check':'检查日期'}
+
+
+def _short_change(old_text,new_text,shifts=()):
+    """One short provable change line (原三遍→两遍；交回日期 原11-18→11-17); '' when no count or date difference is provable.
+    A day is named only for a date role the notice itself moved (shifts: the role, its original days, its new days): a
+    notice restating the original's own day of that work (今晚只需跟读两遍) changes no date."""
     parts=[];old,new=family_agent._school_counts(old_text),family_agent._school_counts(new_text)
     for unit in sorted({u for _,u in old|new if u}):
         a=sorted(n for n,u in old if u==unit and isinstance(n,int));b=sorted(n for n,u in new if u==unit and isinstance(n,int))
         if len(a)==1 and len(b)==1 and a!=b:parts.append('原'+_CN_NUMBER.get(a[0],str(a[0]))+unit+'→'+_CN_NUMBER.get(b[0],str(b[0]))+unit)
-    if exact_day(new_due) and new_due!=old_due:parts.append('日期 原'+(old_due[5:] if exact_day(old_due) else '未写明')+'→'+new_due[5:])
+    for role,old_days,new_days in shifts:
+        if len(new_days)==1:
+            old=next(iter(old_days)) if len(old_days)==1 else ''
+            parts.append(_DATE_ROLES[role]+' 原'+(old[5:] if old else '未写明')+'→'+next(iter(new_days))[5:])
     return '；'.join(parts)
+
+
+def _role_days(agenda,quote,sent):
+    """Each date role's days for one item: its saved due by its meaning (老师要求交回、老师检查; any other due is the work's
+    own day), its saved completion or earlier submission, and every day its own quoted clauses tie to a predicate of that
+    role (明早交给数学老师 is the handback's, 今晚完成 the work's). A clause with no handback or check predicate dates the work
+    itself; a negated one (今晚不用填写) dates nothing. The same day can hold two roles; a role is never read off another's."""
+    roles={role:set() for role in _DATE_ROLES}
+    due,kind=exact_day(agenda.get('due_on','')),agenda.get('due_kind','')
+    if due:roles['handback' if kind=='handback' else 'check' if kind=='inspection' else 'work'].add(due)
+    if exact_day(agenda.get('complete_on','')):roles['work'].add(agenda['complete_on'])
+    if exact_day(agenda.get('submit_on','')):roles['check' if agenda.get('submit_role')=='check' else 'handback'].add(agenda['submit_on'])
+    for clause in re.split(r'[，,；;。！!？?\n]+',quote or ''):
+        days=family_agent._school_clause_days(clause,sent) if exact_day(sent) and clause.strip() else None
+        if not days or family_agent._school_negated_day(clause) or _negated_actions(clause):continue
+        for role in family_agent._school_clause_roles(clause)&{'handback','check'} or {'work'}:roles[role]|=days
+    return roles
+
+
+def _saved_quote(c,*,item_id='',task_id=''):
+    """One school row's own stored original words: a notice by its id, a task by its accepted origin row; '' when none."""
+    try:
+        row=(c.execute("SELECT plan FROM agent_items WHERE id=? AND kind='school'",(item_id,)).fetchone() if item_id else
+             c.execute("SELECT plan FROM agent_items WHERE task_id=? AND kind='school' AND state='accepted' ORDER BY rowid LIMIT 1",(task_id,)).fetchone())
+        return _stored_date_quote(json.loads(row['plan'])) if row else ''
+    except Exception:return ''
 
 
 # A notice's latest requirement is the original's whole requirement with only what the notice itself changes put in. Each
@@ -1244,6 +1278,29 @@ _MOVE_NARRATION=re.compile(r'(?:由|从)?\s*(?:改|调|调整|推迟|延后|延�
                            r'|(?:前面|刚才|之前|上面|此前|原来|原先)(?:通知|说|发|布置|安排)?|仍然|仍旧|仍|还是|照旧|依旧|照常|更正')
 
 
+# A number with the measure word right after it (两个、三支、第8页); its object is the rest of its own enumerated piece.
+_NUMERAL=re.compile(r'(\d+|[一二两三四五六七八九十百千]+)\s*([\u4e00-\u9fff]?)')
+
+
+def _counts_unchanged(said,old):
+    """Whether every number the notice states is the original's own number of that same object: each piece of the notice
+    (its days and move narration aside) holding a number (透明塑料杯改为三个、铅笔仍三支) meets every original piece naming its
+    object words with that measure word, and each holds that very number. An old number of another object (三支铅笔) never
+    vouches for a changed one (两个杯→三个); an object or measure the original never counted is beyond it."""
+    def pieces(text,narration):
+        found=[]
+        for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
+            if narration:piece=_MOVE_NARRATION.sub(' ',piece)
+            found.append(([(n.translate(_UNIT_DIGITS),u) for n,u in _NUMERAL.findall(piece)],_unit_chars(_NUMERAL.sub(' ',piece))))
+        return found
+    held=pieces(old,False)
+    for numbers,words in pieces(said,True):
+        for number,unit in numbers:
+            same=[n for counted,named in held if words<=named for n,u in counted if u==unit]
+            if not same or any(n!=number for n in same):return False
+    return True
+
+
 def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent,new_sent):
     """The original lines with only the notice's own stated move put in, else None. The notice's own words move the item
     (周四科学课改到下周一) to one day that is the latest saved day; the original names the moved day with one word that is its
@@ -1267,6 +1324,8 @@ def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent
         return None
     # An exemption the notice names again without its negation (今晚要填写记录表 after 今晚不用填写) is a changed unit.
     if any(verb in said for verb in _negated_actions('\n'.join(old_lines))-_negated_actions(said)):return None
+    # So is any number it states that is not the original's own number of the same object (透明塑料杯改为三个).
+    if not _counts_unchanged(said,old_title+'\n'+'\n'.join(old_lines)+'\n'+original):return None
     (i,t),=moved;lines[i]=lines[i][:t.start()]+to[0][1]+lines[i][t.end():]
     return lines
 
@@ -1344,10 +1403,13 @@ def _one_affair_versions(c,items,store):
         if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
         # The latest is a whole requirement: every unchanged original unit kept, or only a proven count change put in.
         old_lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()];lines=list(rel['lines']);composed=False
-        # A notice moves the item only to a day the original does not already hold: 今晚只需跟读两遍 restates the original's
-        # own 今晚 (its completion day), whichever role the summary filed it under, and changes no date role.
-        roles=('due_on','complete_on','submit_on')
-        moved=bool({m.get(k) for k in roles if exact_day(m.get(k,''))}-{a.get(k) for k in roles if exact_day(a.get(k,''))})
+        # A notice moves the item only by tying a date role to a day the original does not hold in that same role: 今晚只需
+        # 跟读两遍 restates the original's own 今晚 (its work day), whichever role the summary filed it under, and moves nothing;
+        # 改为今晚交给数学老师 moves the handback from 明早 onto 今晚, although 今晚 already was the original's work day.
+        old_roles=_role_days(a,_saved_quote(c,task_id=task_id),sent_day(str(a.get('published_at') or '')))
+        new_roles=_role_days(m,_saved_quote(c,item_id=x['id']),sent_day(str(m.get('published_at') or '')))
+        shifts=[(role,old_roles[role],new_roles[role]-old_roles[role]) for role in _DATE_ROLES if new_roles[role]-old_roles[role]]
+        moved=bool(shifts)
         lost=_unchanged_lost(old_lines,shown,said) if rel['change']=='update' and not why else []
         if lost:
             fixed=_count_only_latest(old_lines,task['title'],shown,said,moved)
@@ -1364,16 +1426,23 @@ def _one_affair_versions(c,items,store):
             pubs=list(a.get('publications') or []);pubs+=[p for p in m.get('publications') or [] if p not in pubs]
             # A date-only update of the same lesson-day affair (带瓶改到下周一) keeps its own role; a new role is read when stated.
             kind=m.get('due_kind','') if m.get('due_kind') not in ('','deadline') or a.get('due_kind') in ('','deadline') else a['due_kind']
+            # The due's new day is the moved role's own when the notice's clauses moved that role there (改为今晚交给数学老师).
+            moved_to={role:days for role,_,days in shifts}
+            if m.get('due_on') in moved_to.get('handback',()):kind='handback'
+            elif m.get('due_on') in moved_to.get('check',()):kind='inspection'
+            # A role the notice left where it was keeps its day (今晚完成 stays the work's day when only the handback moved).
+            kept=(a.get('complete_on','') if not m.get('complete_on') and 'work' not in moved_to and exact_day(a.get('complete_on',''))
+                  and a['complete_on']<=(m.get('due_on') or a['complete_on']) else '')
             if moved:
-                task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on',''),publications=pubs,
+                task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on','') or kept,publications=pubs,
                                     submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''),submit_role=m.get('submit_role',''))
-                task['agenda'].pop('complete_words',None)
+                if not kept:task['agenda'].pop('complete_words',None)
             # A notice stating no day of its own (跟读改每词三遍), or only the original's own days, changes no date role: the
             # original's days stay as they were.
             else:task['agenda']=dict(a,publications=pubs)
             task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=lines,previous=previous,notices=listed,
                                  **({'composed':'original_with_stated_change'} if composed else {}),
-                                 change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,previous['due_on'],m.get('due_on','')) or '要求有更新')
+                                 change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,shifts) or '要求有更新')
         else:
             task['version']=dict(state='review',pending_id=x['id'],previous=previous,notices=listed,reasons=why,
                                  note='有新通知待核对（'+'、'.join(why)+'）；原要求、日期和家庭状态保留，确认后才改。')
