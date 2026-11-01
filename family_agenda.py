@@ -1193,13 +1193,13 @@ def _short_change(old_text,new_text,old_due,new_due):
 # original clause, its own day words aside (days are the saved date roles) and any count whose unit the notice restates
 # (三遍 replaces 四遍) or object it renames, must still be carried by the latest words: a dropped method, range, quantity,
 # qualifier, step or exemption is a lost unit, never a silent latest (PRD 3.2; one contract with the selection prompt).
-_DAY_WORDS=re.compile(r'(?:下下|下|本|这|上)?个?(?:周|星期|礼拜)[一二三四五六日天末]|今[天日晚早]|明[天日晚早]|后天|当[天晚]|\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?')
+_UNIT_DAY_WORDS=re.compile(r'(?:下下|下|本|这|上)?个?(?:周|星期|礼拜)[一二三四五六日天末]|今[天日晚早]|明[天日晚早]|后天|当[天晚]|\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?')
 _UNIT_FILLER=re.compile(r'[^\u4e00-\u9fffa-z0-9]|[的了地得着过也都再请需须要把将]')
 _UNIT_DIGITS=str.maketrans('一二两三四五六七八九','1223456789')
 
 
 def _unit_chars(text):
-    return set(_UNIT_FILLER.sub('',_DAY_WORDS.sub(' ',(text or '').lower())).translate(_UNIT_DIGITS))
+    return set(_UNIT_FILLER.sub('',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())).translate(_UNIT_DIGITS))
 
 
 def _count_token(units):
@@ -1224,7 +1224,7 @@ def _count_only_latest(old_lines,old_title,shown,said,moved):
     latest words that the notice itself states, and one old count of that unit written once in the original; the model's
     latest must say nothing beyond the original and that change. A moved date would leave dated original words stale."""
     old='\n'.join(old_lines)
-    if not old_lines or moved and _DAY_WORDS.search(old):return None
+    if not old_lines or moved and _UNIT_DAY_WORDS.search(old):return None
     counts=family_agent._school_counts;told=counts(said);new=counts(shown);before=counts(old);lines=list(old_lines);changed=False
     for unit in sorted({u for _,u in told if u}):
         a=[n for n,u in before if u==unit];b=[n for n,u in new if u==unit]
