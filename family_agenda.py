@@ -1278,27 +1278,32 @@ _MOVE_NARRATION=re.compile(r'(?:由|从)?\s*(?:改|调|调整|推迟|延后|延�
                            r'|(?:前面|刚才|之前|上面|此前|原来|原先)(?:通知|说|发|布置|安排)?|仍然|仍旧|仍|还是|照旧|依旧|照常|更正')
 
 
-# A number with the measure word right after it (两个、三支、第8页); its object is the rest of its own enumerated piece.
+# A number with the measure word right after it (两个、三支、第8页); its object is the noun written right after it (两个纸盘),
+# else the one written right before it within its own enumerated piece (纸盘改为三个、铅笔仍三支).
 _NUMERAL=re.compile(r'(\d+|[一二两三四五六七八九十百千]+)\s*([\u4e00-\u9fff]?)')
 
 
+def _counted_objects(text,narration):
+    """(number, measure word, object words) of every number in text, its days (and a notice's move narration) aside."""
+    found=[]
+    for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
+        if narration:piece=_MOVE_NARRATION.sub(' ',piece)
+        for m in _NUMERAL.finditer(piece):
+            words=_unit_chars(re.match(r'\S*',piece[m.end():])[0]) or _unit_chars(re.search(r'\S*$',piece[:m.start()].rstrip())[0])
+            found.append((m[1].translate(_UNIT_DIGITS),m[2],words))
+    return found
+
+
 def _counts_unchanged(said,old):
-    """Whether every number the notice states is the original's own number of that same object: each piece of the notice
-    (its days and move narration aside) holding a number (透明塑料杯改为三个、铅笔仍三支) meets the original pieces counting that
-    measure word that share the most of its words, and each holds that very number. An old number of another object (三支
-    铅笔) never vouches for a changed one (两个杯→三个); an object or measure the original never counted is beyond it."""
-    def pieces(text,narration):
-        found=[]
-        for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
-            if narration:piece=_MOVE_NARRATION.sub(' ',piece)
-            found.append(([(n.translate(_UNIT_DIGITS),u) for n,u in _NUMERAL.findall(piece)],_unit_chars(_NUMERAL.sub(' ',piece))))
-        return found
-    held=pieces(old,False)
-    for numbers,words in pieces(said,True):
-        for number,unit in numbers:
-            near=[(len(words&named),n) for counted,named in held for n,u in counted if u==unit and words&named]
-            best=max((k for k,_ in near),default=0)
-            if not best or any(n!=number for k,n in near if k==best):return False
+    """Whether every number the notice states is the original's own number of that same object: each one (透明塑料杯改为
+    三个、铅笔仍三支) meets the original's numbers of that measure word whose objects share the most of its object words,
+    and each of them is that very number. An old number of another object (三支铅笔) never vouches for a changed one (两个
+    杯→三个); an object or measure the original never counted is beyond it."""
+    held=_counted_objects(old,False)
+    for number,unit,words in _counted_objects(said,True):
+        near=[(len(words&named),n) for n,u,named in held if u==unit and words&named]
+        best=max((k for k,_ in near),default=0)
+        if not best or any(n!=number for k,n in near if k==best):return False
     return True
 
 
