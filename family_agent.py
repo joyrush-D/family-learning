@@ -618,7 +618,7 @@ def _school_outcome_objects(part):
     return found
 
 
-def _school_separate_lessons(proposals, evidence, pending=()):
+def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
     """A lesson assessment its own original sets on its own day (周五课堂听写，范围由老师明天再说) that a reply merged into
     another item's goal, or left out, is its own item from the original's words (Root run9).
 
@@ -629,7 +629,8 @@ def _school_separate_lessons(proposals, evidence, pending=()):
     forms one review item (its scope is the teacher's to give; nothing is borrowed from the merging item's own range) with
     the message's own subject and the run's own day. When one pending item of this child is bound to it by the program's
     own proof (_school_pending_link: same publisher and source, later, same object, same day), the run names that item as
-    its notice instead of a second card. Returns the proposals and marks (index -> dict(formed) / dict(receipt, split))."""
+    its notice instead of a second card; a lesson already one of this child's tasks (same source, publisher, day and object)
+    forms nothing new. Returns the proposals and marks (index -> dict(formed) / dict(receipt, split))."""
     from family_agenda import sent_day
     entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};taken=set()
     quotes=[p['title_quote'].strip() if isinstance(p.get('title_quote'),str) else '' for p in proposals]
@@ -661,10 +662,14 @@ def _school_separate_lessons(proposals, evidence, pending=()):
             brief=dict(title=title,goal=goal,state='review')
             bound=[t for t in pending if _school_pending_link(t,'same',brief,[home],day,run)]
             if len(bound)>1:continue
+            source_id=home['ref'][8:].rsplit(':',1)[0]
+            held=[t for t in tasks if t.get('due')==day and t.get('source_id')==source_id and t.get('publisher')==home.get('publisher')
+                  and _school_same_object(title+'\n'+goal,str(t.get('title') or '')+'\n'+str(t.get('goal') or ''))]
             taken.add((home['ref'],run))
             if len(kept)!=len(lines):
                 out[index]=dict(out[index],task_goal='\n'.join(kept))
                 marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run)))
+            if held:continue  # the lesson is already this child's own task: the merging item only loses the lesson line
             marks[len(out)]=dict(formed=dict(index=index,receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},ref=home['ref'],quote=run,
                                              **({} if len(kept)!=len(lines) else {'omitted':True})))
             out.append(dict(title_quote=run,focus='school',due=day,evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
@@ -7288,7 +7293,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
         # school_later (the source's own later stored messages) only guards that compile; the model never sees it.
         result['proposals'],split_marks=_school_separate_outcomes(result['proposals'],evidence,{a['ref'] for a in native_actions},source_later=school_later)
         # So is a lesson assessment its own original sets on its own day (周五课堂听写), whatever item the reply put it in.
-        result['proposals'],lesson_marks=_school_separate_lessons(result['proposals'],evidence,school_pending)
+        result['proposals'],lesson_marks=_school_separate_lessons(result['proposals'],evidence,school_pending,school_tasks)
         for key,mark in lesson_marks.items():split_marks.setdefault(key,mark)
     # An anchor that ran on over a sibling's own clause is read as its own part; the model's quote stays with the item.
     sibling_scopes=(_school_sibling_scopes(result['proposals'],evidence,set(split_marks),{a['ref'] for a in native_actions})
