@@ -384,11 +384,13 @@ class P1aRequirementUnitTests(unittest.TestCase):
             self.assertEqual(self.same_trial(original, text)['state'], expected, text)
         signed = '班级：出行确认单请家长签好名字，周四交。'
         for text, expected in (('班级：那张已签名的出行确认单，让学生周四交。', 'ready'),  # a signed state, no new actor step
-                               ('班级：那张已签名的《出行确认单》，让学生周四交。', 'ready'),
                                ('班级：出行确认单请家长签上姓名，周四交。', 'ready'),
                                ('班级：出行确认单请家长签好名字，让学生也签名，周四交。', 'review'),  # a real new signature
                                ('班级：出行确认单请家长签好名字，周四交。另外请奶奶也签字。', 'review')):
             self.assertEqual(self.same_trial(signed, text)['state'], expected, text)
+        # A title the task does not name stays the named-object guard's; the task naming it links the signed-state reminder.
+        self.assertEqual(self.same_trial(signed, '班级：那张已签名的《出行确认单》，让学生周四交。')['state'], 'review')
+        self.assertEqual(self.same_trial('班级：《出行确认单》请家长签好名字，周四交。', '班级：那张已签名的《出行确认单》，让学生周四交。')['state'], 'ready')
         unsigned = '班级：出行确认单请家长填好，周四交。'
         self.assertEqual(self.same_trial(unsigned, '班级：那张已签名的出行确认单，让学生周四交。')['state'], 'review')
 
