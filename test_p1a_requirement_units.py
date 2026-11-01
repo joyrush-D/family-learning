@@ -178,7 +178,8 @@ class P1aRequirementUnitTests(unittest.TestCase):
         self.assertEqual(bottle['version']['state'], 'latest'); self.assertIn('11-05→11-09', bottle['version']['change'])
         # The pending notice remains the one place it is confirmed; nothing was written by reading.
         with self.app.connect() as c:
-            self.assertEqual(c.execute("SELECT count(*) FROM agent_items WHERE state='pending' AND kind='school' AND plan LIKE '%\"change\": \"update\"%'").fetchone()[0], 2)
+            pending = [json.loads(r['plan'])['school_task'] for r in c.execute("SELECT plan FROM agent_items WHERE state='pending' AND kind='school'")]
+            self.assertEqual(sorted(p['title'] for p in pending if p.get('change') == 'update'), ['科学：下周一实验课带空透明塑料瓶', '英语：跟读Unit 9第1—6个单词两遍'])
         other = self.view(child='child-2')
         self.assertEqual(len([r for r in self.rows(other) if '青石练习册' in r['title']]), 1)
         self.assertFalse(any('写出计算过程' in l for r in self.rows(other) for l in r['lines']))
