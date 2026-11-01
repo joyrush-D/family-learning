@@ -1282,6 +1282,28 @@ def _unchanged_lost(old_lines,shown,said):
     return lost
 
 
+def _stated_count_changes(said):
+    """(old count, new count, unit, the notice's own new words) of each count a notice explicitly changes (每句由四遍改为一遍)."""
+    counts=family_agent._school_counts;found=[]
+    number=r'(?:\d+|[一二两三四五六七八九十]+)\s*(?:'+family_agent._SCHOOL_COUNT_UNITS+')'
+    for m in re.finditer(r'('+number+r')\s*(?:改为|改成|换成|换为)\s*((?:\d+|[一二两三四五六七八九十]+)\s*(?:'+family_agent._SCHOOL_COUNT_UNITS+')?)',said or ''):
+        old,new=[x for x in counts(m[1]) if x[1]],counts(m[2])
+        if len(old)!=1:continue
+        unit=old[0][1];new=[n for n,u in new if u in (unit,'')]
+        if len(new)==1 and new[0]!=old[0][0]:found.append((old[0][0],new[0],unit,m[2].strip() if unit in m[2] else m[2].strip()+unit))
+    return found
+
+
+def _put_counts(old_lines,changes):
+    """The original lines with each stated count change put in, else None (an old count not written exactly once)."""
+    lines=list(old_lines);counts=family_agent._school_counts
+    for old,new,unit,words in changes:
+        tokens=[(i,t) for i,l in enumerate(lines) for t in _count_token({unit}).finditer(l) if counts(t[0])=={(old,unit)}]
+        if len(tokens)!=1:return None
+        i,t=tokens[0];lines[i]=lines[i][:t.start()]+words+lines[i][t.end():]
+    return lines
+
+
 def _count_only_latest(old_lines,old_title,shown,said,moved):
     """The original lines with only the notice's own count change put in, else None. Each changed unit has one count in the
     latest words that the notice itself states, and one old count of that unit written once in the original; the model's
@@ -1469,6 +1491,13 @@ def _one_affair_versions(c,items,store):
                 fixed=_day_moved_latest(old_lines,task['title'],original,said,a.get('due_on',''),m.get('due_on',''),
                                         sent_day(str(a.get('published_at') or '')),sent_day(str(m.get('published_at') or '')))
             if fixed is None:why.append('新要求的归纳缺少原要求中未改的部分（'+'；'.join(lost)[:60]+'）')
+            else:lines,composed=fixed,True
+        # Latest words still stating a count the notice explicitly changed (由四遍改为一遍) are the old requirement: the
+        # notice's own count goes into the original's one token of that unit, every other unit kept; else it stays review.
+        stated=_stated_count_changes(said) if rel['change']=='update' and not why else []
+        if stated and any((old,unit) in family_agent._school_counts('\n'.join(lines)) for old,_,unit,_ in stated):
+            fixed=_put_counts(old_lines,stated)
+            if fixed is None:why.append('新要求仍写着通知已改掉的数量，与更正原文对不上')
             else:lines,composed=fixed,True
         previous=dict(title=task['title'],lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()][:12],
                       due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on',''))

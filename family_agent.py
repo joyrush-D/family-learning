@@ -3278,6 +3278,13 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
     brief=plan.get('school_task') or {}
     if clean(body) not in {clean(x) for x in (brief.get('goal'),(plan.get('approved') or {}).get('action'),row['body']) if clean(x)}:return body
     old=[line.strip() for line in str(task.get('action') or '').splitlines() if line.strip()];shown=title+'\n'+body
+    from family_agenda import _put_counts,_stated_count_changes
+    stated=_stated_count_changes(said)
+    if stated and any((n,u) in _school_counts(body) for n,_,u,_ in stated):
+        # The candidate still states a count the notice changed (由四遍改为一遍): the same composition the page shows, else refused.
+        fixed=_put_counts(old,stated)
+        if fixed is None:raise AgentError('新要求仍写着通知已改掉的数量；原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
+        return '\n'.join(fixed)
     lost=_unchanged_lost(old,shown,said)
     if not lost:return body
     moved=bool(exact_day(due)) and due!=task['agenda'].get('due_on','') if moves is None else moves
