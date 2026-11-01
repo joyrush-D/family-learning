@@ -678,7 +678,7 @@ def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
             if inside:
                 # The item's own words are its quote without the lesson sentence (leading or trailing); the reply's quote stays
                 # verbatim in its receipt mark below.
-                out[index]=dict(out[index],title_quote=rest.strip(' ，,；;'));marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run,quote=quote)))
+                out[index]=dict(out[index],title_quote=rest.strip(' ，,；;。'));marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run,quote=quote)))
             if len(kept)!=len(lines):
                 out[index]=dict(out[index],task_goal='\n'.join(kept))
                 marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run)))
