@@ -249,16 +249,32 @@ class RelationScopeTests(ScopeSaveTests):
         wednesday = self.wednesday()
         self.assert_apart(wednesday, self.friday(self.QUOTE + '；和周三那次复述分开安排。'))
 
+    SAME = QUOTE + '，和周三的复述分开安排。'  # the relation in this item's own sentence: the ordinary path reads its own clause
+
+    def test_a_relation_in_the_items_own_sentence_dates_the_other_occurrence(self):
+        wednesday = self.wednesday()
+        self.assert_apart(wednesday, self.friday(self.QUOTE + '，与周三的复述属于两个独立安排。', text=self.SAME))
+
+    def test_a_demonstrative_relation_in_the_items_own_sentence_reads_the_same(self):
+        wednesday = self.wednesday()
+        self.assert_apart(wednesday, self.friday(self.QUOTE + '；与周三复述第1段那次是两次独立安排。',
+                                                 text='英语：' + self.QUOTE + '，与周三复述第1段那次是两次独立安排。'))
+
     def test_a_relation_day_no_original_or_listed_item_grounds_is_still_read(self):
         self.wednesday()
-        # No listed item is dated Thursday: the model's own day stays a day of this summary.
-        item = self.friday(self.QUOTE + '，与周四的复述属于两个独立安排。')
+        # No listed item is dated Thursday and the original relates Wednesday: the model's own day stays this summary's.
+        item = self.friday(self.QUOTE + '，与周四的复述属于两个独立安排。', text=self.SAME)
         self.assertNotEqual((item['state'], item['due']), ('accepted', FRI))
 
-    def test_a_listed_day_without_the_originals_own_separateness_is_still_read(self):
-        self.wednesday()
-        item = self.friday(self.QUOTE + '，与周三的复述属于两个独立安排。', text=self.QUOTE + '。')
-        self.assertNotEqual((item['state'], item['due']), ('accepted', FRI))
+    def test_a_listed_day_grounds_only_where_the_items_own_original_words_say_separate(self):
+        cited = lambda text: [dict(ref='message:x:1', text=text, time=DAY + 'T20:00:00+08:00')]
+        listed = [dict(due=WED, title='英语：周三英语课复述《风筝》第1段', goal='周三英语课复述《风筝》第1段。')]
+        goal = self.QUOTE + '，与周三的复述属于两个独立安排。'
+        self.assertEqual(agent._school_listed_apart(self.QUOTE, cited(self.LESSON), goal, listed, []), {WED})
+        self.assertEqual(agent._school_listed_apart(self.QUOTE, cited(self.QUOTE + '，请带课本。'), goal, listed, []), set())
+        # A sibling's separateness in the same message is not this item's (另外安排… starts its own range).
+        self.assertEqual(agent._school_listed_apart(self.QUOTE, cited(self.QUOTE + '。另外安排周六复述第5段，单独安排。'), goal, listed, []), set())
+        self.assertEqual(agent._school_goal_dates(goal, cited(self.QUOTE + '，请带课本。'), frozenset()), set(), 'ungrounded: still read')
 
     def test_this_items_own_two_day_split_is_no_relation(self):
         for clause in ('周三和周五分别完成《风筝》第4段', '周三和周五两次分开完成复述', '和同学独立完成复述', '周三预习，周五上课'):

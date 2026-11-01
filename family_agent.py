@@ -3507,7 +3507,9 @@ def _school_own_clause_dates(quote,cited,others):
             if max(start,at)<min(end,at+len(other)):return set()
             at+=len(other)
     published=sent_day(homes[0].get('time',''))
-    return _school_own_dates(_school_corrected_quote(quote,homes[0],cited),published)-later_dropped_days(quote,text[start:],published)
+    # A clause of this range relating it to another occurrence (…第4段，和周三的复述分开安排) dates that occurrence, as the
+    # ledger reads the same words (_school_native_dates): this item's own days are read without it.
+    return _school_own_dates(_school_apart_free(_school_corrected_quote(quote,homes[0],cited)),published)-later_dropped_days(quote,text[start:],published)
 
 
 def _school_sibling_scopes(proposals,evidence,skip=(),native=()):
