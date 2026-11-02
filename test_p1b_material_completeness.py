@@ -268,10 +268,15 @@ class ScopedDoubtImageChainTests(_ScopeBase):
     """C on the real image-original chain (save_upload -> attach -> reader receipt -> saved draft -> original actions ->
     Store -> day list -> reopen): one original, three requirement lines, two doubts (fictional; controlled model stubs)."""
 
-    def _scoped(self,scopes):
-        fix=copy.deepcopy(scope.FIX);original=fix['call_1']['originals'][0]
+    @staticmethod
+    def _receipt(fix,scopes):
+        original=fix['call_1']['originals'][0]
         original['requirements'].append(R_SHEET);original['uncertainties']=[U_RES,U_READ]
         if scopes is not None:original['uncertainty_scopes']=scopes
+        return fix
+
+    def _scoped(self,scopes):
+        fix=self._receipt(copy.deepcopy(scope.FIX),scopes)
         sheet=copy.deepcopy(fix['call_3']['actions'][1])
         sheet.update(title='英语：练习纸第二部分',goal=R_SHEET,reason='原件第三项要求。',due='2026-11-04',existing_item_id='',basis=[dict(part='',text=R_SHEET)])
         fix['call_3']['actions'].append(sheet)
@@ -344,6 +349,60 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         self.assertNotIn('本项要求已读全',reason);self.assertEqual(self.brief(follow).get('resource_needed'),[U_RES])
         self.assertEqual(self._doubts(self._request()[1])[ROLE_OLD],([U_READ],[U_RES],[]))
         made=self._db();agent.run_once(self.app,self.now+dt.timedelta(minutes=2));self.assertEqual(self._db(),made)
+
+    SCOPES=[dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='reading')]
+
+    def _later(self,minutes):
+        # Later normal rounds: the reader returns a receipt with scopes; the stubbed mapper answers by the saved ids (0 API).
+        real=agent._school_original_actions
+        def cite(store,row,result,parts,*args,**kwargs):
+            ids={p['text']:p['id'] for p in parts}
+            with store._db() as c:
+                known={json.loads(r['plan'])['school_original_action']['requirements'][0]['text']:r['id'] for r in c.execute("SELECT id,plan FROM agent_items WHERE kind='school'")
+                       if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
+            for action in result.get('actions',[]):
+                for quote in action.get('basis',[]):quote['part']=ids.get(quote.get('text'),quote.get('part'))
+                action['existing_item_id']=known.get(action['basis'][0]['text'],'')
+            return real(store,row,result,parts,*args,**kwargs)
+        with patch.object(agent,'_school_original_actions',cite):
+            for m in minutes:agent.run_once(self.app,self.now+dt.timedelta(minutes=m))
+
+    def _receipt_row(self):
+        with self.store._db() as c:
+            row=dict(c.execute("SELECT * FROM agent_message_drafts WHERE message_id='503'").fetchone())
+            message=json.loads(c.execute("SELECT payload FROM agent_messages WHERE id='503'").fetchone()['payload'])
+            job=dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(agent.family_media.draft_key(self.source,message),)).fetchone())
+        return row,job
+
+    def test_an_old_undecided_receipt_is_read_once_more_for_its_scopes(self):
+        found=self._scoped(None);ids={k:r['id'] for k,r in found.items()}  # read before scopes: every line held
+        old,job=self._receipt_row()
+        self.reads.side_effect=[scope.swap(self._receipt(copy.deepcopy(scope.FIX),self.SCOPES)['call_1'],self.upload)]
+        self._later((2,3))
+        self.assertEqual(self.reads.call_count,2)  # one bounded re-read through the normal reader
+        new,job2=self._receipt_row();payload=json.loads(new['payload'])
+        self.assertEqual(payload['originals'][0]['uncertainty_scopes'],self.SCOPES)
+        self.assertEqual(payload['previous_scope_receipt'],dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated']))
+        self.assertEqual((job2['attempts'],job2['done']),(job['attempts']+1,1))  # the job's own budget, one more attempt
+        rows={json.loads(r['plan'])['school_original_action']['requirements'][0]['text']:r for r in self._db()[0].values()
+              if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
+        self.assertEqual({k:r['id'] for k,r in rows.items()},ids)  # same items, same ids
+        self.assertEqual([rows[k]['state'] for k in (ROLE_OLD,R_DICT,R_SHEET)],['accepted','accepted','pending'])
+        self.assertIn(U_READ,self.brief(rows[R_SHEET])['reason'])
+        made=self._db();self._later((4,5))  # later rounds: no read, call, write or duplicate
+        self.assertEqual((self.reads.call_count,self._db()),(2,made))
+
+    def test_a_decided_item_or_an_exhausted_job_keeps_the_old_receipt(self):
+        for case in ('decided','exhausted'):
+            with self.subTest(case=case):
+                if case=='exhausted':self.setUp()
+                found=self._scoped(None);old,job=self._receipt_row()
+                with self.store._db() as c:
+                    if case=='decided':c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(found[R_DICT]['id'],))
+                    else:c.execute('UPDATE agent_jobs SET attempts=? WHERE id=?',(agent.MAX_ATTEMPTS,job['id']))
+                self.reads.side_effect=[scope.swap(self._receipt(copy.deepcopy(scope.FIX),self.SCOPES)['call_1'],self.upload)]
+                self._later((2,3))
+                self.assertEqual((self.reads.call_count,self._receipt_row()[0]),(1,old))  # no re-read; the old receipt stays
 
     def test_a_false_resource_or_unverifiable_pointer_never_frees_a_line(self):
         found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='resource')])
@@ -486,7 +545,8 @@ def load_tests(loader,tests,pattern):
     suite.addTests(loader.loadTestsFromTestCase(DoubtViewTests))
     for name in ('test_each_doubt_holds_only_the_requirement_it_names','test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide',
                  'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide',
-                 'test_one_line_with_a_reading_and_a_resource_doubt_stays_review_in_its_own_words'):
+                 'test_one_line_with_a_reading_and_a_resource_doubt_stays_review_in_its_own_words',
+                 'test_an_old_undecided_receipt_is_read_once_more_for_its_scopes','test_a_decided_item_or_an_exhausted_job_keeps_the_old_receipt'):
         suite.addTest(ScopedDoubtImageChainTests(name))
     for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
         suite.addTest(ScopedDoubtPdfTests(name))
