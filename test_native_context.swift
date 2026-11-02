@@ -150,6 +150,11 @@ import Foundation
         let other = await WorkspaceStore.uploadPhotos([gone], cached: [:], keys: [:], read: { _ in Data([1]) }, send: fake)
         expect(other.keys[gone.path] != nil && other.keys[gone.path] != first.keys[a.path] && other.keys[gone.path] != first.keys[b.path] && sentKeys.last == other.keys[gone.path],
                "另一次选取用新的上传标识：同名同内容也是另一份原件")
+        replies = [.refused(status: 409, message: "虚构：这个上传标识已对应另一份文件", code: "upload_key_conflict")]
+        let changed = await WorkspaceStore.uploadPhotos([gone], cached: [:], keys: other.keys, read: { _ in Data([2]) }, send: fake)
+        let refusedChange: Bool = { if case .outcome(.refused(409, _, "upload_key_conflict"))? = changed.stop { return true }; return false }()
+        expect(refusedChange && sentKeys.last == other.keys[gone.path] && changed.keys[gone.path] == nil && changed.ids.isEmpty,
+               "同一标识下文件变了被拒绝：不存、不挂，这张照片下次按新的一次选取上传")
         let withPhotos = WorkspaceStore.oralBody(child: "child-2", day: today, key: "synthetic-oral-key-0002", version: 3, subject: "", what: "读课文",
                                                  completeOn: "", handbackOn: "", attachments: second.ids)
         expect((withPhotos["report"] as? [String: Any])?["attachments"] as? [String] == second.ids, "照片编号进同一份补录的原件列表")
