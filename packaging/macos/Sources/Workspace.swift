@@ -191,7 +191,10 @@ final class WorkspaceStore: ObservableObject {
             case .saved(let reply):
                 guard let id = (reply["attachment"] as? [String: Any])?["id"] as? String else { return (ids, cached, keys, .noID) }
                 cached[url.path] = id; ids.append(id)
-            case let other: return (ids, cached, keys, .outcome(other))
+            case let other:
+                // 同一标识下文件已变（服务端拒绝、未存）：这张照片下次按新的一次选取上传，不拿旧标识反复撞拒绝。
+                if case .refused(_, _, let code) = other, code == "upload_key_conflict" { keys.removeValue(forKey: url.path) }
+                return (ids, cached, keys, .outcome(other))
             }
         }
         return (ids, cached, keys, nil)
