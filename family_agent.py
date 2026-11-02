@@ -624,9 +624,17 @@ def _school_lesson_unit(sentence, published):
     parts=re.split(r'([，,])',sentence);unit=parts[0]
     for i in range(1,len(parts)-1,2):
         days=_school_clause_days(parts[i+1],published)
-        if (days is None or days) and not re.search(_SCHOOL_SCOPE_DEFERRED+'|'+_SCHOOL_LATER_WORD,parts[i+1]):break
+        if ((days is None or days) and not re.search(_SCHOOL_SCOPE_DEFERRED+'|'+_SCHOOL_LATER_WORD,parts[i+1])
+                and not _SCHOOL_APART.search(parts[i+1])):break
         unit+=parts[i]+parts[i+1]
     return unit.strip(' ，,')
+
+
+def _school_part_days(part, published):
+    """Days a part of an item's quote states for an action of its own: a clause whose day heads a negated predicate (今晚不用在家
+    预习) or that relates the item to another occurrence (和周四那场分别登记) states none."""
+    return set().union(*(_school_clause_days(c,published) or set() for c in re.split(r'[，,。；;！!？?\n]',part)
+                         if c.strip() and not _school_negated_day(c) and not _SCHOOL_APART.search(c)))
 
 
 def _school_goal_without(goal, published, day, unit):
@@ -694,7 +702,7 @@ def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
             if inside and not (q0<=start and start+len(run)<=q1):continue  # a run only partly quoted stays as it was
             pieces=[x for x in ((quote[:start-q0],quote[start-q0+len(run):]) if inside else (quote,)) if x.strip(trim)]
             if not pieces:continue  # a proposal that is only the lesson is that lesson's own item already
-            own=[_school_clause_days(x,sent) or set() for x in pieces]
+            own=[_school_part_days(x,sent) for x in pieces]
             if any(day in d for d in own) or inside and not any(own):continue
             if any(quotes[i] and (quotes[i] in run or run in quotes[i]) for i in range(len(proposals)) if i!=index):continue
             goal,removed=_school_goal_without(out[index]['task_goal'],sent,day,run)
