@@ -128,7 +128,7 @@ test('preparation stays outside collapsed metadata, even without a source',()=>{
 });
 test('editing a weekly instance starts at the series date and weekend suggestions only open a tentative draft',async()=>{
  const h=harness();h.ctx.calendarOpen(event());assert.equal(h.get('#calendarForm').elements.day.value,'2026-09-05');assert.match(h.get('#calendarEditNote').textContent,/修改未单独处理的重复日期/);assert.equal(h.calls.length,0);
- h.get('#calendarWeekendDay').value='2026-09-13';const b={dataset:{calendarDraft:'运动'},hasAttribute(){return false}};await h.click({target:{closest:()=>b}});assert.equal(h.get('#calendarForm').elements.day.value,'2026-09-13');assert.equal(h.get('#calendarForm').elements.status.value,'tentative');assert.equal(h.calls.length,0);
+ h.get('#calendarWeekendDay').value='2026-09-13';const b={dataset:{calendarDraft:'运动'},hasAttribute(){return false}};await h.click({target:{closest:s=>s==='button'?b:null}});assert.equal(h.get('#calendarForm').elements.day.value,'2026-09-13');assert.equal(h.get('#calendarForm').elements.status.value,'tentative');assert.equal(h.calls.length,0);
 });
 test('a material card shows its saved page scope, keeps a missing resource apart from an unclear reading, and 360 is not the wide layout',()=>{
  const h=harness();h.width=360;assert.equal(h.ctx.groveWide(),false);h.width=1440;assert.equal(h.ctx.groveWide(),true);
