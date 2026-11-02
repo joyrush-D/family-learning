@@ -13,7 +13,7 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 // the same saved-date assertions hold. The all-tasks list (pass 'list') keeps its article.task card.
 async function itemView(p,card,grove){
  if(!grove)return {title:await card.locator('h3').innerText(),lines:await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),
-  text:await card.innerText(),listed:'',dates:await card.locator('.agenda-dates').innerText(),roles:[]};
+  text:await card.innerText(),listed:'',dates:await card.locator('.agenda-dates').innerText(),roles:[],refs:await card.locator('[data-school-original-ref]').allInnerTexts()};
  await card.waitFor();
  const title=(await card.locator('.grove-title').innerText()).trim(),listed=await card.innerText();
  const roles=await card.locator('.grove-chips [data-fact]').evaluateAll(xs=>xs.map(x=>x.dataset.fact));
@@ -22,9 +22,9 @@ async function itemView(p,card,grove){
  const lines=await d.locator('ul.grove-standards li').allInnerTexts();
  const dates=await d.locator('.grove-fact').evaluateAll(xs=>xs.map(x=>{const l=(x.querySelector('span')?.innerText||'').trim(),v=(x.querySelector('strong')?.innerText||'').trim();
   return (v.startsWith('今天 ')?'今天':'')+l+'：'+v.replace(/^今天 /,'')}).join('\n'));
- const text=await d.innerText(),shownTitle=(await d.locator('h2.grove-h').first().innerText()).trim();
+ const text=await d.innerText(),shownTitle=(await d.locator('h2.grove-h').first().innerText()).trim(),refs=await d.locator('[data-school-original-ref]').allInnerTexts();
  const back=p.locator('[data-grove-back]').first();if(await back.isVisible().catch(()=>false)){await back.click();await card.waitFor()}
- return {title:shownTitle,lines,text,listed,dates,roles};
+ return {title:shownTitle,lines,text,listed,dates,roles,refs};
 }
 async function groveCards(p){
  const rows=p.locator('#task-groups article.grove-row'),out=[];
@@ -47,15 +47,41 @@ with tempfile.TemporaryDirectory(prefix='synthetic-projection-') as tmp:
     root=Path(tmp);(root/'跟踪台账.md').write_text('')
     (root/'家庭运行规则.md').write_text(''.join('| %s | %s | 男 | 10岁 | 四年级 |\\n'%(c['id'],c['name']) for c in d['children']))
     with patch.multiple(app,ROOT=root,DATA=root,DB=root/'synthetic.sqlite3'):
-        app.calendar_store();week=app.week_days(d['today']);cal,error=app.schedule_read(week[0],week[-1])
-        out={c['id']:app.day_projection(d['inbox'],cal,error,d['tasks'],d['records'],c,d['today'],d['today']) for c in d['children']}
+        app.calendar_store()
+        def view(child,day):
+            week=app.week_days(day);cal,error=app.schedule_read(week[0],week[-1])
+            return app.day_projection(d['inbox'],cal,error,d['tasks'],d['records'],child,day,d['today'])
+        out=dict(today={c['id']:view(c,d['today']) for c in d['children']},days={c['id']:{day:view(c,day) for day in d['days']} for c in d['children']})
 print(json.dumps(out,ensure_ascii=False))`;
-function withProjection(json){
+function withProjection(json,days=[]){
  const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
  const run=spawnSync(process.env.FAMILY_TEST_PYTHON||'python3',['-c',PROJECT],{cwd:__dirname,env,encoding:'utf8',maxBuffer:1<<26,
-  input:JSON.stringify({today:json.today,children:json.children,tasks:json.tasks,records:json.records||[],inbox:json.today_calendar?.inbox||[]})});
+  input:JSON.stringify({today:json.today,days,children:json.children,tasks:json.tasks,records:json.records||[],inbox:json.today_calendar?.inbox||[]})});
  if(run.status!==0)throw Error('day_projection failed: '+String(run.stderr||run.error).slice(-2000));
- return {...json,today_view:JSON.parse(run.stdout)};
+ const out=JSON.parse(run.stdout),state={...json,today_view:out.today};
+ Object.defineProperty(state,'dayViews',{value:out.days,enumerable:false});return state;
+}
+// The page reads /api/state and every day it opens (/api/day, the same fields as the real handler) from that one projection.
+async function serveState(p,served){
+ await p.route('**/api/state',route=>route.fulfill({json:served}));
+ await p.route(url=>url.pathname.endsWith('/api/day'),route=>{const q=new URL(route.request().url()).searchParams,child=served.children.find(c=>c.id===q.get('child_id')),view=served.dayViews?.[q.get('child_id')]?.[q.get('day')];
+  return child&&view?route.fulfill({json:{today:served.today,day:q.get('day'),child_id:child.id,child_name:child.name,children:served.children.map(c=>({id:c.id,name:c.name})),token:served.token,source_error:'',...view}})
+   :route.fulfill({status:404,json:{error:'虚构状态没有这一天的投影'}})});
+}
+// Opens one day from the grove week strip (no click when it is already shown) and waits for its own list.
+async function openDay(p,day){
+ const shown=async()=>await p.locator('[data-grove-summary]').innerText();if((await shown()).includes(day))return;
+ await p.locator('[data-grove-day="'+day+'"]').first().click();await eventually(async()=>(await shown()).includes(day),'grove '+day+' opened');
+}
+// Flash27/recovered on 10/19: the three homework actions and the slip are direct cards; the bottle arranged for 10/20 is only
+// named in 即将/待补 until its own day.
+async function flashToday(p,ids,where){
+ await openDay(p,'2026-10-19');
+ const rows=async sel=>(await p.locator('#task-groups article.grove-row'+sel).evaluateAll(xs=>xs.map(x=>x.dataset.todayTask||''))).sort();
+ assert.deepEqual(await rows('[data-category="homework"][data-today]:not([data-kind="school"])'),[ids['星芽'],ids['数格'],ids['Unit 4']].sort(),where+' the three homework actions today');
+ assert.deepEqual(await rows('[data-category="todo"]:not([data-kind="school"])'),[ids['回执']],where+' only the slip is a direct todo card on 10/19');
+ assert.equal(await p.locator('#task-groups [data-query-target="task:'+ids['塑料瓶']+'"]').count(),0,where+' the 10/20 bottle is no 10/19 card');
+ assert.match(await p.locator('[data-grove-upcoming]').innerText(),/10-20[^；]*塑料瓶/,where+' the bottle is named for 10/20 before its day');
 }
 async function eventually(check,label,timeout=10000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
 async function demoServer(){
@@ -177,7 +203,7 @@ async function demoServer(){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
    p.on('pageerror',e=>errors.push(e.message));
    try{
-    {const served=withProjection({...base,children:saved.children,today:day,tasks:saved.tasks,agent:{...base.agent,items:[]},today_calendar:saved.saved_calendars[day]});await p.route('**/api/state',route=>route.fulfill({json:served}))}
+    {const served=withProjection({...base,children:saved.children,today:day,tasks:saved.tasks,agent:{...base.agent,items:[]},today_calendar:saved.saved_calendars[day]});await serveState(p,served)}
     await p.goto(server.url,{waitUntil:'load'});
     await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready '+day);
     const card=scope=>scope.locator('[data-query-target="task:'+h01.id+'"]');
@@ -208,16 +234,16 @@ async function demoServer(){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
    p.on('pageerror',e=>errors.push(e.message));
    try{
-    {const served=withProjection({...base,children:flash.children,sources:flash.sources,today:'2026-10-19',tasks:flash.tasks,records:flash.records,agent:{...flash.agent,items:[]},today_calendar:flash.saved_calendar});await p.route('**/api/state',route=>route.fulfill({json:served}))}
+    {const served=withProjection({...base,children:flash.children,sources:flash.sources,today:'2026-10-19',tasks:flash.tasks,records:flash.records,agent:{...flash.agent,items:[]},today_calendar:flash.saved_calendar},['2026-10-20']);await serveState(p,served)}
     for(const pass of ['open','reopen','list']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
      await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Flash27 Today ready');
      if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
      else{
-      assert.equal(await p.locator('#task-groups article.grove-row[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups article.grove-row[data-category="todo"]:not([data-kind="school"])').count(),2);
+      await flashToday(p,ids,'Flash27 '+pass+' '+width);
       assert.match(await p.locator('#today-courses').innerText(),/当天课表尚未提供/,'the missing timetable stays said');
      }
-     for(const [key,want] of Object.entries(lines)){
+     const check=async(key,want)=>{
       const card=p.locator('[data-query-target="task:'+ids[key]+'"]'),saved=flash.tasks.find(t=>t.id===ids[key]);
       assert.equal(await card.count(),1,key+' one card');
       const item=await itemView(p,card,pass!=='list');assert.equal(item.title,saved.title,key+' title as saved');
@@ -233,8 +259,12 @@ async function demoServer(){
       assert.doesNotMatch(dates,/计划：/,key+' no made-up parent plan');roleOf('Flash27 '+pass+' '+width,key,dates);
       // Bringing the bottle to science class is that day's arrangement (the frozen T02 meaning), still no handback or deadline.
       if(key==='塑料瓶'){assert.match(dates,/安排日：2026-10-20/,'the bottle reads its science lesson day');assert.doesNotMatch(dates,/截止|交回/,'the bottle is no deadline or handback')}
-     }
-     assert.deepEqual(await p.locator('[data-query-target="task:'+ids['数格']+'"] [data-school-original-ref]').allInnerTexts(),['原件 1','原件 2'],'both math originals');
+      if(key==='数格')assert.deepEqual(item.refs,['原件 1','原件 2'],'both math originals');
+     };
+     // Today's direct cards first; the bottle arranged for 10/20 is opened on its own day from the week strip (the list pass lists all).
+     const later=pass==='list'?[]:['塑料瓶'];
+     for(const [key,want] of Object.entries(lines))if(!later.includes(key))await check(key,want);
+     if(later.length){await openDay(p,'2026-10-20');for(const key of later)await check(key,lines[key])}
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     }
     if(process.env.TODAY_UI_PROOF_DIR){await p.reload({waitUntil:'load'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','proof ready');await p.screenshot({path:path.join(process.env.TODAY_UI_PROOF_DIR,'flash27-today-'+width+'.png'),fullPage:true})}
@@ -253,19 +283,23 @@ async function demoServer(){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
    p.on('pageerror',e=>errors.push(e.message));
    try{
-    {const served=withProjection({...base,children:recovered.children,sources:recovered.sources,today:'2026-10-19',tasks:recovered.tasks,records:recovered.records,agent:{...recovered.agent,items:[]},today_calendar:recovered.saved_calendar});await p.route('**/api/state',route=>route.fulfill({json:served}))}
+    {const served=withProjection({...base,children:recovered.children,sources:recovered.sources,today:'2026-10-19',tasks:recovered.tasks,records:recovered.records,agent:{...recovered.agent,items:[]},today_calendar:recovered.saved_calendar},['2026-10-20']);await serveState(p,served)}
     for(const pass of ['open','reopen','list']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
      await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','recovered Today ready');
      if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
-     else{assert.equal(await p.locator('#task-groups article.grove-row[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups article.grove-row[data-category="todo"]:not([data-kind="school"])').count(),2)}
-     for(const [key,want] of Object.entries(recoveredLines)){
+     else await flashToday(p,rid,'recovered '+pass+' '+width)
+     const check=async(key,want)=>{
       const card=p.locator('[data-query-target="task:'+rid[key]+'"]'),saved=recovered.tasks.find(t=>t.id===rid[key]);
       assert.equal(await card.count(),1,key+' one card');const item=await itemView(p,card,pass!=='list');assert.equal(item.title,saved.title);
       assert.deepEqual(item.lines,want,pass+' '+width+' '+key+' recovered card lines');
       const text=item.text;assert.match(text,new RegExp(teacher[key]));
       if(key==='Unit 4'){assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');const dates=item.dates;assert.match(dates,/完成：2026-10-19[\s\S]*2026-10-20/);roleOf('recovered '+pass+' '+width,key,dates)}
-     }
+     };
+     // Today's direct cards first; the bottle arranged for 10/20 is opened on its own day from the week strip (the list pass lists all).
+     const later=pass==='list'?[]:['塑料瓶'];
+     for(const [key,want] of Object.entries(recoveredLines))if(!later.includes(key))await check(key,want);
+     if(later.length){await openDay(p,'2026-10-20');for(const key of later)await check(key,recoveredLines[key])}
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     }
     if(process.env.TODAY_UI_PROOF_DIR){await p.goto(server.url,{waitUntil:'load'});await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','proof ready');await p.screenshot({path:path.join(process.env.TODAY_UI_PROOF_DIR,'recovered-today-'+width+'.png'),fullPage:true})}
