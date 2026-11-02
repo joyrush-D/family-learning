@@ -1363,18 +1363,28 @@ def _count_only_latest(old_lines,old_title,shown,said,moved):
     return lines
 
 
-def _notice_count_latest(old_lines,old_title,notice,moved):
-    """The original lines with the one count the notice's own words change put in, read from the teacher's words alone, else
-    None. Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写 after 今晚听音频跟读Unit 9第1到6个单词，每词三遍 restates the same
-    action and object and gives one new count of the same unit (遍): every other unit of the original (听音频、每词、口头、不用
-    抄写) is unchanged and kept, whatever the model's own summary paraphrased (共两遍) or left out (听音频 in advice).
+def _polar_pieces(text,shared=True):
+    """(positive, negated) requirement pieces of text (_requirement_pieces), each clause read by its own polarity."""
+    pos,neg=[],[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',text or ''):
+        if clause.strip():(neg if _clause_negated(clause) else pos).extend(_requirement_pieces(clause,shared))
+    return pos,neg
+
+
+def _notice_count_change(old_lines,notice):
+    """(old count, new count, unit, the notice's own new words, (line, token)) of the one count the teacher's own notice
+    words change, else None. Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写 after 今晚听音频跟读Unit 9第1到6个单词，每词三遍
+    restates the same requirement unit with one new count of the same unit (遍): every other unit (听音频、每词、口头、不用抄写)
+    is unchanged, whatever a model summary paraphrased (共两遍), left out (听音频) or kept unchanged (每词三遍).
 
     notice is the notice's own sentence holding this item's quote. Apart from its narration (更正、刚才、仍然…), a restricting
-    只需/只要/仅 and that one count, every word of it must be the original's own: a new action, object, material, scope word
-    (共、整组) or a second changed count is no count-only change. The original writes its one count of that unit exactly once.
-    A moved date leaves the original's dated words stale."""
+    只需/只要/仅, the item's course name and that one count, each piece of it must restate ONE piece of the original of the
+    same polarity, as a date-only move must (_units_restated): characters gathered from several pieces are no proof. A new
+    action, object, material or scope word (共、整组), an exemption turned positive (不用抄写 → 抄写), a newly negated step
+    (不用听音频), actors swapped between two actions (家长跟读、孩子签字 after 孩子跟读、家长签字) or a second changed count is
+    no count-only change; nor is an old count of that unit not written exactly once in the original."""
     old='\n'.join(old_lines)
-    if not old_lines or not notice or moved and _UNIT_DAY_WORDS.search(old):return None
+    if not old_lines or not notice:return None
     counts=family_agent._school_counts;told=counts(notice);before=counts(old)
     changed=[(n,u) for n,u in told if u and (n,u) not in before]
     if len(changed)!=1:return None
@@ -1384,12 +1394,20 @@ def _notice_count_latest(old_lines,old_title,notice,moved):
     written=next((t[0] for t in _count_token({unit}).finditer(notice) if counts(t[0])=={(new,unit)}),'')
     if len(tokens)!=1 or not written:return None
     rest=re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token({unit}).sub(' ',_MOVE_NARRATION.sub(' ',notice.lower())))
-    # Each clause keeps its own polarity: a positive clause only restates the original's positive words, a negated one only its
-    # exemptions. Old words turned positive (不用抄写 → 抄写) or newly negated (不用听音频) are a changed unit, never count-only.
-    pos,neg=_polar_chars(old_title+'\n'+old)
-    for clause in re.split(r'[，,；;。！!？?\n]+',rest):
-        if clause.strip() and not _unit_chars(clause)<=(neg|_unit_chars('不用不必无需无须免别勿没未') if _clause_negated(clause) else pos):return None
-    i,t=tokens[0];lines=list(old_lines);lines[i]=lines[i][:t.start()]+written+lines[i][t.end():]
+    rest=re.sub(_subject_patterns()[2].pattern,' ',rest)
+    pos,neg=_polar_pieces(old);said_pos,said_neg=_polar_pieces(rest,False);negation=_unit_chars('不用不必无需无须免别勿没未')
+    if not all(any(piece<=unit for unit in pos) for piece in said_pos) or not all(any(piece<=unit|negation for unit in neg) for piece in said_neg):
+        return None
+    return was[0],new,unit,written,tokens[0]
+
+
+def _notice_count_latest(old_lines,old_title,notice,moved):
+    """The original lines with the one count the teacher's own notice words change put in (_notice_count_change), else None.
+    A moved date leaves the original's dated words stale."""
+    if moved and _UNIT_DAY_WORDS.search('\n'.join(old_lines)):return None
+    proof=_notice_count_change(old_lines,notice)
+    if proof is None:return None
+    i,t=proof[4];lines=list(old_lines);lines[i]=lines[i][:t.start()]+proof[3]+lines[i][t.end():]
     return lines
 
 
@@ -1573,6 +1591,14 @@ def _one_affair_versions(c,items,store):
                 fixed=_day_moved_latest(old_lines,task['title'],original,said,a.get('due_on',''),m.get('due_on',''),
                                         sent_day(str(a.get('published_at') or '')),sent_day(str(m.get('published_at') or '')))
             if fixed is None:why.append('新要求的归纳缺少原要求中未改的部分（'+'；'.join(lost)[:60]+'）')
+            else:lines,composed=fixed,True
+        # Latest words still stating the one count the teacher's own words change (只需跟读两遍 after 每句三遍), however complete
+        # otherwise, are the old requirement: the proven change is put in, else it stays review (_notice_count_change).
+        own_found=_notice_own_words(_saved_quote(c,item_id=x['id']),said)
+        implicit=_notice_count_change(old_lines,own_found) if rel['change']=='update' and not why and not lifted else None
+        if implicit and (implicit[0],implicit[2]) in family_agent._school_counts('\n'.join(lines)):
+            fixed=_notice_count_latest(old_lines,task['title'],own_found,moved)
+            if fixed is None:why.append('新要求仍写着通知已改掉的数量，与更正原文对不上')
             else:lines,composed=fixed,True
         # Latest words still stating a count the notice explicitly changed (由四遍改为一遍) are the old requirement: the
         # notice's own count goes into the original's one token of that unit, every other unit kept; else it stays review.

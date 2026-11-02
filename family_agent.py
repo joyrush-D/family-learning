@@ -3340,7 +3340,14 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
     if lifted and (unmet:=_exemption_unmet('\n'.join(old),own_words,shown)):
         # The notice requires what the original exempted (不用抄写 → 抄写); words still exempting or leaving it out are refused.
         raise AgentError('通知要求“'+unmet[:30]+'”，原要求写明不用；新要求的归纳未写入这项，原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
-    from family_agenda import _put_counts,_stated_count_changes
+    from family_agenda import _notice_count_change,_notice_count_latest,_put_counts,_stated_count_changes
+    moved=bool(exact_day(due)) and due!=task['agenda'].get('due_on','') if moves is None else moves
+    implicit=_notice_count_change(old,found) if not lifted else None
+    if implicit and (implicit[0],implicit[2]) in _school_counts(body):
+        # The candidate still states the one count the teacher's own words change (只需跟读两遍): the page's composition, else refused.
+        fixed=_notice_count_latest(old,task['title'],found,moved)
+        if fixed is None:raise AgentError('新要求仍写着通知已改掉的数量；原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
+        return '\n'.join(fixed)
     stated=_stated_count_changes(said)
     if stated and any((n,u) in _school_counts(body) for n,_,u,_ in stated):
         # The candidate still states a count the notice changed (由四遍改为一遍): the same composition the page shows, else refused.
@@ -3349,11 +3356,9 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
         return '\n'.join(fixed)
     lost=_unchanged_lost(old,shown,said,lifted)
     if not lost:return body
-    moved=bool(exact_day(due)) and due!=task['agenda'].get('due_on','') if moves is None else moves
     fixed=_count_only_latest(old,task['title'],shown,said,moved)
     if fixed is None:
         # The same teacher-words composition the day projection shows (_notice_count_latest).
-        from family_agenda import _notice_count_latest
         fixed=_notice_count_latest(old,task['title'],found,moved) if not lifted else None
     if fixed is None and moved and connection is not None:
         # The same date-only composition the day projection shows (_day_moved_latest), from the task's own original.
