@@ -77,7 +77,7 @@ async function saveThroughFailures(page,dialog,form,count){
     {
      // The existing generic task form ("修改标题 / 日期") shows the teacher handback day and sends it back unchanged; one 503
      // before any write and one lost receipt resend the same key; the copy is not saved as the parent's own deadline.
-     const card=p.locator('article.task').filter({hasText:title}).first();await card.locator('details.task-more > summary').click();await card.locator('[data-task-focus]').click();
+     const groveDetail=async t=>{const d=p.locator('#groveDetail');if(!await d.getByRole('heading',{name:t}).first().isVisible().catch(()=>false))await p.locator('article.grove-row').filter({hasText:t}).first().locator('[data-grove-open]').click();await d.getByRole('heading',{name:t}).first().waitFor();return d};const groveShown=async t=>{const row=p.locator('article.grove-row').filter({hasText:t}).first();await row.waitFor();const listed=await row.innerText();return listed+'\n'+await(await groveDetail(t)).innerText()};const card=await groveDetail(title);await card.locator('details.grove-more > summary').click();await card.locator('[data-task-focus]').click();
      const fd=p.locator('#taskFocusDialog'),ff=p.locator('#taskFocusForm'),bodies=[];let phase=0;
      assert.equal(await ff.locator('[name="due_on"]').inputValue(),handback);await ff.locator('[name="next_action"]').fill('先核对原要求 '+width);await fit(p);await proof(p,'parent-task-form-'+width);
      await p.route('**/api/task/focus',async r=>{bodies.push(r.request().postData());phase++;
@@ -94,7 +94,7 @@ async function saveThroughFailures(page,dialog,form,count){
      const focused=await current();
      assert.deepEqual([focused.focus.version,focused.focus.due_on,focused.focus.next_action,focused.agenda.due_on,focused.agenda.due_kind,focused.agenda.scheduled_on],[1,'','先核对原要求 '+width,handback,'handback',day]);
      // A stale task form (saved elsewhere meanwhile) is rejected with 409 before any write; the typed input stays.
-     const reopenedCard=p.locator('article.task').filter({hasText:title}).first();await reopenedCard.locator('details.task-more').evaluate(x=>x.open=true);await reopenedCard.locator('[data-task-focus]').click();
+     const reopenedCard=await groveDetail(title);await reopenedCard.locator('details.grove-more').evaluate(x=>x.open=true);await reopenedCard.locator('[data-task-focus]').click();
      await post('task/focus',{id:focused.id,version:1,request_key:'synthetic-stale-'+width,mode:'next',next_action:'另一台设备 '+width,waiting_for:'',review_on:''});
      await ff.locator('[name="next_action"]').fill('本机输入 '+width);await ff.locator('[type="submit"]').click();
      await eventually(async()=>/已在别处更新/.test(await fd.innerText()),'stale task form 409 shown');
@@ -118,8 +118,8 @@ async function saveThroughFailures(page,dialog,form,count){
      const again=await current();
      assert.deepEqual([again.agenda.complete_on,again.agenda.due_on,again.agenda.due_kind,again.agenda.scheduled_on,again.focus.due_on,again.focus.next_action],[next.complete_on,next.handback_on,next.handback_on?'handback':'',day,'','另一台设备 '+width]);
      // Reopened Today reads the same saved days: after the clear no handback/deadline is left from the task-form copy.
-     await p.goto(host.url);const reopened=p.locator('article.task').filter({hasText:title}).first();await reopened.waitFor();const shown=await reopened.innerText();
-     if(next.handback_on)assert.match(shown,new RegExp(later));else{assert.doesNotMatch(shown,new RegExp(handback+'|交回'));assert.match(shown,/截止待核对/);assert.match(shown,new RegExp('完成：'+later))}
+     await p.goto(host.url);const shown=await groveShown(title);
+     if(next.handback_on)assert.match(shown,new RegExp(later));else{assert.doesNotMatch(shown,new RegExp(handback+'|交回'));assert.match(shown,/截止待核对|日期未写明/);assert.match(shown,new RegExp('完成[：\\s]*(今天 )?'+later))}
      await fit(p);await proof(p,'parent-after-correct-'+width);
      assert.equal((await study()).filter(i=>i.title===title).length,1,'same one item after correction');
     }
@@ -130,7 +130,7 @@ async function saveThroughFailures(page,dialog,form,count){
      const raceTitle='数学：虚构口算 '+width,dayA=shift(day,5),dayB=shift(day,6);
      await post('study/item',{child_id:who.id,day,title:raceTitle,request_key:'synthetic-race-create-'+width,report:{text:'虚构原话：'+dayA+'交回',goal:'口算虚构第2页',attachments:[],complete_on:'',handback_on:dayA}});
      const raced=async()=>(await(await fetch(host.url+'api/state')).json()).tasks.find(t=>t.title===raceTitle);
-     await p.goto(host.url);const card=p.locator('article.task').filter({hasText:raceTitle}).first();await card.waitFor();await card.locator('details.task-more > summary').click();await card.locator('[data-task-focus]').click();
+     const groveDetail=async t=>{const d=p.locator('#groveDetail');if(!await d.getByRole('heading',{name:t}).first().isVisible().catch(()=>false))await p.locator('article.grove-row').filter({hasText:t}).first().locator('[data-grove-open]').click();await d.getByRole('heading',{name:t}).first().waitFor();return d};const groveShown=async t=>{const row=p.locator('article.grove-row').filter({hasText:t}).first();await row.waitFor();const listed=await row.innerText();return listed+'\n'+await(await groveDetail(t)).innerText()};await p.goto(host.url);const card=await groveDetail(raceTitle);await card.locator('details.grove-more > summary').click();await card.locator('[data-task-focus]').click();
      const fd=p.locator('#taskFocusDialog'),ff=p.locator('#taskFocusForm');
      assert.equal(await ff.locator('[name="due_on"]').inputValue(),dayA);await ff.locator('[name="next_action"]').fill('两会话草稿 '+width);
      const otherSession=await browser.newContext({viewport:{width,height:900}}),q=await otherSession.newPage();
@@ -151,7 +151,7 @@ async function saveThroughFailures(page,dialog,form,count){
       now=await raced();assert.deepEqual([now.focus.due_on,now.focus.next_action,now.agenda.due_on,now.agenda.due_kind,now.agenda.scheduled_on],['','两会话草稿 '+width,dayB,'handback',day]);
       await studyEdit('');
       now=await raced();assert.deepEqual([now.id,now.agenda.due_on,now.agenda.due_kind,now.focus.due_on,now.agenda.scheduled_on],[(await study()).find(i=>i.title===raceTitle).id,'','','',day],'no old teacher day returns');
-      await p.goto(host.url);const shown=await p.locator('article.task').filter({hasText:raceTitle}).first().innerText();assert.doesNotMatch(shown,new RegExp(dayA+'|'+dayB));
+      await p.goto(host.url);const shown=await groveShown(raceTitle);assert.doesNotMatch(shown,new RegExp(dayA+'|'+dayB));
       await fit(p);await proof(p,'parent-race-cleared-'+width);
       assert.equal((await study()).filter(i=>i.title===raceTitle).length,1,'same one item');
      }finally{await otherSession.close()}
