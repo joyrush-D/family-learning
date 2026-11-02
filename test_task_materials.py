@@ -165,11 +165,14 @@ class UploadReceiptTests(unittest.TestCase):
 
     def test_concurrent_requests_with_one_key_store_at_most_one_original(self):
         before=len(self.uploads());same=[];mixed=[]
-        def run(target,body,key): target.append(self.post(body,key=key))
-        threads=[threading.Thread(target=run,args=(same,PNG,'synthetic-upload-key-0005')) for _ in range(6)]
-        threads+=[threading.Thread(target=run,args=(mixed,body,'synthetic-upload-key-0006')) for body in (PNG,PNG+b'synthetic-x')*3]
-        for t in threads: t.start()
-        for t in threads: t.join()
+        def wave(target,bodies,key):  # 4 at once stays within the test server's listen backlog: every request is answered
+            start=threading.Barrier(len(bodies))
+            def run(body): start.wait();target.append(self.post(body,key=key))
+            threads=[threading.Thread(target=run,args=(body,)) for body in bodies]
+            for t in threads: t.start()
+            for t in threads: t.join()
+        wave(same,[PNG]*4,'synthetic-upload-key-0005');wave(mixed,[PNG,PNG+b'synthetic-x']*2,'synthetic-upload-key-0006')
+        self.assertEqual((len(same),len(mixed)),(4,4))
         self.assertEqual(({s for s,_ in same},len({v['attachment']['id'] for _,v in same})),({200},1))
         won={v['attachment']['id'] for s,v in mixed if s==200}
         self.assertEqual((len(won),{s for s,_ in mixed}<={200,409}),(1,True),mixed)
