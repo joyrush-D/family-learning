@@ -489,7 +489,12 @@ class ScopedDoubtImageChainTests(_ScopeBase):
                 self.assertTrue(failed['error'])
                 self._as_saved_before_scopes()
                 self.reads.side_effect=[scope.swap(self._receipt(copy.deepcopy(scope.FIX),self.SCOPES)['call_1'],self.upload)]
-                mapped=self.calls.count('family_school_task');at=2 if case=='cooling' else 3*day
+                mapped=self.calls.count('family_school_task')
+                # remaining: just after the failed mapping's own retry time (the same day, so no deadline has passed);
+                # cooling: before it; exhausted: any later time.
+                retry=int((dt.datetime.fromisoformat(failed['next_try'])-self.now).total_seconds()//60)+1 if failed['next_try'] else 2
+                at={'remaining':retry,'cooling':1,'exhausted':3*day}[case]
+                if case=='cooling':self.assertGreater(retry,at+1)
                 self._later((at,at+1))
                 with self.store._db() as c:after=dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(task_key,)).fetchone())
                 self.assertEqual(self.reads.call_count,2)  # the supplement read itself happens
