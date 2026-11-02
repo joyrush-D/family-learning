@@ -88,7 +88,7 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
     def cards(self, view, word):
         return [r for r in self.rows(view) if word in r['title']] + [u for u in view['upcoming'] if word in u['title']]
 
-    def english_day(self, touched=False):
+    def english_day(self, touched=False, correction=CORRECTION, dictation=('周五课堂听写仍在课内，范围还没定', '周五课堂听写仍在课内，听写范围还没定。')):
         r201, r202 = 'message:%s:201' % EN, 'message:%s:202' % EN
         self.batch(EN, [msg('201', READING, '17:00')], lambda targets, pending: [
             proposal(r201, '今晚听录音跟读Lesson8第2–7词，每词四遍，不用抄写', '英语：听录音跟读Lesson8第2–7词',
@@ -108,9 +108,10 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
             dictation = next(p['id'] for p in pending if '听写' in p['title'])
             return [proposal(r202, '跟读改每词三遍，不用抄写', '英语：跟读每词三遍', '跟读每词三遍。\n不用抄写。', state='review',
                              change='update', target=task),
-                    proposal(r202, '周五课堂听写仍在课内，范围还没定', '英语：周五课堂听写', '周五课堂听写仍在课内，听写范围还没定。',
+                    proposal(r202, dictation_words[0], '英语：周五课堂听写', dictation_words[1],
                              state='review', change='same', target=dictation, due=FRI)]
-        self.batch(EN, [msg('202', CORRECTION, '20:30')], replies)
+        dictation_words = dictation
+        self.batch(EN, [msg('202', correction, '20:30')], replies)
         return reading, first[0]['id']
 
     def test_request_lists_pending_items_apart_from_saved_tasks(self):
@@ -229,6 +230,44 @@ class PendingIdentitySnapshotTests(unittest.TestCase):
             shown = row['title'] + '\n' + '\n'.join(row['lines'])
             self.assertIn('两个干净的空纸盒', shown); self.assertIn('周四', shown)
 
+
+    # Root native preflight: a future classroom item still waiting for its scope, reminded again unchanged, is one short
+    # upcoming line before its day (its own id) and its full card on that day; a notice changing it is never folded away.
+    def test_pending_classroom_restated_unchanged_is_one_upcoming_line_until_its_own_day(self):
+        _, earlier = self.english_day()
+        for day in (DAY, THU):
+            for view in self.views(day):
+                self.assertEqual([r['title'] for r in self.rows(view) if '听写' in r['title']], [], 'no full row before its day')
+                entry, = [u for u in view['upcoming'] if '听写' in u['title']]
+                self.assertEqual((entry['id'], entry['day'], entry['pending_review']), (earlier, FRI, True))
+        for view in self.views(FRI):
+            row, = [r for r in self.rows(view) if '听写' in r['title']]
+            self.assertEqual((row['id'], row['version']['state'], row['version'].get('restated')), (earlier, 'review', True))
+            self.assertEqual({p['ref'] for p in row['publications']}, {'message:%s:201' % EN, 'message:%s:202' % EN})
+            self.assertIn('范围另行通知', '\n'.join(row['lines'])); self.assertNotIn('确认后才改', row['version']['note'])
+            self.assertEqual([n['id'] for n in row['version']['notices']], [row['version']['pending_id']])
+
+    def _changed_classroom_listed(self, said):
+        _, earlier = self.english_day(correction='跟读改每词三遍，不用抄写；' + said + '。', dictation=(said, said + '。'))
+        notice, = [i for i in self.items_for('message:%s:202' % EN) if '听写' in i['title']]
+        self.assertEqual(notice['plan']['school_pending_of']['item_id'], earlier, 'the notice is bound to the pending card')
+        for view in self.views(DAY):
+            self.assertEqual([u['title'] for u in view['upcoming'] if '听写' in u['title']], [], 'a changing notice is never a short line')
+            row, = [r for r in self.rows(view) if '听写' in r['title']]
+            self.assertEqual((row['id'], row['version']['state']), (earlier, 'review')); self.assertNotIn('restated', row['version'])
+            self.assertIn('确认后才改', row['version']['note'])
+
+    def test_pending_classroom_notice_changing_its_own_requirement_stays_in_full(self):
+        self._changed_classroom_listed('周五课堂听写改为听写第2–4词')
+
+    def test_pending_classroom_notice_cancelling_it_stays_in_full(self):
+        self._changed_classroom_listed('周五课堂听写取消')
+
+    def test_pending_classroom_notice_adding_a_step_stays_in_full(self):
+        self._changed_classroom_listed('周五课堂听写范围还没定，听写后家长签字')
+
+    def test_pending_classroom_notice_naming_another_unit_stays_in_full(self):
+        self._changed_classroom_listed('周五课堂听写Lesson9的单词')
 
 if __name__ == '__main__':
     unittest.main()

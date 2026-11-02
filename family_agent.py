@@ -2973,6 +2973,32 @@ def _school_same_own(text, others, own):
     return rest,[text[a:b] for a,b in sorted(spans)]
 
 
+_SCHOOL_CHANGED_REASON='提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。'
+
+
+def _school_restated_reason(said, facts, summary):
+    """Why a reminder's own requirement words do not restate the affair, '' when they do: a change, new round or extra
+    requirement it says itself, a requirement or standard the affair does not state, a swapped doer, or a unit, title, number
+    or count the affair's own words and originals do not state, in its words or in the summary shown. One contract for a saved
+    task (_school_same_brief) and a still-pending item (family_agenda._one_pending_affair): a restatement reads the same before
+    and after acceptance."""
+    if _school_same_changes(said,facts):return _SCHOOL_CHANGED_REASON
+    if _school_same_unstated(said,facts):return '提醒写了原事项没有的要求或完成标准，不能只当作重复提醒；原事项和提醒原文都保留。'
+    if _school_units_differ(said,facts):return '提醒中由谁做哪一步与原事项不一致（主体和动作对调或改变），不能当作重复提醒；原事项和提醒原文都保留。'
+    old=_school_counts(facts)
+    for value in (said,summary):
+        if (not _school_named_objects(value).issubset(_school_named_objects(facts))
+                or any(not any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(value))):
+            return '提醒中的单元、篇目、题号、页码或次数与原事项不一致，可能是另一项；原事项和提醒原文都保留。'
+    return ''
+
+
+def _school_same_new_step(said, facts):
+    """A clear step (交、读、签字…) the reminder says that the affair's own words and originals do not."""
+    spoken,saved=_school_same_spoken(said),_school_same_spoken(facts)
+    return any(re.search(group,spoken) and not re.search(group,saved) for group in _SCHOOL_SAME_STEPS)
+
+
 def _school_same_brief(brief, evidence, targets, others=()):
     """The same concrete affair reminded again links its one saved task as provenance; requirements, date and state stay.
 
@@ -3006,19 +3032,11 @@ def _school_same_brief(brief, evidence, targets, others=()):
     text=own;facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
     # Requirement units only: the reminder's proven relation clauses (元话语) state no change, count or step of this affair.
     said,relation=_school_relation_body(text)
-    if _school_same_changes(said,facts) or brief.get('purpose') not in ('learning','admin'):
-        uncertain('提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。');return
-    if _school_same_unstated(said,facts):
-        uncertain('提醒写了原事项没有的要求或完成标准，不能只当作重复提醒；原事项和提醒原文都保留。');return
-    if _school_units_differ(said,facts):
-        uncertain('提醒中由谁做哪一步与原事项不一致（主体和动作对调或改变），不能当作重复提醒；原事项和提醒原文都保留。');return
-    old=_school_counts(facts)
-    for value in (said,brief['title']+' '+_school_relation_body(brief['goal'])[0]):
-        if (not _school_named_objects(value).issubset(_school_named_objects(facts))
-                or any(not any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(value))):
-            uncertain('提醒中的单元、篇目、题号、页码或次数与原事项不一致，可能是另一项；原事项和提醒原文都保留。');return
-    spoken,saved=_school_same_spoken(said),_school_same_spoken(facts)
-    if any(re.search(group,spoken) and not re.search(group,saved) for group in _SCHOOL_SAME_STEPS):
+    problem=(_SCHOOL_CHANGED_REASON if brief.get('purpose') not in ('learning','admin') else
+             _school_restated_reason(said,facts,brief['title']+' '+_school_relation_body(brief['goal'])[0]))
+    if problem:
+        uncertain(problem);return
+    if _school_same_new_step(said,facts):
         # Same object, counts and dates, plus a clear step the task does not state: a supplement of this one affair. It is
         # confirmed onto the same task through the existing append review (version checked), never a second affair or dropped.
         brief.update(change='append',state='review',reason='同一事项的再次提醒另有补充要求，确认后补入原事项；原要求、安排、反馈和提醒原文都保留。')
@@ -7642,6 +7660,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if pending_target is not None:
                 link=pending_link if pending_link and brief.get('state')!='reference' else None
                 if link:
+                    if link['change']=='same':
+                        # Another item's own clauses of this notice, set aside by the saved-task reminder's own proof
+                        # (_school_same_own), are kept verbatim and proven again where the card is read (_one_pending_affair).
+                        _,siblings=_school_same_own('\n'.join(e.get('text','') for e in evidence if e['ref'] in {q['ref'] for q in cited}),
+                                                    [q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{q['ref'] for q in cited}],
+                                                    str(pending_target.get('title') or '')+'\n'+str(pending_target.get('goal') or ''))
+                        if siblings:link=dict(link,sibling_quotes=siblings)
                     # Bound to the earlier pending item's identity: shown on its one card, never accepted by this link.
                     item.setdefault('plan',{})['school_pending_of']=link
                     if brief['state']=='ready':brief['state']='review'

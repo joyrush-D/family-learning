@@ -1101,11 +1101,12 @@ def snapshot(app,start,end):
                           if brief.get('change') in ('update','append') and brief.get('target_id') else None)
                 link=plan.get('school_pending_of') if isinstance(plan.get('school_pending_of'),dict) else None
                 link=dict(target=str(link.get('item_id') or ''),change=str(link.get('change') or ''),refs=refs,title=str(brief.get('title') or row['title']),
-                          lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12]) if link else None
+                          lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12],
+                          siblings=[q for q in link.get('sibling_quotes') or [] if isinstance(q,str)]) if link else None
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {}),
                     **({'pending_link':link} if link else {})))
-            items=_one_pending_affair(c,items)
+            items=_one_pending_affair(c,items,store)
             items=_one_affair_versions(c,items,store)
         study=[]
         if 'study_items' in tables:
@@ -1548,7 +1549,33 @@ def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent
     return lines
 
 
-def _one_pending_affair(c,items):
+def _pending_restated(c,store,root,group,links):
+    """Every later notice of a still-pending item proven to restate its requirement unchanged, read from the stored originals:
+    the selection's link proof (same publisher and source, later, same object and day) plus the one restatement contract of a
+    saved task's reminder (family_agent._school_restated_reason and _school_same_new_step on the notice's own words, another
+    item's proven clauses set aside by _school_same_own), each notice and original wholly read, its due the item's own or none
+    and no day word the item's words and originals do not hold. Anything else is a change or a doubt and stays for review."""
+    if store is None:return False
+    a=root['agenda'];child=root['child_ids'][0];words=root['title']+'\n'+str(root.get('body') or '')
+    own=[p.get('ref','') for p in a.get('publications') or [] if str(p.get('ref','')).startswith('message:')]
+    originals=[str((_message(c,r)[0] or {}).get('text') or '') for r in own]
+    if not own or not all(originals):return False
+    facts=words+'\n'+'\n'.join(originals)
+    for n in group:
+        link=links[n['id']]
+        if link['change']!='same' or not link['refs'] or (n['agenda'].get('due_on') or '') not in ('',a.get('due_on') or ''):return False
+        if not all(_wholly_read(c,store,child,r) for r in list(link['refs'])+own):return False
+        said='\n'.join(str((_message(c,r)[0] or {}).get('text') or '') for r in link['refs'])
+        mine,_=family_agent._school_same_own(said,link.get('siblings') or (),words)
+        if not mine.strip() or not family_agent._school_same_object(mine,words):return False
+        body=family_agent._school_relation_body(mine)[0]
+        summary=link['title']+' '+family_agent._school_relation_body('\n'.join(link['lines']))[0]
+        if family_agent._school_restated_reason(body,facts,summary) or family_agent._school_same_new_step(body,facts):return False
+        if any(w not in facts for w in family_agent._SCHOOL_DATE_MENTION.findall(mine)):return False
+    return True
+
+
+def _one_pending_affair(c,items,store=None):
     """A later notice bound to an earlier pending school item (school_pending_of, the program's own proof at selection) is
     that affair's notice, never a second card. While the earlier item is pending, its one card keeps its own title, lines
     and dates, gains every notice's publications and a review note, and all stay pending for the parent; once the earlier
@@ -1571,6 +1598,8 @@ def _one_pending_affair(c,items):
             x['relation']=dict(change=link['change'],target_id=row['task_id'],refs=link['refs'],title=link['title'],lines=link['lines'])
     for target,group in groups.items():
         root=pending[target];a=root['agenda'];pubs=list(a.get('publications') or [])
+        # A proven unchanged reminder asks the parent nothing new: the item keeps its own pending state, words and days.
+        restated=_pending_restated(c,store,root,group,links)
         for n in group:pubs+=[p for p in n['agenda'].get('publications') or [] if p not in pubs]
         root['agenda']=dict(a,publications=pubs)
         root['version']=dict(state='review',pending_id=group[0]['id'],
@@ -1578,8 +1607,10 @@ def _one_pending_affair(c,items):
                           due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on','')),
             notices=[dict(id=n['id'],change=links[n['id']]['change'],title=links[n['id']]['title'],lines=links[n['id']]['lines'],
                           publications=publications(n['agenda']),published_at=str(n['agenda'].get('published_at') or '')) for n in group],
-            reasons=['同一待核事项有后续通知'],
-            note='同一事项有后续通知（'+str(len(group))+'条）待核对；原要求、日期和全部原文都保留，原文未写明的范围和日期仍未知，确认后才改。')
+            reasons=['同一待核事项有后续通知']+(['是同一事项的再次提醒，要求未变'] if restated else []),
+            note=('同一事项再次提醒（'+str(len(group))+'条），要求未变；原要求、日期和全部原文都保留，原文未写明的范围和日期仍未知。' if restated else
+                  '同一事项有后续通知（'+str(len(group))+'条）待核对；原要求、日期和全部原文都保留，原文未写明的范围和日期仍未知，确认后才改。'),
+            **({'restated':True} if restated else {}))
     attached={n['id'] for g in groups.values() for n in g}
     return [x for x in items if x['id'] not in attached]
 
@@ -1913,11 +1944,12 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
     rows, closed_rows = group([(row(x), False) for x in open_rows] + [(row(x), True) for x in closed_rows])
     # A later lesson-day item (bring, in-class check, event) or a later item still waiting for its scope (待核对) the family
     # has not touched is not this day's work: it is listed in full on its own day and only named in one short 即将/待补 line
-    # before it. Anything with family progress, a record, a new version or no exact later date stays listed every day.
+    # before it. Anything with family progress, a record, a new version or no exact later date stays listed every day; a
+    # pending item's proven unchanged reminder (version restated, _pending_restated) is no new version of its requirement.
     def upcoming(r):
         due = next((f for f in r['facts'] if f.get('role') == 'due' and f.get('known')), None)
         return (r['when'] == 'later' and not r['closed'] and not r['records'] and not r['wrong'] and not r.get('progress')
-                and (r.get('version') or {}).get('state', 'latest') == 'latest'
+                and ((r.get('version') or {}).get('state', 'latest') == 'latest' or (r.get('version') or {}).get('restated') is True)
                 and not r.get('members') and not r.get('times') and r['status'] in ('', '待跟进', '待办', '待核对', '未开始')
                 and (r['pending_review'] or bool(due and due.get('kind') in ('event', 'inspection', 'arranged'))))
     later = [dict(id=r['id'], task_id=r['task_id'], title=r['title'], subject=r['subject'], pending_review=r['pending_review'],
