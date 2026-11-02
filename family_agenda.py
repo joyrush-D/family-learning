@@ -1272,13 +1272,17 @@ def _unchanged_lost(old_lines,shown,said):
     units={u for _,u in family_agent._school_counts(said) if u}
     renamed=bool(family_agent._school_named_objects(said)-family_agent._school_named_objects('\n'.join(old_lines)))
     have=_unit_chars(shown);lost=[];written=re.sub(r'\s+','',(shown or '').lower())
+    # A count the notice replaces (三遍 → 两遍) is no unchanged standard: a lost clause is named without it (每词).
+    told=family_agent._school_counts(said)
+    replaced=_count_token(units) if units else None
+    label=lambda clause:re.sub(r'\s+','',replaced.sub(lambda t:'' if family_agent._school_counts(t[0])-told else t[0],clause)) if replaced else clause
     changed=[(a,b) for a,b in _explicit_replacements(said,'\n'.join(old_lines)) if b in written]
     for clause in re.split(r'[，,；;。！!？?\n]+','\n'.join(old_lines)):
         core=clause.lower()
         for a,b in changed:core=core.replace(a,b)
         if units:core=_count_token(units).sub(' ',core)
         if renamed:core=family_agent._SCHOOL_NAMED.sub(' ',core)
-        if _unit_chars(core)-have:lost.append(clause.strip()[:24])
+        if _unit_chars(core)-have:lost.append(label(clause.strip())[:24])
     return lost
 
 
@@ -1321,6 +1325,37 @@ def _count_only_latest(old_lines,old_title,shown,said,moved):
         i,t=tokens[0];lines[i]=lines[i][:t.start()]+written+lines[i][t.end():];changed=True
     if not changed or not _unit_chars(shown)<=_unit_chars(old_title+'\n'+'\n'.join(lines)):return None
     return lines
+
+
+def _notice_count_latest(old_lines,old_title,notice,moved):
+    """The original lines with the one count the notice's own words change put in, read from the teacher's words alone, else
+    None. Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写 after 今晚听音频跟读Unit 9第1到6个单词，每词三遍 restates the same
+    action and object and gives one new count of the same unit (遍): every other unit of the original (听音频、每词、口头、不用
+    抄写) is unchanged and kept, whatever the model's own summary paraphrased (共两遍) or left out (听音频 in advice).
+
+    notice is the notice's own sentence holding this item's quote. Apart from its narration (更正、刚才、仍然…), a restricting
+    只需/只要/仅 and that one count, every word of it must be the original's own: a new action, object, material, scope word
+    (共、整组) or a second changed count is no count-only change. The original writes its one count of that unit exactly once.
+    A moved date leaves the original's dated words stale."""
+    old='\n'.join(old_lines)
+    if not old_lines or not notice or moved and _UNIT_DAY_WORDS.search(old):return None
+    counts=family_agent._school_counts;told=counts(notice);before=counts(old)
+    changed=[(n,u) for n,u in told if u and (n,u) not in before]
+    if len(changed)!=1:return None
+    new,unit=changed[0];was=[n for n,u in before if u==unit]
+    if len(was)!=1 or was[0]==new or len([n for n,u in told if u==unit])!=1:return None
+    tokens=[(i,t) for i,l in enumerate(old_lines) for t in _count_token({unit}).finditer(l) if counts(t[0])=={(was[0],unit)}]
+    written=next((t[0] for t in _count_token({unit}).finditer(notice) if counts(t[0])=={(new,unit)}),'')
+    if len(tokens)!=1 or not written:return None
+    rest=re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token({unit}).sub(' ',_MOVE_NARRATION.sub(' ',notice.lower())))
+    if not _unit_chars(rest)<=_unit_chars(old_title+'\n'+old):return None
+    i,t=tokens[0];lines=list(old_lines);lines[i]=lines[i][:t.start()]+written+lines[i][t.end():]
+    return lines
+
+
+def _notice_own_words(quote,said):
+    """The notice's own sentence(s) holding an item's verified quote; '' when the quote is not found in the notice."""
+    return family_agent._school_own_sentences(quote,said) if quote and quote in (said or '') else ''
 
 
 # Words a notice uses to narrate a move of the original itself (前面通知带的瓶也下周一再带，今晚仍不用填写): a move verb, a
@@ -1487,6 +1522,9 @@ def _one_affair_versions(c,items,store):
         lost=_unchanged_lost(old_lines,shown,said) if rel['change']=='update' and not why else []
         if lost:
             fixed=_count_only_latest(old_lines,task['title'],shown,said,moved)
+            if fixed is None:
+                # The model's summary may paraphrase or drop an unchanged unit; the teacher's own words still prove the change.
+                fixed=_notice_count_latest(old_lines,task['title'],_notice_own_words(_saved_quote(c,item_id=x['id']),said),moved)
             if fixed is None and moved:
                 fixed=_day_moved_latest(old_lines,task['title'],original,said,a.get('due_on',''),m.get('due_on',''),
                                         sent_day(str(a.get('published_at') or '')),sent_day(str(m.get('published_at') or '')))

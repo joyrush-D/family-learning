@@ -3345,6 +3345,10 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
     if not lost:return body
     moved=bool(exact_day(due)) and due!=task['agenda'].get('due_on','') if moves is None else moves
     fixed=_count_only_latest(old,task['title'],shown,said,moved)
+    if fixed is None:
+        # The same teacher-words composition the day projection shows (_notice_count_latest).
+        from family_agenda import _notice_count_latest,_notice_own_words,_stored_date_quote
+        fixed=_notice_count_latest(old,task['title'],_notice_own_words(_stored_date_quote(plan),said),moved)
     if fixed is None and moved and connection is not None:
         # The same date-only composition the day projection shows (_day_moved_latest), from the task's own original.
         from family_agenda import _day_moved_latest,_message,sent_day
