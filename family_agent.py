@@ -9493,7 +9493,9 @@ def _refresh_school(app, store, now, budget):
             # The claim's own decision without taking it; a lookup failure below still precedes the claim and spends no attempt.
             # After a scope supplement of a cited original, a mapping whose job already exists (mapped before, or an initial mapping
             # that failed or waits) keeps that job's attempts, backoff and history: never a new budget. A first mapping has none.
-            inherit=_school_scope_supplemented(store,row) and _school_job_exists(store,key)
+            # A mapped action always does (one without its own job is left to the action holding it); an unmapped candidate
+            # does once its job exists; only a never-claimed first mapping takes the first-read path.
+            inherit=supplemented or (_school_scope_supplemented(store,row) and _school_job_exists(store,key))
             if not (store._job_supplement(key,value,now,claim=False) if inherit else
                     store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread),claim=False)): continue
             targets=school_targets(app,store,row['child_id'])
