@@ -119,12 +119,12 @@ import Foundation
         // 8 口头补录的提交内容：科目可后补；老师要求的完成日、交回日分开，未知留空；做的日子不当作老师日期。
         let oral = WorkspaceStore.oralBody(child: "child-2", day: today, key: "synthetic-oral-key-0001", version: 3, subject: " ", what: "  读课文两遍\n家长签字  ",
                                            completeOn: next, handbackOn: "")
-        let report = oral["report"] as? [String: Any] ?? [:]
-        seen["oral_body"] = ["title": oral["title"] as? String ?? "", "subject": oral["subject"] as? String ?? "?", "complete_on": report["complete_on"] as? String ?? "?",
-                             "handback_on": report["handback_on"] as? String ?? "?", "day": oral["day"] as? String ?? ""]
-        expect(oral["subject"] as? String == "" && oral["title"] as? String == "读课文两遍" && report["text"] as? String == "读课文两遍\n家长签字",
+        let oralReport = oral["report"] as? [String: Any] ?? [:]
+        seen["oral_body"] = ["title": oral["title"] as? String ?? "", "subject": oral["subject"] as? String ?? "?", "complete_on": oralReport["complete_on"] as? String ?? "?",
+                             "handback_on": oralReport["handback_on"] as? String ?? "?", "day": oral["day"] as? String ?? ""]
+        expect(oral["subject"] as? String == "" && oral["title"] as? String == "读课文两遍" && oralReport["text"] as? String == "读课文两遍\n家长签字",
                "科目留空也能补录，标题取要做什么的第一行")
-        expect(report["complete_on"] as? String == next && report["handback_on"] as? String == "" && oral["day"] as? String == today
+        expect(oralReport["complete_on"] as? String == next && oralReport["handback_on"] as? String == "" && oral["day"] as? String == today
                && oral["request_key"] as? String == "synthetic-oral-key-0001" && oral["version"] as? Int == 3, "完成日与交回日分开，未知留空，做的日子不当老师日期")
         await settle { store.change(child: "child-1") }
         snapshot("child_one_today")
