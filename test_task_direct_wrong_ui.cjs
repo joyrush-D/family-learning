@@ -73,14 +73,20 @@ async function proof(p, name) {
       try {
         const state = async () => (await fetch(host.url + 'api/state')).json();
         const first = await state(), [a, b] = first.children;
+        // The demo family already holds its own records: they stay exactly as they were and never count toward this chain.
+        const view = r => JSON.stringify([r.id, r.child, r.day, r.source, r.title, r.note, r.attachments, r.linked_task_id ?? '', r.related_record_id ?? null, r.followup_kind ?? '']);
+        const prior = first.records.map(view);
         const make = async (child, title) => {
           const r = await fetch(host.url + 'api/task/new', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Family-Token': first.token},
             body: JSON.stringify({request_key: randomUUID(), child, title, category: 'homework', box: 'inbox', due: first.today, action: '完成虚构口算第1至5题'})});
           assert.equal(r.status, 200); return (await r.json()).task.id;
         };
         const id = await make(a.name, `虚构同名口算 ${width}`), sibling = await make(b.name, `虚构同名口算 ${width}`);
-        const wrongOf = async () => (await state()).records.filter(r => r.source === '错题照片核对');
-        assert.equal((await state()).records.length, 0, 'no feedback is pre-made');
+        const linked = async taskId => (await state()).records.filter(r => r.linked_task_id === taskId || r.source === '事项:' + taskId);
+        const wrongOf = async () => (await linked(id)).filter(r => r.source === '错题照片核对');
+        assert.deepEqual(await linked(id), [], 'the target homework has no pre-made feedback or other record');
+        const taskBefore = (await state()).tasks.find(t => t.id === id);
+        const recordDay = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'}).format(new Date());
 
         await p.goto(host.url);
         const chip = p.locator(`[data-child-filter="${a.id}"]`);
@@ -89,6 +95,7 @@ async function proof(p, name) {
         await p.locator('#taskDialog[open]').waitFor();
         let panel = p.locator('[data-task-wrong-form="direct"]');
         await panel.locator('summary').click();
+        assert.ok((await panel.locator('[data-task-wrong-day]').innerText()).includes('记录日：' + recordDay), 'the record day is shown as Shanghai today');
         await panel.locator('[data-task-wrong-save="direct"]').click();
         await eventually(async () => /至少写/.test(await panel.locator('[data-task-wrong-status]').innerText()), 'an empty item is refused');
         assert.equal((await wrongOf()).length, 0);
@@ -106,8 +113,8 @@ async function proof(p, name) {
         await p.unroute('**/api/wrong/save');
         let wrong = await wrongOf();
         assert.equal(wrong.length, 1, 'the same key stores one item');
-        assert.deepEqual([wrong[0].linked_task_id, wrong[0].related_record_id ?? null, wrong[0].attachments], [id, null, []]);
-        assert.equal((await state()).records.length, 1, 'no placeholder feedback');
+        assert.deepEqual([wrong[0].linked_task_id, wrong[0].related_record_id ?? null, wrong[0].attachments, wrong[0].day], [id, null, [], recordDay]);
+        assert.equal((await linked(id)).length, 1, 'no placeholder feedback on the target homework');
         const textItem = wrong[0];
 
         // One whole photo with only a question number.
@@ -120,9 +127,10 @@ async function proof(p, name) {
         wrong = await wrongOf();
         const photoItem = wrong.find(r => r.id !== textItem.id);
         assert.equal(photoItem.attachments.length, 1);
-        assert.deepEqual([photoItem.linked_task_id, photoItem.related_record_id ?? null, !!photoItem.wrong_region], [id, null, false]);
+        assert.deepEqual([photoItem.linked_task_id, photoItem.related_record_id ?? null, !!photoItem.wrong_region, photoItem.day], [id, null, false, recordDay]);
         assert.equal((await state()).uploads.filter(u => u.name === 'synthetic-direct.png').length, 1, 'one original');
-        assert.match(await p.locator('#taskFeedbackHistory').innerText(), /第3题[\s\S]*|第5题/);
+        const shown = await p.locator('#taskFeedbackHistory').innerText();
+        assert.ok(shown.includes('第3题') && shown.includes('第5题'), 'both items show under the same homework');
         await fit(p);
         await proof(p, `direct-wrong-${width}`);
 
@@ -131,18 +139,23 @@ async function proof(p, name) {
         await p.locator('#recordDialog[open]').waitFor();
         await p.locator('#recordForm [name=note]').fill('虚构：孩子订正为35。');
         await p.locator('#recordForm button[type=submit]').first().click();
-        await eventually(async () => (await state()).records.some(r => r.followup_kind === '订正'), 'the correction is saved');
-        const correction = (await state()).records.find(r => r.followup_kind === '订正');
+        await eventually(async () => (await linked(id)).some(r => r.followup_kind === '订正' && r.related_record_id === textItem.id), 'the correction is saved');
+        const correction = (await linked(id)).find(r => r.followup_kind === '订正' && r.related_record_id === textItem.id);
         assert.deepEqual([correction.related_record_id, correction.linked_task_id], [textItem.id, id]);
 
-        // Reopen: same task, same records; the other child's same-named homework stays empty.
+        // Reopen: same task, same records; the other child's same-named homework stays empty; demo records untouched.
         await p.reload();
         await p.locator(`[data-task="${id}"]`).first().click();
         await p.locator('#taskDialog[open]').waitFor();
         const history = await p.locator('#taskFeedbackHistory').innerText();
         for (const text of ['第3题', '第5题', '虚构：孩子订正为35。']) assert.ok(history.includes(text), text);
-        assert.equal((await state()).records.filter(r => r.linked_task_id === sibling).length, 0);
-        assert.equal((await state()).records.length, 3);
+        assert.deepEqual(await linked(sibling), []);
+        const final = await state();
+        for (const kept of prior) assert.ok(final.records.some(r => view(r) === kept), 'demo record kept: ' + kept.slice(0, 60));
+        assert.deepEqual(final.records.filter(r => !prior.includes(view(r))).map(r => r.id).sort((x, y) => x - y),
+          [textItem.id, photoItem.id, correction.id].sort((x, y) => x - y), 'only the two wrong items and one correction are new');
+        const taskAfter = final.tasks.find(t => t.id === id);
+        for (const key of ['child', 'title', 'due', 'original_status', 'update']) assert.deepEqual(taskAfter[key], taskBefore[key], key);
         await fit(p);
         await proof(p, `direct-wrong-reopen-${width}`);
         assert.deepEqual(errors, []);

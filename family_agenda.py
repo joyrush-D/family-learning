@@ -1824,6 +1824,7 @@ def _record_row(r):
     return dict(id=r['id'], day=r.get('day', ''), created=r.get('created', ''), title=r.get('title', ''), subject=r.get('subject', ''),
                 note=note[:600], note_truncated=len(note) > 600, attachments=list(r.get('attachments') or []),
                 followup_kind=r.get('followup_kind', ''), related_record_id=r.get('related_record_id'),
+                assistance=str(r.get('assistance') or ''), practice_relation=str(r.get('practice_relation') or ''),
                 **({'retry': r['retry']} if r.get('retry') else {}))
 
 
