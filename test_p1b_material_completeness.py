@@ -577,9 +577,10 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
         self.lines=lines=dict(数学='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤。'%(day.month,day.day),
                              语文='语文：%d月%d日晚朗读第3课课文三遍。'%(day.month,day.day),英语='英语：%d月%d日晚完成练习纸第二部分。'%(day.month,day.day))
         fp=self.seed_groups(keys=keys,note='题面背景',uncertainties=[self.RES,U_READ],requirements=list(lines.values()))
-        with self.store._db() as c:  # only the first group holds the doubts, as read before uncertainty_scopes
-            for r in c.execute('SELECT first_page,payload FROM agent_pdf_material WHERE fingerprint=? AND first_page>1',(fp,)).fetchall():
-                payload=json.loads(r['payload']);payload['originals'][0]['uncertainties']=[]
+        with self.store._db() as c:  # groups as read after deferred_contexts but before uncertainty_scopes; only the first has doubts
+            for r in c.execute('SELECT first_page,payload FROM agent_pdf_material WHERE fingerprint=?',(fp,)).fetchall():
+                payload=json.loads(r['payload']);payload['originals'][0]['deferred_contexts']=[]
+                if r['first_page']>1:payload['originals'][0]['uncertainties']=[]
                 c.execute('UPDATE agent_pdf_material SET payload=? WHERE fingerprint=? AND first_page=?',(json.dumps(payload,ensure_ascii=False),fp,r['first_page']))
             source,message=self.store._message_context(c,keys);value=pdfm.pdf_input(self.store,c,source,message)
             self.doc_key=pdfm._document_key(source,message,value)
