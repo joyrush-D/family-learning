@@ -49,6 +49,7 @@ def day_view(child, day):
             "children": CHILDREN, "token": "synthetic-only", "groups": [{"subject": s, "items": i} for s, i in groups.items()],
             "closed": [], "wrong": [{"subject": "数学", "items": WRONG[child]}] if WRONG[child] else [],
             "school_pending": 1 if (child, day) == ("child-1", TODAY) else 0,
+            "school_read_gaps": [{"name": "虚构班级群", "status": "最近读取未成功"}] if (child, day) == ("child-1", TODAY) else [],
             "counts": {"open": len(rows), "closed": 0, "today": len(rows)}}
 
 

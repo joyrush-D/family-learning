@@ -42,6 +42,8 @@ import Foundation
         expect(store.childID == "child-1" && store.day == today && store.childName == "示例甲" && shown() == ["FICTION-A1"], "首次读到虚构甲当天的清单")
         expect(store.selected?.id == "FICTION-A1", "首次可以选中甲的事项")
         expect(store.current?.school_pending == 1, "甲当天读到 1 条尚未整理的学校消息（与网页同一规则）")
+        expect(store.current?.school_read_gaps == [SchoolReadGap(name: "虚构班级群", status: "最近读取未成功")] && store.current?.school_unknown == nil,
+               "甲当天读到自己来源的读取缺口，与待整理分开")
 
         // 1 同一孩子同一天重读失败：已正确归属的清单、选中项和编辑都保留，不因任何一次失败就清空。
         _ = await backend("fail=1")
@@ -106,7 +108,7 @@ import Foundation
         await settle { store.shift(-1) }
         snapshot("child_two_today")
         expect(store.day == today && store.childName == "示例乙" && ids() == ["FICTION-B1", "FICTION-B2"], "回到当天读到乙当天的内容，没有甲的事项")
-        expect((store.current?.school_pending ?? 0) == 0, "乙没有甲的待整理提示")
+        expect((store.current?.school_pending ?? 0) == 0 && (store.current?.school_read_gaps ?? []).isEmpty, "乙没有甲的待整理或读取缺口提示")
         expect(wrongSummary().hasPrefix("错题 0"), "乙的错题只算乙的")
         // 7 通知类事项（todo）读自己的原件：同一资料契约（页组范围、缺执行资源与看不清分开），不报作业权限错误。
         if let notice = store.allItems.first(where: { $0.id == "FICTION-B2" }) {

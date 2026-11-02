@@ -475,18 +475,51 @@ def day_view(child_id,day):
     cal,schedule_error=schedule_read(week[0],week[-1])
     inbox=family_agenda.snapshot(SimpleNamespace(**globals()),week[0],week[-1])['inbox']
     view=day_projection(inbox,cal,schedule_error,ts,records,child,day,today,learning)
-    pending=school_pending(child['id'])
+    coverage=school_coverage(child['id'])
     return dict(today=today,day=day,child_id=child['id'],child_name=child['name'],children=listed,token=TOKEN,source_error=(cal or {}).get('source_error',''),**view,
-                **({} if pending is None else dict(school_pending=pending)))
+                **(dict(school_unknown=True) if coverage is None else coverage))
 
-def school_pending(child_id):
-    """This child's school messages received but not yet organized: the web list's own rule (schoolProcessingHTML over
-    /api/state agent.sources, positive pending_message_count of sources whose child_id is this child), read from the same
-    agent snapshot. None when the snapshot cannot be read, never a guess; nothing is collected, organized or written."""
-    try: sources=agent_store().snapshot()['sources']
-    except (OSError,sqlite3.Error,ValueError,TypeError,KeyError,family_agent.AgentError): return None
-    return sum(s['pending_message_count'] for s in sources
-               if s.get('child_id')==child_id and type(s.get('pending_message_count')) is int and s['pending_message_count']>0)
+SCHOOL_READ_OK='最近读取成功'
+
+def school_read_status(source,agent,now):
+    """One source's read status by the web list's own rule (app.js currentSourceStatus), on the server clock: a future or
+    unparseable receipt and an overdue next read stay 读取待核对; a recent successful read with nothing new is success."""
+    if not source.get('enabled'): return '已停用'
+    if agent.get('enabled') is False: return '采集已暂停'
+    if source.get('error'): return '最近读取未成功'
+    if not source.get('last_success'): return '尚未读取'
+    def moment(value):
+        try: t=dt.datetime.fromisoformat(str(value))
+        except (ValueError,TypeError): return None
+        return t if t.tzinfo else t.astimezone()
+    time,due=moment(source['last_success']),moment(source.get('next_collection_at'))
+    if time is None or time>now+dt.timedelta(seconds=60): return '读取待核对'
+    interval=agent.get('collection_interval_minutes')
+    overdue=now>due+dt.timedelta(minutes=5) if due else now-time>dt.timedelta(minutes=interval+5 if interval in (30,60) else 15)
+    return '读取待核对' if overdue else SCHOOL_READ_OK
+
+def school_coverage(child_id,now=None):
+    """This child's school-message coverage for the Mac list, read only through agent_store(read_only=True) and the web
+    list's own rules: messages received but not yet organized (school_pending) and each own source whose read status is
+    not 最近读取成功 (school_read_gaps). Agent tables never created read the configured sources as never read, creating
+    nothing; no configured source has nothing to report. None when it cannot be checked, never a guess; nothing is
+    collected, organized, retried or written."""
+    now=now or dt.datetime.now().astimezone()
+    try: agent=agent_store(read_only=True).snapshot()
+    except sqlite3.OperationalError as error:
+        if 'no such table' not in str(error): return None
+        try: config=json.loads((DATA/'agent.json').read_text())
+        except FileNotFoundError: return dict(school_pending=0,school_read_gaps=[])
+        except (OSError,ValueError): return None
+        if not isinstance(config,dict) or not isinstance(config.get('sources',[]),list): return None
+        agent=dict(enabled=config.get('enabled'),sources=[dict(s,last_success='',error='',pending_message_count=0) for s in config.get('sources',[]) if isinstance(s,dict)])
+    except Exception: return None
+    try:
+        mine=[s for s in agent['sources'] if s.get('child_id')==child_id]
+        pending=sum(s['pending_message_count'] for s in mine if type(s.get('pending_message_count')) is int and s['pending_message_count']>0)
+        gaps=[dict(name=str(s.get('name') or '学校消息来源'),status=status) for s in mine for status in [school_read_status(s,agent,now)] if status!=SCHOOL_READ_OK]
+    except (KeyError,TypeError,AttributeError): return None
+    return dict(school_pending=pending,school_read_gaps=gaps)
 
 def week_days(day):
     first=dt.date.fromisoformat(day);first-=dt.timedelta(days=first.weekday())
