@@ -432,7 +432,7 @@ class ScopedDoubtImageChainTests(_ScopeBase):
                        if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
             for action in result.get('actions',[]):
                 for quote in action.get('basis',[]):quote['part']=ids.get(quote.get('text'),quote.get('part'))
-                action['existing_item_id']=known.get(action['basis'][0]['text'],'')
+                action['existing_item_id']=known.get(action['basis'][0]['text']) or action.get('existing_item_id','')
             return real(store,row,result,parts,*args,**kwargs)
         with patch.object(agent,'_school_original_actions',cite):
             for m in minutes:agent.run_once(self.app,self.now+dt.timedelta(minutes=m))
