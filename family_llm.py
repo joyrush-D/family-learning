@@ -632,7 +632,7 @@ uncertainties只写实际读不清、相互冲突、缺页或影响理解的归�
         if previous:
             if (not isinstance(result,dict) or set(result)!={'originals'} or not isinstance(result['originals'],list)
                     or len(result['originals'])!=1 or not isinstance(result['originals'][0],dict)
-                    or set(result['originals'][0])!=set(original_schema['required'])):
+                    or set(result['originals'][0]) not in (set(original_schema['required']),set(original_schema['required'])-{'uncertainty_scopes'})):
                 raise LLMDraftError('原件重读确认与新增要求字段无法核对，原结果保留')
             original=result['originals'][0];confirmed=original['requirements'];additional=original['additional_requirements']
             if (not isinstance(confirmed,list) or len(confirmed)>12 or any(not isinstance(r,str) or r not in previous for r in confirmed)
