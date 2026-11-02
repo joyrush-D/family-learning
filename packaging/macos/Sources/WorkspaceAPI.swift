@@ -88,7 +88,10 @@ struct LessonTable: Decodable, Hashable, Identifiable { let id: String; let titl
 struct PlanItem: Decodable, Hashable, Identifiable {
     let id: String; let title: String; let start_time: String; let end_time: String; let location: String; let note: String
     let status: String; let source: String; let `repeat`: Bool; let shared: Bool; let task_id: String; let unmerged: String?
+    let review: PlanReview?  // a family review: its own plan; review.task_id is provenance only, never joined to the teacher task
 }
+/// 家庭复习的原错题关联（服务端只读核对 basis_state：current / basis_changed / missing）。
+struct PlanReview: Decodable, Hashable { let record_id: Int; let topic_id: String; let task_id: String; let basis_state: String? }
 struct DaySchedule: Decodable, Hashable { let lessons: [LessonTable]; let plans: [PlanItem]; let cancelled: Int; let completed: Int }
 struct PlanTime: Decodable, Hashable { let id: String; let title: String; let start_time: String; let end_time: String }
 /// 一周里每天与单日同一口径的数量（服务端同一 day_view 规则）；schedule 为 nil 表示日程读不到，不是 0。

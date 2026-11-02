@@ -530,8 +530,60 @@ SCHEDULE_ERROR='课表和日程暂时读不到，不能据此判断这天没课�
 def schedule_read(start,end):
     """The calendar's own expanded lessons and plans (family_calendar.Store.snapshot: repeats, per-date changes, extra times,
     timetable dates), read without creating a table. A failure is only the schedule's own error, never the list's."""
-    try: return family_calendar.Store(connect,profiles,DATA,initialize=False).snapshot(start,end),''
+    try: return review_basis(family_calendar.Store(connect,profiles,DATA,initialize=False).snapshot(start,end)),''
     except (family_calendar.CalendarError,OSError,sqlite3.Error,ValueError,TypeError,KeyError,RecursionError): return None,SCHEDULE_ERROR
+
+def review_basis(cal):
+    """Each family review read against its wrong record as it is now: current, basis_changed (the record was corrected
+    after the parent approved the review) or missing. Read only; the saved link is shown, never relinked."""
+    reviews=[e for e in cal['events'] if e.get('review')]
+    if not reviews: return cal
+    import family_taxonomy
+    c=connect()
+    try:
+        names={p['id']:p['name'] for p in profiles(c)}
+        for e in reviews:
+            r=e['review'];row=c.execute('SELECT id,child,day,subject,title,note,source,attachments,created FROM records WHERE id=?',(r['record_id'],)).fetchone()
+            ok=row is not None and row['child']==names.get(r['child_id']) and family_taxonomy.WRONG_SOURCE in (row['source'] or '')
+            e['review']=dict(r,basis_state='missing' if not ok else 'current' if record_basis_hash(row,r['child_id'])==r['basis'] else 'basis_changed',
+                             record_title=(row['title'] or '') if ok else '')
+    finally: c.close()
+    return cal
+
+def calendar_review_check(c,review):
+    """A new family review's link checked together inside the calendar save: the raw child, the original wrong record (the
+    topic panel's own reader), its present basis, the parent's current confirmed topic or none, and the record's own
+    original task ('' for a standalone wrong record, never invented). Same titles are no identity. Reads only."""
+    import family_taxonomy
+    try: record=family_taxonomy.wrong_record(SimpleNamespace(**globals()),c,review['child_id'],review['record_id'])
+    except family_taxonomy.TaxonomyError as e: raise family_calendar.CalendarError(str(e),e.status,'review_'+e.code) from None
+    if family_taxonomy.record_hash(record)!=review['basis']:
+        raise family_calendar.CalendarError('原错题已更正，这次复习安排的依据已变；请重新打开原错题核对后再安排',409,'review_basis_changed')
+    task=c.execute('SELECT linked_task_id FROM records WHERE id=?',(review['record_id'],)).fetchone()[0] or ''
+    if review['task_id']!=task: raise family_calendar.CalendarError('原作业和这道错题保存的不一致，请重新打开原错题',409,'review_task_mismatch')
+    if review['topic_id']:
+        current=[l for l in family_taxonomy.links(c,review['child_id'],record) if l['basis']=='current']
+        if not current or current[-1]['state']!='confirmed' or current[-1]['topic_id']!=review['topic_id']:
+            raise family_calendar.CalendarError('这个知识点还没有在这道错题上确认',409,'review_topic_not_confirmed')
+
+def record_review_context(c,record):
+    """For the topic panel, read only: the record's own original task (explicit link, same child), the family reviews saved
+    for this record of this child (date, status, approved basis current or history) and the parent-kept topic hint."""
+    import family_taxonomy,family_diagnosis
+    row=dict(c.execute('SELECT * FROM records WHERE id=?',(record['id'],)).fetchone())
+    task=None
+    if row.get('linked_task_id'):
+        t=next((t for t in load_tasks() if t.get('id')==row['linked_task_id']),None) if 'load_tasks' in globals() else None
+        task=dict(id=row['linked_task_id'],title=(t or {}).get('title') or '原作业')
+    reviews=[]
+    if 'review' in {r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}:
+        now=family_taxonomy.record_hash(record)
+        for r in c.execute("SELECT id,version,title,day,start_time,end_time,status,review FROM calendar_events WHERE review<>'{}' ORDER BY day,id"):
+            ctx=json.loads(r['review'])
+            if ctx.get('child_id')==record['child_id'] and ctx.get('record_id')==record['id']:
+                reviews.append(dict(id=r['id'],version=r['version'],title=r['title'],day=r['day'],start_time=r['start_time'],end_time=r['end_time'],
+                                    status=r['status'],topic_id=ctx.get('topic_id',''),task_id=ctx.get('task_id',''),basis='current' if ctx.get('basis')==now else 'basis_changed'))
+    return dict(task=task,reviews=reviews,topic_hint=family_diagnosis.reviewed_hints(row).get('topic_hint',''))
 
 def day_schedule(cal,child_id,day,rows):
     """One child's lessons (timetable slots as written, no clock) and plans that day; cancelled or completed plans are left
@@ -550,6 +602,8 @@ def day_schedule(cal,child_id,day,rows):
         if e['status'] in left: left[e['status']]+=1;continue
         entry=dict(id=e['id'],title=e['title'],start_time=e['start_time'],end_time=e['end_time'],location=e['location'],note=str(e['note'])[:600],
                    status=e['status'],source=e['source'],repeat=e['repeat']!='none' or bool(e.get('occurrence')),shared=len(e['child_ids'])>1,task_id=e.get('task_id') or '')
+        # A family review stays its own plan: its original task is provenance in review, never this task_id join.
+        if e.get('review'): entry['review']=e['review']
         row=listed.get(entry['task_id'])
         if row is not None:
             row.setdefault('times',[]).append(dict(id=e['id'],title=e['title'],start_time=e['start_time'],end_time=e['end_time']));continue
@@ -825,7 +879,8 @@ def calendar_store():
     return family_calendar.Store(connect,profiles,DATA)
 
 def calendar_snapshot(start,end):
-    result=calendar_store().snapshot(start,end)
+    # A read, like schedule_read: the tables as they are (initialize=False); only the save routes initialize the store.
+    result=review_basis(family_calendar.Store(connect,profiles,DATA,initialize=False).snapshot(start,end))
     result.update(family_agenda.snapshot(SimpleNamespace(**globals()),start,end))
     return result
 
@@ -2707,7 +2762,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(200,body,'application/pdf',"attachment; filename*=UTF-8''"+quote(name,safe=''))
                 return self.reply(404,{'error':'不存在'})
             if path=='/api/child-access': return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),'state',{}))
-            if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=calendar_store().saved_timetables()))
+            if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=family_calendar.Store(connect,profiles,DATA,initialize=False).saved_timetables()))
             if path=='/api/state': return self.reply(200,snapshot())
             if path=='/api/day':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
@@ -2970,7 +3025,7 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,timetable_draft(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
             if path=='/api/calendar/save':
-                return self.reply(200,dict(event=calendar_store().save(obj)))
+                return self.reply(200,dict(event=calendar_store().save(obj,calendar_review_check)))
             if path=='/api/calendar/occurrence':
                 return self.reply(200,dict(event=calendar_store().save_occurrence(obj)))
             if path=='/api/calendar/draft':
