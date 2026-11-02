@@ -139,52 +139,59 @@ class OriginalPackDiscoveryTest(unittest.TestCase):
 
 
 class UnitEvidenceTest(unittest.TestCase):
-    """Fictional questions only. Both comparators read numbers permissively; numeric_evidence must prove the whole answer or send
-    it to a parent. The 0dc3a835 version asserted that unreadable, prefixed or unitless numeric answers and an unreadable pack keep
-    the components' pass; that was the reported gap (答：4.3角), so those expectations are inverted here, non-numeric controls kept."""
+    """Fictional questions only. The engine and DeepTutor read numbers permissively in both directions (4.3角 judged 对 for a
+    4.3元 standard; 43角, equal in amount, judged 错), so a component 对 stands only when numeric_evidence proves the whole answer
+    and a 错 only when it proves the answer unequal; anything else goes to a parent. Earlier versions of this class asserted the
+    reported gaps (unreadable answers and a missing pack kept as saved; 错 never re-read); those expectations are inverted here."""
     Q = {'id': 'syn_q1', 'topicId': 'syn_t', 'type': 'numeric', 'prompt': '虚构：一支笔2.5元，一把尺1.8元。一共多少元？', 'answer': '4.3'}
 
-    def test_written_unit_must_match_the_standard_or_the_asked_unit(self):
+    def test_a_pass_stands_only_when_the_whole_answer_is_proved(self):
         for ans in ('4.3', '4.30', '4.3元', '４.３元', ' 4.3元 ', '+4.3', '0004.3', '答：4.3', '答:4.3元', ' 答 ： 4.3 '):
-            self.assertEqual(ft.numeric_evidence(self.Q, ans), ('agree', ''), ans)
-        for ans in ('4.3角', '4.3分', '4.3米', '4.3元钱', '答：4.3角'):
-            self.assertEqual(ft.numeric_evidence(self.Q, ans)[0], 'unproven', ans); self.assertIn('待家长核对', ft.unit_doubt(self.Q, ans), ans)
+            self.assertEqual(ft.numeric_evidence(self.Q, ans), ('agree', ''), ans); self.assertEqual(ft.verdict_doubt(self.Q, ans, 'correct'), '', ans)
+        for ans, state in (('4.3角', 'unproven'), ('4.3分', 'unproven'), ('4.3米', 'unproven'), ('4.3元钱', 'unproven'), ('答：4.3角', 'unproven'), ('43', 'contradicts'),
+                           ('-4.3', 'contradicts'), ('5.2元', 'contradicts'), ('4.3，4.3', 'contradicts'), ('答：一共4.3元', 'unread'), ('43/10', 'unread'), ('3.5+0.8', 'unread'),
+                           ('约4.3', 'unread'), ('4.3元。。', 'unread'), ('', 'unread'), ('1/2角', 'unread'), ('4.3' + '，4.3' * 150, 'contradicts')):
+            self.assertEqual(ft.numeric_evidence(self.Q, ans)[0], state, ans); self.assertIn('现在待家长核对', ft.verdict_doubt(self.Q, ans, 'correct'), ans)
         zero = dict(self.Q, prompt='虚构：还剩多少元？', answer='0')
-        for ans in ('0', '0.0', '-0', '0元', '答：0'): self.assertEqual(ft.numeric_evidence(zero, ans), ('agree', ''), ans)  # zero stays
-        self.assertIn('角', ft.unit_doubt(zero, '0角'))
-        self.assertEqual(ft.unit_doubt(dict(self.Q, prompt='虚构：绳长多少米？', answer='0.5米'), '50厘米'), '')  # metric shift
-        self.assertEqual(ft.unit_doubt(dict(self.Q, prompt='虚构：有几个？', answer='5'), '5个'), '')
-
-    def test_unread_unsupported_or_unproven_numeric_answers_go_to_a_parent(self):
-        for ans, state in (('43', 'contradicts'), ('-4.3', 'contradicts'), ('4.3，4.3', 'contradicts'), ('答：一共4.3元', 'unread'), ('43/10', 'unread'),
-                           ('3.5+0.8', 'unread'), ('约4.3', 'unread'), ('4.3元。。', 'unread'), ('', 'unread'), ('1/2角', 'unread'), ('4.3' + '，4.3' * 150, 'contradicts')):
-            got = ft.numeric_evidence(self.Q, ans); self.assertEqual(got[0], state, ans); self.assertIn('待家长核对', got[1], ans)
-        self.assertEqual(ft.numeric_evidence(dict(self.Q, answer='4.3元', prompt='虚构：一共多少钱？'), '4.3')[0], 'unproven')  # no unit written
+        for ans in ('0', '0.0', '-0', '0元', '答：0'): self.assertEqual(ft.verdict_doubt(zero, ans, 'correct'), '', ans)  # zero stays
+        self.assertIn('角', ft.verdict_doubt(zero, '0角', 'correct'))
+        self.assertEqual(ft.verdict_doubt(dict(self.Q, prompt='虚构：绳长多少米？', answer='0.5米'), '50厘米', 'correct'), '')  # metric shift
+        self.assertEqual(ft.verdict_doubt(dict(self.Q, prompt='虚构：有几个？', answer='5'), '5个', 'correct'), '')
         fraction = dict(self.Q, answer='3/4')
-        self.assertEqual(ft.numeric_evidence(fraction, '0.75')[0], 'unsupported'); self.assertEqual(ft.numeric_evidence(fraction, '0.75元')[0], 'unsupported')
-        self.assertEqual(ft.numeric_evidence(fraction, '３/４'), ('agree', ''))  # the standard's own text
+        self.assertEqual(ft.numeric_evidence(fraction, '0.75')[0], 'unsupported'); self.assertEqual(ft.numeric_evidence(fraction, '３/４'), ('agree', ''))
+        self.assertEqual(ft.numeric_evidence(dict(self.Q, answer='4.3元', prompt='虚构：一共多少钱？'), '4.3')[0], 'unproven')  # no unit written
         self.assertEqual(ft.numeric_evidence(dict(self.Q, type='short', answer='12'), '12个')[0], 'unproven')  # a numeric standard is numeric
-        for q, ans in ((dict(self.Q, type='choice', answer='B'), 'B'), (dict(self.Q, type='choice', answer='B'), '4.3角'), (dict(self.Q, type='short', answer='直角'), '直角'),
-                       (dict(self.Q, type=None, answer='B'), 'B'), ({'id': 'x', 'prompt': '虚构'}, '2')):
-            self.assertEqual(ft.numeric_evidence(q, ans), ('not_numeric', ''), (q, ans))  # choice and non-numeric: the components' result, as before
+        self.assertEqual(ft.unit_doubt(self.Q, '4.3角'), ft.verdict_doubt(self.Q, '4.3角', 'correct'))
 
-    def test_evidence_view_is_the_one_current_rule_and_keeps_the_row(self):
+    def test_a_miss_stands_only_when_the_answer_is_proved_unequal(self):
+        for ans in ('43', '5.2', '5.2元', '-4.3', '答：5.2', '0.43'):
+            self.assertEqual(ft.verdict_doubt(self.Q, ans, 'wrong'), '', ans)  # clearly unequal stays 错
+        for ans in ('43角', '4.3元', '4.3', '答：一共5.2元', '43/10', '5.2角'):
+            self.assertIn('“错”没有被证实', ft.verdict_doubt(self.Q, ans, 'wrong'), ans)  # equal, unread or unit-unproven: a parent checks
+        for q, ans, verdict in ((dict(self.Q, type='choice', answer='B'), 'C', 'wrong'), (dict(self.Q, type='choice', answer='B'), 'B', 'correct'),
+                                (dict(self.Q, type='short', answer='直角'), '锐角', 'wrong'), ({'id': 'x', 'prompt': '虚构'}, '2', 'correct'), (self.Q, '4.3角', 'manual'), (self.Q, '4.3角', 'skip')):
+            self.assertEqual(ft.verdict_doubt(q, ans, verdict), '', (q, ans, verdict))  # choice, text, manual and skip: as before
+
+    def test_items_and_attempts_read_the_one_rule_and_keep_the_rows(self):
         pack = {'questions': [self.Q]}
-        row = dict(outcome='independent_correct', qid='syn_q1', topic_id='syn_t', answer='4.3角', taxonomy_verdict='correct',
-                   deeptutor='{"is_correct": true, "independent": true}')
-        before = dict(row)
+        item = dict(seq=1, kind='answer', qid='syn_q1', topic_id='syn_t', answer='4.3角', verdict='correct', engine_result='correct'); before_item = dict(item)
+        row = dict(outcome='independent_correct', qid='syn_q1', topic_id='syn_t', answer='4.3角', taxonomy_verdict='correct', deeptutor='{"is_correct": true, "independent": true}'); before = dict(row)
+        miss = dict(row, outcome='independent_wrong', answer='43角', taxonomy_verdict='wrong', deeptutor='{"is_correct": false, "independent": true}')
         with mock.patch.object(ft, 'question', lambda p, qid: next((q for q in p['questions'] if q['id'] == qid), None)):
+            self.assertIn('现在待家长核对', ft.item_doubt(item, pack)); self.assertEqual(item, before_item)
+            self.assertEqual(ft.item_doubt(dict(item, answer='4.3元'), pack), ''); self.assertIn('“错”没有被证实', ft.item_doubt(dict(item, answer='43角', verdict='wrong'), pack))
+            self.assertEqual(ft.item_doubt(dict(item, answer='43', verdict='wrong'), pack), ''); self.assertEqual(ft.item_doubt(dict(item, kind='skip', verdict='skip'), pack), '')
+            self.assertEqual(ft.item_doubt(item, None), '')  # no pack: the panel cannot replay; the item stays as saved
             self.assertEqual(ft.evidence_view(row, pack)[0], 'parent_check'); self.assertEqual(row, before)
             for ans in ('4.3元', '答：4.3', '4.30'): self.assertEqual(ft.evidence_view(dict(row, answer=ans), pack), ('independent_correct', ''), ans)
-            for ans in ('答：4.3角', '43/10', '43'): self.assertEqual(ft.evidence_view(dict(row, answer=ans), pack)[0], 'parent_check', ans)
-            self.assertEqual(ft.evidence_view(dict(row, outcome='independent_wrong'), pack)[0], 'independent_wrong')
+            self.assertEqual(ft.evidence_view(miss, pack)[0], 'parent_check'); self.assertEqual(ft.evidence_view(dict(miss, answer='43'), pack), ('independent_wrong', ''))
             self.assertEqual(ft.evidence_view(dict(row, outcome='not_new'), pack), ('not_new', ''))
             self.assertEqual(ft.evidence_view(dict(row, outcome='parent_check'), pack)[0], 'parent_check')
-            # 0dc3a835 kept these 'as saved'; a missing or other pack, another question or unreadable verdicts are pending, never current.
-            for other in (ft.evidence_view(dict(row, answer='4.3'), None), ft.evidence_view(dict(row, answer='4.3', topic_id='other'), pack),
+            for other in (ft.evidence_view(dict(row, answer='4.3'), None), ft.evidence_view(dict(miss, answer='43'), None), ft.evidence_view(dict(row, answer='4.3', topic_id='other'), pack),
                           ft.evidence_view(dict(row, answer='4.3', qid='missing'), pack), ft.evidence_view(dict(row, answer='4.3', deeptutor='not json'), pack),
-                          ft.evidence_view(dict(row, answer='4.3', deeptutor='{}'), pack), ft.evidence_view(dict(row, answer='4.3', taxonomy_verdict='manual'), pack)):
-                self.assertEqual(other[0], 'parent_check', other); self.assertIn('待核', other[1])
+                          ft.evidence_view(dict(row, answer='4.3', deeptutor='{}'), pack), ft.evidence_view(dict(row, answer='4.3', taxonomy_verdict='manual'), pack),
+                          ft.evidence_view(dict(miss, answer='43', taxonomy_verdict='correct', deeptutor='{"is_correct": true}'), pack)):
+                self.assertEqual(other[0], 'parent_check', other); self.assertIn('核对不了', other[1])
 
 
 if __name__ == '__main__':

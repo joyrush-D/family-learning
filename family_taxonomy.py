@@ -392,6 +392,9 @@ def state(app, obj, root=None):
         diags = []
         for d in c.execute('SELECT * FROM topic_diagnoses WHERE child_id=? AND record_id=? ORDER BY id DESC LIMIT 5', (record['child_id'], str(record['id']))).fetchall():
             items = [dict(r) for r in c.execute('SELECT seq,topic_id,qid,kind,answer,verdict,engine_result,help FROM topic_diagnosis_items WHERE diagnosis_id=? ORDER BY seq', (d['id'],))]
+            for i in items:  # read-only overlay of the same rule; the saved verdict, engine result, session and summary stay as saved
+                note = item_doubt(i, pack if d['pack_sha'] == TAXONOMY_SHA else None)
+                if note: i.update(stored_verdict=i['verdict'], verdict='manual', replay_result='skip', evidence_note=note)
             retries = [dict(r, deeptutor=json.loads(r['deeptutor'])) for r in c.execute(
                 'SELECT id,topic_id,qid,answer,taxonomy_verdict,deeptutor,outcome,followup_record_id,created_at FROM topic_retries WHERE diagnosis_id=? ORDER BY id', (d['id'],))]
             for r in retries:  # read-only overlay; the saved outcome stays in stored_outcome and in the row
@@ -550,62 +553,83 @@ def _dt_question(q):
 
 
 _ANSWER_LEAD = re.compile(r'\s*答\s*[：:]\s*')
+_HELD = {'correct': '自动核对判的“对”没有被证实', 'wrong': '自动核对判的“错”没有被证实'}
 
 
 def numeric_evidence(q, answer):
-    """(state, reason) for one saved answer to one pack question; the reason is '' only when the components' result may stand.
+    """(state, detail) for one saved answer to one pack question by family_llm's exact reading (_ref_values/_ref_compare:
+    whole plain decimals with units, metric shifts, no rounding); detail says why in a few words.
     'not_numeric': a choice, or a text question whose standard is no number: the components' result stands, as before.
-    'agree': family_llm's exact reading (_ref_values/_ref_compare: whole plain decimals with units, metric shifts, no rounding)
-    proves the whole answer equal to the standard; or a unit the bare standard lacks is the very unit the question asks for
-    (「多少元」 for 4.3元); or the text is the standard's own. One leading 「答：」 is set aside for this reading only.
-    'unread' (not wholly a number and unit: other words, a fraction, an expression), 'unsupported' (the standard of a numeric
-    question cannot be read), 'contradicts' (another number or unit) and 'unproven' (a unit neither side proves): the
-    components compare numbers permissively, so their agreeing 对 is unproven and a parent checks. Nothing here judges an
-    answer wrong, and the answer and standard are read whole, never cut or changed."""
+    'agree': the whole answer is proved equal: same value and unit, a metric shift, a unit the bare standard lacks that the
+    question asks for (「多少元」 for 4.3元), or the standard's own text. One leading 「答：」 is set aside for this reading only;
+    answer and standard are read whole, never cut or changed. 'contradicts': proved unequal (another number, also under the
+    asked or the standard's unit). 'unread' (not wholly a number and unit: words, a fraction, an expression), 'unsupported'
+    (a numeric standard this cannot read) and 'unproven' (a unit nothing proves, e.g. 43角 or 4.3角 for a 元 question) prove
+    neither way."""
     import family_llm
     q = q or {}; standard = str(q.get('answer') or ''); text = str(answer if answer is not None else '')
     lead = _ANSWER_LEAD.match(text); body = text[lead.end():] if lead else text
     theirs = family_llm._ref_values(standard)
     if q.get('type') == 'choice' or (q.get('type') != 'numeric' and not theirs): return 'not_numeric', ''
     if standard.strip() and unicodedata.normalize('NFKC', body).strip() == unicodedata.normalize('NFKC', standard).strip(): return 'agree', ''
-    held = '两项自动核对的“对”没有被证实，这次结果待家长核对，不算独立答对。'
-    if not theirs: return 'unsupported', '这道题的标准答案不是本核对能完整读成数和单位的写法；' + held
+    if not theirs: return 'unsupported', '这道题的标准答案不是本核对能完整读成数和单位的写法'
     mine = family_llm._ref_values(body)
-    if not mine: return 'unread', '孩子原答不能完整读成数和单位（如还有其他文字、分数或算式）；' + held
+    if not mine: return 'unread', '孩子原答不能完整读成数和单位（如还有其他文字、分数或算式）'
     relation = family_llm._ref_compare(mine, theirs)
     if relation == 'same': return 'agree', ''
     asked = lambda unit: re.search('(?:多少|几)' + re.escape(unit) + r'(?![^\W\d_])', str(q.get('prompt') or '')) is not None
-    if len(mine) == len(theirs) and all(not t[3] and m[:3] == t[:3] and (not m[3] or asked(m[3])) for m, t in zip(mine, theirs)): return 'agree', ''
-    if relation == 'different': return 'contradicts', '孩子原答的数或单位与标准答案不一致；' + held
+    if len(mine) == len(theirs) and not any(t[3] for t in theirs) and all(not m[3] or asked(m[3]) for m in mine):
+        return ('agree', '') if all(m[:3] == t[:3] for m, t in zip(mine, theirs)) else ('contradicts', '孩子原答的数与标准答案不一致')
+    if relation == 'different': return 'contradicts', '孩子原答的数或单位与标准答案不一致'
     units = '、'.join(dict.fromkeys(m[3] for m in mine if m[3]))
-    return 'unproven', ('孩子原答写的单位“%s”，' % units if units else '孩子原答没写单位，') + '标准答案和题目所问都没有证实这个单位；' + held
+    return 'unproven', ('孩子原答写的单位“%s”' % units if units else '孩子原答没写单位') + '，标准答案和题目所问都没有证实这个单位'
+
+
+def verdict_doubt(q, answer, verdict):
+    """Why a component verdict 'correct'/'wrong' cannot stand as current evidence for this answer, or ''. A 对 stands only when
+    numeric_evidence agrees and a 错 only when it contradicts; choice/text questions keep the components' result. Anything else
+    (proved equal under a 错, unread, unsupported, unproven) is for a parent to check: never a blind 对 or an arbitrary 错."""
+    if verdict not in ('correct', 'wrong'): return ''
+    state, detail = numeric_evidence(q, answer)
+    if state == 'not_numeric' or state == ('agree' if verdict == 'correct' else 'contradicts'): return ''
+    return (detail or '孩子原答与标准答案的数和单位一致') + '；' + _HELD[verdict] + '，现在待家长核对。'
 
 
 def unit_doubt(q, answer):
-    """numeric_evidence's reason, or '' when the components' result may stand (the one check retry() applies to a new pass)."""
-    return numeric_evidence(q, answer)[1]
+    """verdict_doubt for a 对 (the 0dc3a835 name)."""
+    return verdict_doubt(q, answer, 'correct')
+
+
+def item_doubt(item, pack):
+    """Read only: why one saved diagnosis answer's 对/错 cannot stand as current evidence (verdict_doubt on the pinned pack's own
+    question), or ''. Without a readable pack or question the item stays as saved; the panel cannot replay it without the pack."""
+    if item.get('kind') != 'answer' or item.get('verdict') not in ('correct', 'wrong') or not pack: return ''
+    try: q = question(pack, item.get('qid'))
+    except (KeyError, TypeError, AttributeError): return ''
+    return verdict_doubt(q, item.get('answer'), item['verdict']) if q is not None and q.get('topicId') == item.get('topic_id') else ''
 
 
 def evidence_view(row, pack):
     """Read only: (outcome, note) one saved new-question attempt counts as now; the panel, the lists and the progress basis all
-    read this one rule. A saved independent pass stays current only while its question is readable from the pinned pack (the
-    caller passes the pack only for the diagnosis's own pack version), both saved verdicts read 对 and numeric_evidence lets it
-    stand; otherwise it counts as parent_check with the reason, while the stored row, raw answer, both verdicts, ids and any
-    record it wrote stay exactly as saved. A stored parent_check whose verdicts both read 对 gets numeric_evidence's reason;
-    every other outcome is as saved. Nothing is judged, called or written."""
+    read this one rule. A saved independent pass or miss stays current only while its question is readable from the pinned pack
+    (the caller passes the pack only for the diagnosis's own pack version), both saved verdicts read and agree with it, and
+    verdict_doubt lets that verdict stand; otherwise it counts as parent_check with the reason, while the stored row, raw answer,
+    both verdicts, ids and any record it wrote stay exactly as saved. A stored parent_check whose two verdicts agree gets
+    verdict_doubt's reason; every other outcome is as saved. Nothing is judged, called or written."""
     outcome = row.get('outcome')
-    if outcome not in ('independent_correct', 'parent_check'): return outcome, ''
+    if outcome not in ('independent_correct', 'independent_wrong', 'parent_check'): return outcome, ''
     dt = row.get('deeptutor')
     try: dt = json.loads(dt or '{}') if isinstance(dt, str) else dt
     except ValueError: dt = None
-    agreed = isinstance(dt, dict) and dt.get('is_correct') is True and row.get('taxonomy_verdict') == 'correct'
+    verdict = row.get('taxonomy_verdict')
+    agreed = isinstance(dt, dict) and verdict in ('correct', 'wrong') and dt.get('is_correct') is (verdict == 'correct')
     try: q = question(pack, row.get('qid')) if pack else None
     except (KeyError, TypeError, AttributeError): q = None  # a pack this cannot index reads as an unreadable question: pending
     readable = q is not None and q.get('topicId') == row.get('topic_id')
-    if outcome == 'parent_check': return outcome, (numeric_evidence(q, row.get('answer'))[1] if agreed and readable else '')
-    if not readable: return 'parent_check', '当时结果；知识包现在读不到这道题或版本不同，核对不了，待核，不算当前进展。'
-    if not agreed: return 'parent_check', '当时结果；这条记录保存的两项核对结果读不全或不一致，核对不了，待核，不算当前进展。'
-    note = numeric_evidence(q, row.get('answer'))[1]
+    if outcome == 'parent_check': return outcome, (verdict_doubt(q, row.get('answer'), verdict) if agreed and readable else '')
+    if not readable: return 'parent_check', '知识包现在读不到这道题或版本不同，当时的结果核对不了。'
+    if not agreed or (verdict == 'correct') != (outcome == 'independent_correct'): return 'parent_check', '这条记录保存的两项核对结果读不全或不一致，当时的结果核对不了。'
+    note = verdict_doubt(q, row.get('answer'), verdict)
     return ('parent_check', note) if note else (outcome, '')
 
 
@@ -672,9 +696,9 @@ def retry_views(conn, records, profile_ids, root=None):
         out[rid] = dict(state='history' if stale or doubt else 'current' if same else 'unclear' if not known else 'edited', lines=lines, review=bool(doubt and not stale),
                         status=' '.join(status), show_note=not same, wrong_id=a['record_id'] if wrong is not None else None, trace=trace,
                         next='需要时按更正后的错题在原错题卡重新诊断。' if stale else
-                        '请家长对照题目和孩子原答核对；核对前这次结果只作待核历史，不算当前进展。' if doubt else
+                        '请家长对照题目和孩子原答核对；核对前这次只是当时结果，现在待核，不算当前进展。' if doubt else
                         '原错题恢复可读前，这次结果只按当时保存的原文看待，不算当前进展。' if missing else
-                        '知识包或这道题现在读不到，这次结果只按当时保存的原文看待，待核，不算当前进展。' if correct and not known else
+                        '知识包或这道题现在读不到，这次只是当时结果，现在待核，不算当前进展。' if not known else
                         '一次答对还不等于掌握；之后再独立做一道没见过的同类题。' if correct else '这题还没做对；回原错题卡看说明，再继续诊断或另试一道新题。')
     return out
 
@@ -718,7 +742,7 @@ def retry(app, obj, root=None):
         agreed = isinstance(dt['is_correct'], bool) and (obj['verdict'] == 'correct') == dt['is_correct']
         outcome = ('not_independent' if dt['independent'] is not True else
                    'parent_check' if not agreed else 'independent_correct' if dt['is_correct'] else 'independent_wrong')
-        if outcome == 'independent_correct' and unit_doubt(q, text): outcome = 'parent_check'  # both raw verdicts are still saved
+        if outcome.startswith('independent_') and verdict_doubt(q, text, 'correct' if dt['is_correct'] else 'wrong'): outcome = 'parent_check'  # both raw verdicts are still saved
     with app.connect() as c:
         c.execute('BEGIN IMMEDIATE')
         record = wrong_record(app, c, obj['child_id'], obj['record_id'])

@@ -9,7 +9,8 @@
  const VERDICT={correct:'判对',wrong:'判错',manual:'待家长核对',skip:'跳过/不会（上游计为未答对）'};
  const ANSWER_MAX=500; // 与服务端family_taxonomy.ANSWER_MAX一致；只防误输，超长以服务端400为准
  // 由服务端已保存的逐题事实重建上游会话；题号与保存的不一致说明知识包或引擎变了，不继续出题。
- function restore(E,graph,diag){const answers=diag.items.map(i=>({id:i.topic_id,result:i.engine_result,text:i.answer}));const s=E.replay(graph,[diag.topic_id],answers,diag.opts);const bad=s.answers.some((a,k)=>a.qid!==diag.items[k].qid);return bad?null:s}
+ // 待核题（服务端replay_result=skip）先按“未答对”重放，之后的选题与本轮线索不把它当对或错；早先按原判定续出的题对不上时按原判定重放，下方提示待核。
+function restore(E,graph,diag){const run=held=>{const answers=diag.items.map(i=>({id:i.topic_id,result:held&&i.replay_result||i.engine_result,text:i.answer}));const s=E.replay(graph,[diag.topic_id],answers,diag.opts);return s.answers.some((a,k)=>a.qid!==diag.items[k].qid)?null:s};return run(true)||run(false)}
  function judge(E,q,kind,text){if(kind!=='answer')return {verdict:'skip',engine:'skip'};const v=E.judgeQuestion(q,text).verdict;return {verdict:v,engine:v==='manual'?'skip':v}}
  // 同孩历次诊断/再试的全部痕迹（服务端state.seen_qids：出示、作答、看说明、再试），不只看当前这次诊断。
  function seenQids(st){return new Set(st&&st.seen_qids||[])}
@@ -49,7 +50,7 @@
   if(s)h+=gradesHTML(s)+(s.status==='unique'||s.status==='ambiguous'?`<ul class="topic-list topic-found">${s.candidates.map(c=>`<li><span><b>${esc(c.name)}</b> <span class="small muted">${esc(c.chapter||'')}</span></span><button type="button" data-topic-confirm="${esc(c.id)}">就是这个</button></li>`).join('')}</ul>${s.total>s.candidates.length?`<p class="small">共 ${esc(s.total)} 个，先列 ${esc(s.candidates.length)} 个：点年级只看那一年级，或多写几个字。</p>`:''}<button type="button" data-topic-mark="no_match">都不对，回原题核对</button>`:`<p class="small" data-topic-none>${esc(s.message||(s.status==='unclear'?'请输入知识点名称或册章。':'知识包里没有匹配的数学知识点：请回原题和原材料核对。'))}</p>${s.status==='none'?'<button type="button" data-topic-mark="no_match">记为没有匹配</button> ':''}<button type="button" data-topic-mark="unclear">暂时说不清</button>`);
   return h}
  // 已答只留一行：原答与判定；答错且有上游说明的，在“当前操作”空出来时给一小步说明。
- function itemLine(p,i,helpable){const q=p.E.questionById(p.graph,i.qid),seen=i.help.includes('explanation');return `<li data-topic-item="${i.seq}">第${i.seq}题 原答“${esc(i.answer||'—')}” · ${VERDICT[i.verdict]}${seen?' · 看过说明':''}${helpable&&i.verdict!=='correct'&&q?.explanation&&!seen?` <button type="button" data-topic-help="${i.seq}">看一小步说明</button>`:''}${seen&&q?.explanation?`<span class="topic-explain">说明：${esc(q.explanation)}</span>`:''}</li>`}
+ function itemLine(p,i,helpable){const q=p.E.questionById(p.graph,i.qid),seen=i.help.includes('explanation');return `<li data-topic-item="${i.seq}">第${i.seq}题 原答“${esc(i.answer||'—')}” · ${VERDICT[i.verdict]}${i.evidence_note?` <span class="small" data-topic-evidence="${i.seq}">当时判定：${VERDICT[i.stored_verdict]||'未知'}；现在待核：${esc(i.evidence_note)}</span>`:''}${seen?' · 看过说明':''}${helpable&&i.verdict!=='correct'&&q?.explanation&&!seen?` <button type="button" data-topic-help="${i.seq}">看一小步说明</button>`:''}${seen&&q?.explanation?`<span class="topic-explain">说明：${esc(q.explanation)}</span>`:''}</li>`}
  function questionHTML(p,q,mode){const k=mode+':'+q.id,name='td-'+p.child_id+'-'+p.record_id+'-'+mode;const input=q.type==='choice'&&q.choices?.length?`<div class="topic-choices" role="radiogroup">${q.choices.map(c=>`<label class="topic-choice"><input type="radio" form="topic-diagnosis-none" name="${esc(name)}" data-topic-input="${esc(k)}" value="${esc(c.key)}"${p.draft[k]===c.key?' checked':''}><span>${esc(c.key)}. ${esc(c.text)}</span></label>`).join('')}</div>`:field(p,k,'写答案',ANSWER_MAX);
   return `<div class="topic-question" data-topic-form="${mode}" data-qid="${esc(q.id)}"><p>${esc(q.prompt)}</p>${input}<div class="topic-actions"><button type="button" class="primary" data-topic-submit>提交</button>${mode==='answer'?'<button type="button" data-topic-kind="skip">跳过</button><button type="button" data-topic-kind="unknown">不会</button><button type="button" data-topic-pause>先暂停</button>':''}</div></div>`}
  function diagHTML(p,st,linked){const d=st.diagnoses.find(x=>x.basis==='current');p.view=null;
@@ -61,13 +62,14 @@
   let h=`<p class="small muted">已做 ${d.items.length}/${d.opts.limit} 题${d.state==='paused'&&!p.resume?' · 已暂停，随时可继续':''}</p>`;
   const idle=!(offer?.fresh)&&!asking;
   if(d.items.length)h+=`<ol class="topic-done">${d.items.map(i=>itemLine(p,i,idle)).join('')}</ol>`;
-  h+=d.retries.map(x=>`<p class="small" data-topic-retry-result="${esc(x.outcome)}">新题再试 原答“${esc(x.answer)}” · ${esc(OUTCOME[x.outcome]||x.outcome)}${x.outcome==='parent_check'?`（题库核对：${VERDICT[x.taxonomy_verdict]}；复核结果：${x.deeptutor.is_correct==null?'未判定':x.deeptutor.is_correct?'对':'错'}）`:''}</p>`).join('');
+  h+=d.retries.map(x=>`<p class="small" data-topic-retry-result="${esc(x.outcome)}">新题再试 原答“${esc(x.answer)}” · ${x.stored_outcome&&x.stored_outcome!==x.outcome?`当时结果：${esc(OUTCOME[x.stored_outcome]||x.stored_outcome)}；现在待核`:esc(OUTCOME[x.outcome]||x.outcome)}${x.evidence_note?` <span class="small" data-topic-evidence-retry>${esc(x.evidence_note)}</span>`:''}${x.outcome==='parent_check'?`（题库核对：${VERDICT[x.taxonomy_verdict]}；复核结果：${x.deeptutor.is_correct==null?'未判定':x.deeptutor.is_correct?'对':'错'}）`:''}</p>`).join('');
   // 当前操作只有一个：新题再试 > 诊断下一题 > 小结与下一步。题目先登记“已出示”才显示。
   if(offer?.fresh){p.view={mode:'retry',qid:offer.qid,diag:d.id};const q=p.E.questionById(p.graph,offer.qid);return h+(q?`<p><b>独立再试一道新题</b> <span class="small muted">先别看说明；提交后才判定</span></p>${questionHTML(p,q,'retry')}`:'<p class="error">新题不在当前知识包里，请刷新。</p>')}
   if(offer&&!offer.fresh)h+='<p class="small">上次出示的新题后来又在别处出现过，不再算独立；可以换一道没见过的。</p>';
   if(asking){p.view={mode:'answer',qid:item.question.id,diag:d.id,item,session:s};
    if(!d.shown.includes(item.question.id)){const k=d.id+':'+item.question.id;if(p.shownTried!==k){p.autoShow=k;return h+'<p class="small" data-topic-showing>正在出题…</p>'}return h+'<div class="topic-actions"><button type="button" class="primary" data-topic-show>出下一题</button></div>'}
    return h+`<p class="small muted">第${d.items.length+1}题 · ${esc(p.graph.byId[item.topicId]?.name||item.topicId)}</p>${questionHTML(p,item.question,'answer')}`}
+  if(d.items.some(i=>i.evidence_note))h+='<p class="small" data-topic-evidence-summary>有题目当时的判定现在待家长核对；核对前，本轮线索不算结论。</p>';
   const lines=summaryLines(p.graph,s,p.E),tested=lines.filter(l=>!l.inferred),inferred=lines.filter(l=>l.inferred);
   if(tested.length)h+=`<ul class="topic-list" data-topic-summary>${tested.map(l=>`<li>${esc(l.name)} · ${esc(l.label)}${l.asked?` · 问过${l.asked}题`:''}</li>`).join('')}</ul>`;
   if(inferred.length)h+=`<p class="small muted" data-topic-inferred>另有${inferred.length}个先修点未直接测，只是图谱推断（不算掌握）：${esc(inferred.slice(0,3).map(l=>l.name).join('、'))}${inferred.length>3?'等':''}</p>`;
@@ -104,7 +106,7 @@
   b.querySelector('[data-topic-retry]')?.addEventListener('click',()=>{const it=retryItem(p.E,p.raw,p.graph,d,seenQids(p.state));if(!it){p.noNew=d.id;draw(p);return}
    send(p,'/api/topic/diagnosis/mark',{...base,diagnosis_id:d.id,action:'shown',mode:'retry',qid:it.question.id},()=>'')});
   const answer=(kind,text)=>{const it=v.item,j=judge(p.E,it.question,kind,text),s=p.E.applyAnswer(p.graph,v.session,it.topicId,j.engine,{text});
-   send(p,'/api/topic/diagnosis/answer',{...base,diagnosis_id:d.id,seq:d.items.length+1,topic_id:it.topicId,qid:it.question.id,kind,answer:text,verdict:j.verdict,engine_result:j.engine,session:s,summary:p.E.summarize(p.graph,s)},()=>{delete p.draft['answer:'+it.question.id];return VERDICT[j.verdict]})};
+   send(p,'/api/topic/diagnosis/answer',{...base,diagnosis_id:d.id,seq:d.items.length+1,topic_id:it.topicId,qid:it.question.id,kind,answer:text,verdict:j.verdict,engine_result:j.engine,session:s,summary:p.E.summarize(p.graph,s)},v=>{delete p.draft['answer:'+it.question.id];const got=(v?.diagnoses||[]).find(x=>x.id===d.id)?.items?.find(x=>x.seq===d.items.length+1);return got?.evidence_note?'已保存。当时判定：'+VERDICT[j.verdict]+'；现在待核：'+got.evidence_note:VERDICT[j.verdict]})};
   b.querySelectorAll('[data-topic-kind]').forEach(x=>x.onclick=()=>answer(x.dataset.topicKind,''));
   b.querySelector('[data-topic-submit]')?.addEventListener('click',()=>{if(!v)return;const k=v.mode+':'+v.qid,t=String(p.draft[k]||'').trim();if(!t){p.message='请先写答案或选一项';draw(p);return}
    if(v.mode==='answer')return answer('answer',t);
