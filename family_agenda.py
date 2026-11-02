@@ -754,8 +754,12 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
               and any(m['ref']==o.get('ref') for m in messages) and not any(o['text'] in m.get('text','') for m in messages)]
     if attached and not any(date_quote and date_quote in m.get('text','') and deadlines(date_quote,sent_day(m.get('time','')))
                             for m in messages):
-        for o in attached:messages=[dict(m,text=m.get('text','')+'\n'+o['text']) if m['ref']==o['ref'] else m for m in messages]
-        date_quote='\n'.join(o['text'] for o in attached)
+        # Read as the original action's own date check reads them (a labelled or comma day head, an ordered 先…，再… work);
+        # this in-memory reading copy only, the saved requirement words stay as written.
+        import family_agent
+        read=lambda o:family_agent._school_date_head_joined(o['text'])
+        for o in attached:messages=[dict(m,text=m.get('text','')+'\n'+read(o)) if m['ref']==o['ref'] else m for m in messages]
+        date_quote='\n'.join(read(o) for o in attached)
     # Only words found in this child's own originals of this item can tell what its day means.
     if date_quote and not any(date_quote in m.get('text','') for m in messages):date_quote=''
     times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
