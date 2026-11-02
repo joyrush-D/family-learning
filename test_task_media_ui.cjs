@@ -4,10 +4,16 @@ const assert=require('node:assert/strict'),net=require('node:net');
 const {spawn,execFileSync}=require('node:child_process'),{once}=require('node:events');
 const {setTimeout:delay}=require('node:timers/promises'),{randomUUID}=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+// The current home list: the visible Grove row opens its detail, whose own action opens the task (not a hidden old page).
+// On a narrow screen another task's detail covers the list, so its own visible “‹ 返回清单” is pressed first; a task already shown stays.
+async function groveShow(p,id){const d=p.locator('#groveDetail'),action=d.locator(`[data-task="${id}"]`).first();if(await action.isVisible().catch(()=>false))return d;const row=p.locator(`article.grove-row[data-query-target="task:${id}"]`).first();if(!await row.isVisible().catch(()=>false)){const back=p.locator('[data-grove-back]:visible').first();if(await back.count()){await back.click();await row.waitFor({state:'visible'})}}await row.locator('[data-grove-open]').click();await action.waitFor();return d}
+// The same task's current Grove detail without pressing its action.
+async function groveEntry(p,id){return groveShow(p,id)}
+async function openFromGrove(p,id){const d=await groveShow(p,id);await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
 async function eventually(check,label,timeout=12000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
 async function demoServer(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
- const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
+ const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];if(process.env.FAMILY_QA_SOURCE)env.FAMILY_QA_SOURCE=process.env.FAMILY_QA_SOURCE;
  env.FAMILY_HOST='family.localhost';env.FAMILY_USER='synthetic-parent';
  const proc=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-c',`import app, json, runpy
 base=app.ThreadingHTTPServer
@@ -26,7 +32,7 @@ const fs=require('node:fs/promises'),path=require('node:path');
  const videoBytes=execFileSync('ffmpeg',['-nostdin','-v','error','-f','lavfi','-i','color=c=blue:s=160x90:r=10','-t','1','-c:v','libx264','-movflags','frag_keyframe+empty_moov','-f','mp4','pipe:1'],{timeout:15000});
  server=await demoServer();const url=server.url,origin=url.replace('127.0.0.1','family.localhost');
  const real=route=>route.fetch({url:route.request().url().replace('family.localhost','127.0.0.1'),headers:{...route.request().headers(),host:new URL(origin).host}});
- browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
+ browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL===''?{}:{channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'}),args:['--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream']});
  for(const width of [360,1440]){
   const context=await browser.newContext({viewport:{width,height:900},permissions:['microphone'],extraHTTPHeaders:{'Tailscale-User-Login':'synthetic-parent'}}),p=await context.newPage(),errors=[];p.on('pageerror',e=>errors.push(e.message));
   const read=async()=>fetch(url+'api/state').then(r=>r.json());let state=await read();
@@ -34,8 +40,8 @@ const fs=require('node:fs/promises'),path=require('node:path');
   const made=await post('api/task/new',{request_key:randomUUID(),child:state.children[0].name,title:'虚构听写 '+width,box:'inbox',category:'homework',due:state.today,action:'核对一个听写词'}),id=made.task.id;
   await p.route('**/api/state',async r=>{const response=await real(r);const d=await response.json();d.asr={...d.asr,configured:true};await r.fulfill({response,json:d})});
   let asrAttempts=0;await p.route('**/api/transcribe',r=>++asrAttempts===1?r.fulfill({status:503,json:{error:'虚构转写失败'}}):r.fulfill({json:{text:'虚构：第三个词听不出来'}}));
-  await p.goto(origin);await p.locator('[data-task="'+id+'"]').first().waitFor();
-  const open=async()=>{await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor()};
+  await p.goto(origin);await p.locator('article.grove-row[data-query-target="task:'+id+'"]').first().waitFor();
+  const open=async()=>{await openFromGrove(p,id)};
   let leaveAction='accept',leavePrompts=0;
   p.on('dialog',async d=>{if(d.type()==='beforeunload'){await d.accept();return}assert.equal(d.type(),'confirm');leavePrompts++;await d[leaveAction]()});
   const save=p.locator('#saveTaskFeedback');await open();
