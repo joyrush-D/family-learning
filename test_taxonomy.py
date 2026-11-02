@@ -289,10 +289,20 @@ class OriginalQuestionSeenTest(unittest.TestCase):
         # not_new, no DeepTutor grading, and the same request replays without a second row.
         with A.connect() as c:
             c.execute("INSERT INTO topic_exposures(child_id,record_id,diagnosis_id,pack_sha,qid,mode,created_at) VALUES('child-1','1',?,?,'cnm_p125_q3','retry',1)", (did, ft.TAXONOMY_SHA))
+        # The newest offer is still unanswered: it is the current one, with its own result (an original is not new).
+        self.assertEqual(ft.state(A, base)['diagnoses'][0]['retry_offer'], {'qid': 'cnm_p125_q3', 'fresh': False})
         with mock.patch.object(ft.family_deeptutor, 'call', side_effect=AssertionError('an already seen original is never graded as new')):
             for _ in range(2): ft.retry(A, dict(base, diagnosis_id=did, qid='cnm_p125_q3', answer='4.3', verdict='correct', request_id='p4origretry0000001'))
         self.assertEqual(self.count("SELECT count(*) FROM topic_retries WHERE qid='cnm_p125_q3' AND outcome='not_new'"), 1)
         self.assertEqual(self.count('SELECT count(*) FROM topic_retries'), 1)
+        # The newest offer is now submitted: no current offer, and the earlier unanswered offer is not brought back under the saved
+        # result. Reading writes nothing: offer/retry rows, their order and the schema stay as saved, the earlier offer row included.
+        snap = ('SELECT * FROM topic_exposures ORDER BY id', 'SELECT * FROM topic_retries ORDER BY id', 'SELECT type,name,sql FROM sqlite_master ORDER BY name')
+        with A.connect() as c: before = [[tuple(r) for r in c.execute(s)] for s in snap]
+        d0 = ft.state(A, base)['diagnoses'][0]
+        self.assertIsNone(d0['retry_offer']); self.assertEqual([r['qid'] for r in d0['retries']], ['cnm_p125_q3'])
+        with A.connect() as c: self.assertEqual([[tuple(r) for r in c.execute(s)] for s in snap], before)
+        self.assertEqual(self.count(f"SELECT count(*) FROM topic_exposures WHERE mode='retry' AND qid='{unseen}'"), 1)
         with A.connect() as c:
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')], raw)  # raw original/correction untouched
             q3 = ft.question(ft.load_pack(), 'cnm_p125_q3')
