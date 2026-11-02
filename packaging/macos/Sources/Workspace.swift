@@ -164,13 +164,39 @@ final class WorkspaceStore: ObservableObject {
     /// 口头补录交给 /api/study/item 的内容（与网页同一契约）：要做什么必填，第一行作标题；科目可后补（空即“科目待定”）；
     /// 老师要求的完成日、交回日分开，未知留空；做的日子（day）是家里安排的那天，不当作老师日期。重试时同一 key、同一内容。
     static func oralBody(child: String, day: String, key: String, version: Int, subject: String, what: String,
-                         completeOn: String, handbackOn: String) -> [String: Any] {
+                         completeOn: String, handbackOn: String, attachments: [String] = []) -> [String: Any] {
         let words = what.trimmingCharacters(in: .whitespacesAndNewlines)
         let title = String(words.split(separator: "\n").first ?? Substring(words)).prefix(80).description
-        let report: [String: Any] = ["text": words, "explanation": "", "excerpt": "", "goal": "", "attachments": [String](),
+        let report: [String: Any] = ["text": words, "explanation": "", "excerpt": "", "goal": "", "attachments": attachments,
                                      "complete_on": completeOn, "handback_on": handbackOn]
         return ["child_id": child, "day": day, "request_key": key, "version": version, "title": title,
                 "subject": subject.trimmingCharacters(in: .whitespaces), "planned_minutes": NSNull(), "report": report]
+    }
+
+    enum PhotoStop { case unreadable, noID, outcome(PostOutcome) }
+
+    /// 选好的照片按顺序逐张上传，上传过的（同一文件路径）沿用原编号：同一次填写里再按保存不重传。读不到文件或某张没保存成功就停下，
+    /// 已得到的编号留在 cached 里、填写原样保留，下次只补那一张。某张上传的回执丢了就没有编号，重试只重传那一张，
+    /// 先前可能已落库的那份不挂到任何记录上。反馈与口头补录共用；归属由保存接口按孩子核对，这里不挂别的孩子的原件。
+    static func uploadPhotos(_ photos: [URL], cached: [String: String], read: (URL) -> Data?,
+                             send: (Data, String) async -> PostOutcome) async -> (ids: [String], cached: [String: String], stop: PhotoStop?) {
+        var cached = cached, ids: [String] = []
+        for url in photos {
+            if let id = cached[url.path] { ids.append(id); continue }
+            guard let data = read(url) else { return (ids, cached, .unreadable) }
+            switch await send(data, url.lastPathComponent) {
+            case .saved(let reply):
+                guard let id = (reply["attachment"] as? [String: Any])?["id"] as? String else { return (ids, cached, .noID) }
+                cached[url.path] = id; ids.append(id)
+            case let other: return (ids, cached, .outcome(other))
+            }
+        }
+        return (ids, cached, nil)
+    }
+
+    nonisolated static func readPicked(_ url: URL) -> Data? {
+        let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
+        return try? Data(contentsOf: url)
     }
 
     func select(_ id: String?) {
@@ -1555,18 +1581,15 @@ struct FeedbackSheet: View {
     func submit() {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         Task {
-            var ids: [String] = []
-            for url in photos {
-                if let id = uploaded[url.path] { ids.append(id); continue }
-                let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-                guard let data = try? Data(contentsOf: url) else { save.busy = false; save.message = "读不到所选文件，未保存；输入已保留。"; return }
-                switch await store.client.upload(data, name: url.lastPathComponent) {
-                case .saved(let reply):
-                    guard let id = (reply["attachment"] as? [String: Any])?["id"] as? String else { save.busy = false; save.message = "照片没有保存成功，未保存反馈；可以重试。"; return }
-                    uploaded[url.path] = id; ids.append(id)
-                case let other: await store.finish(other, save, done: ""); return
-                }
+            let sent = await WorkspaceStore.uploadPhotos(photos, cached: uploaded, read: WorkspaceStore.readPicked) { await store.client.upload($0, name: $1) }
+            uploaded = sent.cached
+            switch sent.stop {
+            case .unreadable?: save.busy = false; save.message = "读不到所选文件，未保存；输入已保留。"; return
+            case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存反馈；可以重试。"; return
+            case .outcome(let other)?: await store.finish(other, save, done: ""); return
+            case nil: break
             }
+            let ids = sent.ids
             let body: [String: Any] = ["task_id": item.task_id, "child": store.childName, "note": note, "attachments": ids,
                                        "complete": false, "request_key": save.key, "day": store.view?.today ?? store.day]
             await store.finish(await store.client.post("/api/task/feedback", body), save, done: "反馈已保存在这一项下。")
@@ -1706,6 +1729,9 @@ struct OralSheet: View {
     @State var subject = ""
     @State var what = ""
     @State var tomorrow = false
+    @State var photos: [URL] = []
+    @State var uploaded: [String: String] = [:]
+    @State var picking = false
     @State var complete = "unknown"
     @State var completeDay = Date()
     @State var handback = "unknown"
@@ -1714,7 +1740,7 @@ struct OralSheet: View {
 
     var body: some View {
         SheetFrame(store: store, save: save, title: "补录口头作业", context: "\(store.childName) · 来源：孩子口头转述",
-                   dirty: !subject.isEmpty || !what.isEmpty || complete != "unknown" || handback != "unknown",
+                   dirty: !subject.isEmpty || !what.isEmpty || !photos.isEmpty || complete != "unknown" || handback != "unknown",
                    canSave: !what.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    saveTitle: "保存补录", onSave: submit) {
             Section {
@@ -1729,7 +1755,34 @@ struct OralSheet: View {
                 Picker("老师要求交回", selection: $handback) { Text("还不知道").tag("unknown"); Text("指定日期").tag("day") }.probe("oral-handback")
                 if handback == "day" { DatePicker("交回日", selection: $handbackDay, displayedComponents: .date).probe("oral-handback-day") }
             }
+            Section("照片（可不加）") {
+                if photos.isEmpty { Text("还没有选；只写要做什么也能保存。").font(.caption).foregroundStyle(Palette.ink2).probe("oral-files-empty", text: "还没有选") }
+                ForEach(Array(photos.enumerated()), id: \.element) { index, url in
+                    HStack {
+                        Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).probe("oral-file-\(index)", text: url.lastPathComponent)
+                        Spacer()
+                        // 只从这次补录里去掉：已上传的原件不删不改；再选同一文件沿用已上传的那份。
+                        Button("移除") { photos.removeAll { $0 == url } }.buttonStyle(.borderless).controlSize(.small)
+                            .help("只从这次补录里去掉，不删除原件").accessibilityLabel("移除 \(url.lastPathComponent)").probe("oral-file-remove-\(index)", text: url.lastPathComponent)
+                    }
+                }
+                Button(photos.isEmpty ? "选择照片或 PDF…" : "再加照片或 PDF…") { pick() }.probe("oral-photo")
+            }
         }
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.image, .pdf], allowsMultipleSelection: true) { picked($0) }
+    }
+
+    /// 与反馈同一取文件方式：--smoke-test 里取测试声明的文件（或取消），正常使用打开系统选择框。
+    func pick() {
+        if TestTargets.enabled, !workspaceTestPicks.isEmpty {
+            let next = workspaceTestPicks.removeFirst()
+            return picked(next.map { .success($0) } ?? .failure(CocoaError(.userCancelled)))
+        }
+        picking = true
+    }
+
+    func picked(_ result: Result<[URL], Error>) {
+        if case .success(let urls) = result { photos.append(contentsOf: urls.filter { !photos.contains($0) }) }
     }
 
     func submit() {
@@ -1738,13 +1791,22 @@ struct OralSheet: View {
         let day = WorkspaceStore.text(tomorrow ? Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: base) ?? base : base)
         let completeOn = complete == "day" ? WorkspaceStore.text(completeDay) : "", handbackOn = handback == "day" ? WorkspaceStore.text(handbackDay) : ""
         Task {
+            // 先传照片：失败就不保存补录，填写和已传的编号都留着；重试只补没传成功的那张，同一提交标识与内容不变。
+            let sent = await WorkspaceStore.uploadPhotos(photos, cached: uploaded, read: WorkspaceStore.readPicked) { await store.client.upload($0, name: $1) }
+            uploaded = sent.cached
+            switch sent.stop {
+            case .unreadable?: save.busy = false; save.message = "读不到所选文件，未保存；输入已保留。"; return
+            case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存补录；可以重试。"; return
+            case .outcome(let other)?: await store.finish(other, save, done: ""); return
+            case nil: break
+            }
             do {
                 // 重试沿用第一次读到的版本：同一提交标识、同一内容，服务端才认作同一次补录。
                 var version = self.version ?? -1
                 if version < 0 { version = try await store.client.studyVersion(child: store.childID, day: day) }
                 self.version = version
                 let body = WorkspaceStore.oralBody(child: store.childID, day: day, key: save.key, version: version, subject: subject, what: what,
-                                                   completeOn: completeOn, handbackOn: handbackOn)
+                                                   completeOn: completeOn, handbackOn: handbackOn, attachments: sent.ids)
                 await store.finish(await store.client.post("/api/study/item", body), save, done: "已补录到\(day)。")
             } catch {
                 save.busy = false; save.message = ((error as? WorkspaceError)?.text ?? "暂时读不到这一天的作息，未保存；输入已保留。")
