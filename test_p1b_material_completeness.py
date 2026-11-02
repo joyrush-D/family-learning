@@ -365,6 +365,57 @@ class PdfOriginalRoleTests(pdf_evidence.SchoolPdfEvidenceTests):
         self.assertEqual(facts(day),first)  # reopening reads the same facts
 
 
+
+class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
+    """C on the PDF channel: saved page-group receipts of one original (three lines, two doubts) -> validator on read ->
+    _pdf_evidence -> original actions -> Store -> day tasks; the same protocol as the image original (fictional)."""
+    RES='朗读示范音频未随资料附上，需家长另行获取。'
+
+    def _run(self,scoped):
+        keys=self.native_notice('p1b-pdf-scoped');day=self.now.date()
+        lines=dict(数学='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤。'%(day.month,day.day),
+                   语文='语文：%d月%d日晚朗读第3课课文三遍。'%(day.month,day.day),
+                   英语='英语：%d月%d日晚完成练习纸第二部分。'%(day.month,day.day))
+        fp=self.seed_groups(keys=keys,note='题面背景',uncertainties=[self.RES,U_READ],requirements=list(lines.values()))
+        if scoped:
+            with self.store._db() as c:
+                for r in c.execute('SELECT source_id,message_id,first_page,payload FROM agent_pdf_material WHERE fingerprint=?',(fp,)).fetchall():
+                    payload=json.loads(r['payload'])
+                    payload['originals'][0]['uncertainty_scopes']=[dict(uncertainty=self.RES,requirements=[lines['语文']],kind='resource'),
+                                                                   dict(uncertainty=U_READ,requirements=[lines['英语']],kind='reading')]
+                    c.execute('UPDATE agent_pdf_material SET payload=? WHERE source_id=? AND message_id=? AND fingerprint=? AND first_page=?',
+                              (json.dumps(payload,ensure_ascii=False),r['source_id'],r['message_id'],fp,r['first_page']))
+        ident=self.candidate(keys=keys,ident='p1b-pdf-scoped')
+        def mapping(messages):
+            context=json.loads(messages[-1]['content'])
+            parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
+            return {'actions':[dict(pdf_evidence.draft(goal=text),title=subject+'：'+text[text.index('晚')+1:][:14],learning_subject=subject,
+                                    due=day.isoformat(),existing_item_id=ident if subject=='数学' else '',basis=[dict(part=parts[text],text=text)])
+                               for subject,text in lines.items()]}
+        self.refresh(mapping)
+        with self.store._db() as c:
+            rows={json.loads(r['plan'])['school_original_action']['requirements'][0]['text']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")
+                  if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
+        self.assertEqual(set(rows),set(lines.values()))
+        return {subject:rows[text] for subject,text in lines.items()}
+
+    def tasks(self):
+        return sorted(t['title'] for t in self.app.tasks() if any(w in t['title']+t.get('action','') for w in ('练习册','朗读','练习纸')))
+
+    def test_each_scoped_doubt_holds_only_its_own_pdf_line(self):
+        rows=self._run(True);brief=lambda s:json.loads(rows[s]['plan'])['school_task']
+        self.assertEqual([rows[s]['state'] for s in ('数学','语文','英语')],['accepted','accepted','pending'])
+        self.assertEqual(brief('语文').get('resource_needed'),[self.RES]);self.assertNotIn('resource_needed',brief('数学'))
+        self.assertEqual(brief('英语')['state'],'review');self.assertIn(U_READ,brief('英语')['reason']);self.assertNotIn(U_READ,brief('数学')['reason'])
+        first=self.tasks()
+        self.assertEqual(len(first),2,first);self.assertFalse([t for t in first if t.startswith('英语')],first)
+        self.assertEqual(self.tasks(),first)  # reopening reads the same tasks
+
+    def test_old_pdf_receipts_without_scopes_hold_every_line(self):
+        rows=self._run(False)
+        self.assertEqual({r['state'] for r in rows.values()},{'pending'});self.assertEqual(self.tasks(),[])
+        for r in rows.values():self.assertIn(U_READ,json.loads(r['plan'])['school_task']['reason'])
+
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
@@ -374,6 +425,12 @@ def load_tests(loader,tests,pattern):
     suite.addTest(PdfOriginalRoleTests('test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected'))
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
         suite.addTest(OriginalRoleChainTests(name))
+    suite.addTests(loader.loadTestsFromTestCase(UncertaintyScopeValidatorTests))
+    for name in ('test_each_doubt_holds_only_the_requirement_it_names','test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide',
+                 'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide'):
+        suite.addTest(ScopedDoubtImageChainTests(name))
+    for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
+        suite.addTest(ScopedDoubtPdfTests(name))
     return suite
 
 
