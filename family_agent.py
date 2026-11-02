@@ -8097,9 +8097,13 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             owner=next((o for o in activities if o['plan']['school_task'].get('submission')
                 and cited&{e['ref'] for e in o['evidence']}
                 and _school_submission_step(brief,o['plan']['school_task'])),None)
-            if owner and quote_of.get(id(item)) in own_steps.get(id(owner),()):
-                # The step lies in the owner's own sentence and submits its own work (_school_own_steps): once the owner is
-                # accepted, its task holds this step as the existing duplicate path does (Store._reuse_school_submission).
+            # The proof that keeps a step's words in its activity (_school_own_steps: the one original sentence both quote, the
+            # same subject and object, not negated) also decides its owner, whatever words either summary uses; only one such
+            # activity of the same original, never one another summary match names instead.
+            proven=[o for o in activities if cited&{e['ref'] for e in o['evidence']} and quote_of.get(id(item)) in own_steps.get(id(o),())]
+            if len(proven)==1 and owner in (None,proven[0]):
+                owner=proven[0]
+                # Once the owner is accepted, its task holds this step as the existing duplicate path does (Store._reuse_school_submission).
                 brief.update(state='ready',submission_of=dict(title=owner['title'],body=owner['body'],due=owner.get('due') or ''),
                              reason='同一通知的“'+owner['title'][:40]+'”已含这一提交步骤，随该项加入；原文保留。')
             elif owner:
