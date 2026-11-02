@@ -3,6 +3,8 @@ const assert=require('node:assert/strict'),net=require('node:net');
 const {spawn}=require('node:child_process'),{once}=require('node:events');
 const {setTimeout:delay}=require('node:timers/promises'),{randomUUID}=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+// The current home list: the visible Grove row opens its detail, whose own action opens the task (not a hidden old page).
+async function openFromGrove(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
 async function until(check){for(let n=0;n<250;n++){if(await check())return;await delay(40)}throw Error('Timed out')}
 async function demo(){
  const sock=net.createServer();sock.listen(0,'127.0.0.1');await once(sock,'listening');const port=sock.address().port;await new Promise(r=>sock.close(r));
@@ -16,7 +18,7 @@ async function demo(){
  for(const width of [360,1440]){
   const state=await(await fetch(server.url+'api/state')).json(),child=state.children[0].name;
   const made=await fetch(server.url+'api/task/new',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({request_key:randomUUID(),child,title:`虚构重试作业 ${width}`,category:'homework',box:'inbox',due:state.today,action:'核对作答'})});
-  assert(made.ok);const id=(await made.json()).task.id,p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(server.url);await p.locator(`[data-task="${id}"]`).first().click();
+  assert(made.ok);const id=(await made.json()).task.id,p=await browser.newPage({viewport:{width,height:850}}),errors=[];p.on('pageerror',e=>errors.push(e.message));await p.goto(server.url);await openFromGrove(p,id);
   await p.locator('#taskForm [name=note]').fill('虚构首次反馈');let attempts=0;
   await p.route('**/api/task/feedback',async route=>{
    attempts++;
@@ -35,7 +37,7 @@ async function demo(){
   await until(async()=>/已打开最新记录/.test(await p.locator('#taskFeedbackStatus').innerText()));
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),'虚构另一位家长已更正');assert(await p.locator('#taskForm [name=note]').isEnabled());
   assert.equal((await(await fetch(server.url+'api/state')).json()).records.filter(r=>r.source==='事项:'+id).length,1);
-  assert.deepEqual(errors,[]);await p.reload();await p.locator(`[data-task="${id}"]`).first().click();assert.match(await p.locator('#taskFeedbackHistory').innerText(),/另一位家长已更正/);await p.close();
+  assert.deepEqual(errors,[]);await p.reload();await openFromGrove(p,id);assert.match(await p.locator('#taskFeedbackHistory').innerText(),/另一位家长已更正/);await p.close();
  }
  console.log('PASS: 360/1440 lost reply, later correction, verified unlock and reopen');
 }finally{await browser?.close();await server?.stop()}})().catch(e=>{console.error(e);process.exitCode=1});
