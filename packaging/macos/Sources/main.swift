@@ -1378,9 +1378,20 @@ extension AppDelegate {
     func soleControl(in frame: NSRect) -> NSRect? {
         var found: [NSRect] = []
         let roles: Set<String> = ["AXPopUpButton", "AXDateField", "AXMenuButton"]
-        for node in nodes() where roles.contains(node.role) && node.frame.width > 0 && frame.contains(NSPoint(x: node.frame.midX, y: node.frame.midY)) {
-            found.append(node.frame)
+        // SwiftUI 的控件可能在比常规节点更深处：只为这一查找按角色往下多找几层（有层数与节点数上限）。
+        var budget = 6000
+        func deep(_ object: NSObject, _ depth: Int) {
+            budget -= 1
+            guard budget > 0, depth < 60 else { return }
+            let role = object.responds(to: NSSelectorFromString("accessibilityRole")) ? (object.value(forKey: "accessibilityRole") as? String ?? "") : ""
+            if roles.contains(role), object.responds(to: NSSelectorFromString("accessibilityFrame")), let v = object.value(forKey: "accessibilityFrame") as? NSValue {
+                let r = v.rectValue
+                if r.width > 0, frame.contains(NSPoint(x: r.midX, y: r.midY)) { found.append(r) }
+            }
+            guard object.responds(to: NSSelectorFromString("accessibilityChildren")), let children = object.value(forKey: "accessibilityChildren") as? [Any] else { return }
+            for child in children { if let o = child as? NSObject { deep(o, depth + 1) } }
         }
+        testWindows().forEach { deep($0, 0) }
         func walk(_ view: NSView) {
             if view.isHidden { return }
             if view is NSPopUpButton || view is NSDatePicker, let w = view.window {
