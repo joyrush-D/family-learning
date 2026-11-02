@@ -434,6 +434,134 @@ class WrongReviewHTTPTest(unittest.TestCase):
             self.assertEqual(status, expected, (path, out))
             self.assertIn('error', out)
 
+    def stored(self):
+        with app.connect() as c:
+            return '\n'.join(c.iterdump())
+
+    def direct_refused(self, body, status, code=None):
+        before = self.stored()
+        got, out = self.request('/api/wrong/save', body)
+        self.assertEqual(got, status, (body, out))
+        self.assertIn('error', out)
+        if code:
+            self.assertEqual(out.get('code'), code, out)
+        self.assertEqual(self.stored(), before, 'refusal writes nothing')
+
+    def test_direct_wrong_from_homework_without_feedback_replays_and_keeps_task(self):
+        """P3后端：同孩原作业没有已保存反馈，也能直接保存手记文字或已上传整图错题；不造占位反馈。"""
+        task = app.new_task(dict(child='示例甲', title='虚构直接口算作业', category='homework'))
+        other = app.new_task(dict(child='示例甲', title='虚构另一份口算作业', category='homework'))
+        sibling = app.new_task(dict(child='示例乙', title='虚构直接口算作业', category='homework'))
+        app.save_task(dict(id=task['id'], status='已完成', note='虚构：家长确认本项已做完'))
+        photo = self.upload('虚构直接整页.png', PNG)
+        state = self.request('/api/state')[1]
+        self.assertEqual(state['records'], [])
+        before_tasks = {t['id']: t for t in state['tasks']}
+        items = [dict(attachment='', label='第4题', text='63 - 28 =', answer='45'),
+                 dict(attachment=photo, label='第7题')]
+        body = dict(child='示例甲', day='2026-11-02', subject='数学', request_key=uuid.uuid4().hex,
+                    task_id=task['id'], items=items)
+        status, saved = self.request('/api/wrong/save', body)
+        self.assertEqual(status, 200, saved)
+        self.assertEqual([s['existing'] for s in saved['saved']], [False, False])
+        ids = [s['id'] for s in saved['saved']]
+        state = self.request('/api/state')[1]
+        self.assertEqual(sorted(r['id'] for r in state['records']), sorted(ids), 'no placeholder feedback')
+        for ident, attachments in zip(ids, ([], [photo])):
+            record = next(r for r in state['records'] if r['id'] == ident)
+            self.assertEqual((record['source'], record['category'], record['linked_task_id'],
+                              record['related_record_id'], record['followup_kind'], record['attachments']),
+                             ('错题照片核对', '学习进展', task['id'], None, '', attachments))
+            self.assertIn('未对照已保存的作答反馈', record['note'])
+            self.assertFalse(record.get('wrong_region'))
+            self.assertFalse(app.homework_answer_record(record, task['id']), 'a hand-noted wrong item is not a new answer')
+        self.assertNotIn('可见订正/正确答案', next(r for r in state['records'] if r['id'] == ids[0])['note'])
+
+        status, replay = self.request('/api/wrong/save', body)
+        self.assertEqual(status, 200, replay)
+        self.assertEqual([(s['id'], s['existing']) for s in replay['saved']], [(i, True) for i in ids])
+        self.direct_refused(body | dict(items=[items[0] | dict(answer='35'), items[1]]), 409, 'request_conflict')
+        self.direct_refused(body | dict(task_id=other['id']), 409, 'request_conflict')
+        self.direct_refused(body | dict(child='示例乙', task_id=sibling['id']), 409, 'request_conflict')
+        self.direct_refused(body | dict(child='示例乙'), 409, 'wrong_task_changed')
+
+        correction_body = dict(child='示例甲', day='2026-11-02', category='学习进展', subject='数学',
+                               title='虚构第4题订正', note='虚构：孩子订正为35，复测尚未做。', source='家长观察',
+                               related_record_id=ids[0], followup_kind='订正', request_key=uuid.uuid4().hex)
+        status, corrected = self.request('/api/record', correction_body)
+        self.assertEqual(status, 200, corrected)
+        status, again = self.request('/api/record', correction_body)
+        self.assertEqual((status, again['record_id'], again['replayed']), (200, corrected['record_id'], True))
+        state = self.request('/api/state')[1]
+        self.assertEqual(len(state['records']), 3, 'retries keep two wrong items and one correction')
+        correction = next(r for r in state['records'] if r['id'] == corrected['record_id'])
+        self.assertEqual((correction['related_record_id'], correction['linked_task_id'], correction['followup_kind']),
+                         (ids[0], task['id'], '订正'))
+        self.assertFalse(app.homework_answer_record(correction, task['id']))
+        for ident in ids:
+            self.assertEqual(next(r for r in state['records'] if r['id'] == ident)['linked_task_id'], task['id'])
+        for t in state['tasks']:
+            if t['id'] in before_tasks:
+                for key in ('child', 'title', 'original_status', 'update', 'history'):
+                    self.assertEqual(t.get(key), before_tasks[t['id']].get(key), (t['id'], key))
+
+    def test_direct_wrong_refuses_foreign_non_homework_missing_and_explicit_feedback_context(self):
+        mine = app.new_task(dict(child='示例甲', title='虚构同名作业', category='homework'))
+        theirs = app.new_task(dict(child='示例乙', title='虚构同名作业', category='homework'))
+        notice = app.new_task(dict(child='示例甲', title='虚构同名作业'))
+        gone = app.new_task(dict(child='示例甲', title='虚构同名作业', category='homework'))
+        with app.connect() as c:
+            c.execute('DELETE FROM manual_tasks WHERE id=?', (gone['id'],))
+        photo = self.upload('虚构同名作业.png', PNG)
+        doc = self.upload('虚构说明.txt', b'synthetic text')
+        self.request('/api/state')
+
+        def body(**extra):
+            return dict(child='示例甲', day='2026-11-02', subject='语文', request_key=uuid.uuid4().hex,
+                        task_id=mine['id'], items=[dict(attachment='', label='第1个词', answer='窗处')]) | extra
+        for task_id in (theirs['id'], notice['id'], gone['id'], 'MANUAL-' + '0' * 20):
+            self.direct_refused(body(task_id=task_id), 409, 'wrong_task_changed')
+        self.direct_refused(body(child='示例乙'), 409, 'wrong_task_changed')
+        for extra in (dict(feedback_record_id=None), dict(feedback_created='2026-11-02T08:00:00'),
+                      dict(feedback_linked_at='2026-11-02T08:00:00'), dict(feedback_created=''),
+                      dict(feedback_record_id=0, feedback_created='2026-11-02T08:00:00'),
+                      dict(feedback_record_id=99)):
+            self.direct_refused(body(**extra), 400)
+        self.direct_refused(body(feedback_record_id=99, feedback_created='2026-11-02T08:00:00'),
+                            409, 'wrong_feedback_changed')
+        region = dict(x=0.1, y=0.1, width=0.5, height=0.5, natural_width=1, natural_height=1)
+        for item in (dict(attachment=photo, label='第1题', region=region),
+                     dict(attachment='f' * 32, label='第1题'), dict(attachment=doc, label='第1题')):
+            self.direct_refused(body(items=[item]), 400)
+        self.assertEqual(self.request('/api/state')[1]['records'], [])
+        status, out = self.request('/api/wrong/save', body())
+        self.assertEqual(status, 200, out)
+        records = self.request('/api/state')[1]['records']
+        self.assertEqual([(r['linked_task_id'], r['related_record_id'], r['attachments']) for r in records],
+                         [(mine['id'], None, [])])
+
+    def test_direct_wrong_batch_rolls_back_when_a_later_item_fails(self):
+        task = app.new_task(dict(child='示例甲', title='虚构整批作业', category='homework'))
+        body = dict(child='示例甲', day='2026-11-02', subject='数学', request_key=uuid.uuid4().hex, task_id=task['id'],
+                    items=[dict(attachment='', label='第1题', answer='12'), dict(attachment='', label='第2题', answer='9')])
+        self.request('/api/state')
+        original = app.save_record
+        calls = []
+
+        def flaky(record, **kwargs):
+            calls.append(record['request_key'])
+            if len(calls) == 2:
+                raise app.RecordError('虚构：第二条写入失败', 409, 'synthetic_failure')
+            return original(record, **kwargs)
+        before = self.stored()
+        with patch.object(app, 'save_record', side_effect=flaky):
+            status, out = self.request('/api/wrong/save', body)
+        self.assertEqual((status, out.get('code')), (409, 'synthetic_failure'), out)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(self.stored(), before, 'the first item written in the same transaction is rolled back')
+        status, out = self.request('/api/wrong/save', body)
+        self.assertEqual((status, out.get('count')), (200, 2), out)
+
     def test_requires_parent_token(self):
         status, _ = self.request('/api/wrong/annotate',
                                  dict(child='示例甲', attachments=[]),

@@ -2,7 +2,7 @@
 
 ``annotate`` 只在家长点击时把**已上传**的图片发给已配置模型，返回待核对草稿，
 不预计算、不落库、不因为打开页面调用模型。``save`` 把家长逐题核对后的错题保存为
-普通学习记录（category=学习进展、来源“错题照片核对”）；原作业反馈可手填并复用照片，
+普通学习记录（category=学习进展、来源“错题照片核对”）；原作业反馈可手填并复用照片；没有已保存反馈时也可从同孩原作业直接手记（只挂原作业，不造反馈），
 不判知识点、错因或掌握程度，后续订正/复测沿用既有学习记录链。
 """
 import functools
@@ -21,6 +21,7 @@ IMAGE_MIMES = {'image/jpeg', 'image/png', 'image/webp'}
 ANNOTATE_TIMEOUT = 150
 MAX_SAVE_ITEMS = 30
 SOURCE = '错题照片核对'
+FEEDBACK_KEYS = ('feedback_record_id', 'feedback_created', 'feedback_linked_at')
 # 原图框题（wrong-notebook image-crop.ts 的 0–1 范围）只是原错题记录的窄元数据：原图、原作答版本与范围冻结在这里，
 # records 的来源、附件与诊断依据不变；裁片只在浏览器临时生成，不进 uploads/attachments。
 REGION_KEYS = {'x', 'y', 'width', 'height', 'natural_width', 'natural_height'}
@@ -197,10 +198,13 @@ class Store:
         feedback_id = obj.get('feedback_record_id')
         feedback_created = _text(obj, 'feedback_created', 50)
         feedback_linked_at = _text(obj, 'feedback_linked_at', 50)
-        if bool(task_id) != (feedback_id is not None) or (feedback_id is not None and
-                (type(feedback_id) is not int or feedback_id <= 0)):
+        # 从原作业直接手记（不预造反馈）：只带 task_id、不带任何反馈上下文字段，保存事务内再核同孩原 homework。
+        # 带了反馈字段（含 null/空值、半缺或写错）一律走原反馈核对，不能落到这里绕过。
+        direct = bool(task_id) and not any(key in obj for key in FEEDBACK_KEYS)
+        if not direct and (bool(task_id) != (feedback_id is not None) or (feedback_id is not None and
+                (type(feedback_id) is not int or feedback_id <= 0))):
             raise WrongReviewError('请从同一份作业反馈进入错题核对')
-        if task_id and not feedback_created:
+        if task_id and not direct and not feedback_created:
             raise WrongReviewError('原作答版本无法核对，请重新打开作业反馈')
 
         parsed = []
@@ -222,7 +226,7 @@ class Store:
                     attachment = row['id']
                     mime = row['mime']
                 if region is not None:
-                    if not task_id or not attachment:
+                    if not task_id or direct or not attachment:
                         raise WrongReviewError('原图框题只能从原作业已保存的照片记录')
                     region = _region(region, index)
                 label = _text(item, 'label', fwq.LIMITS['label'], name='题号')
@@ -256,7 +260,8 @@ class Store:
                 lines.append('知识点（家长核对）：' + item['topic_hint'])
             if item['error_hint']:
                 lines.append('错误类型（家长核对）：' + item['error_hint'])
-            lines.append(('家长对照原作答记录；' if task_id else '由照片标注生成，家长已核对；') + '这不是掌握程度结论。')
+            lines.append(('家长从原作业直接记录，未对照已保存的作答反馈；' if direct else
+                          '家长对照原作答记录；' if task_id else '由照片标注生成，家长已核对；') + '这不是掌握程度结论。')
             record = dict(
                 child=child, day=day, category='学习进展', subject=subject,
                 title=heading[:200], note='\n'.join(lines), source=SOURCE,
@@ -265,6 +270,9 @@ class Store:
             )
             if feedback_id is not None:
                 record['related_record_id'] = feedback_id
+                record['linked_task_id'] = task_id
+            elif direct:
+                # 只挂原作业（save_record 的显式事项关联再核同孩）；没有原作答可关联，不造占位反馈。
                 record['linked_task_id'] = task_id
             if item['region'] is not None:
                 # 范围进入原提交指纹：同一提交标识改了框即 request_conflict，零写入。
@@ -276,7 +284,12 @@ class Store:
         saved = []
         with self.app.connect() as c:
             c.execute('BEGIN IMMEDIATE')
-            if task_id:
+            if direct:
+                task = next((t for t in self.app.tasks(c) if t['id'] == task_id), None)
+                if task is None or task['child'] != child or task.get('agenda', {}).get('category') != 'homework':
+                    raise WrongReviewError('原作业已不存在、不属于这个孩子或不是作业，错题未保存；请从原作业重新记录',
+                                           409, 'wrong_task_changed')
+            elif task_id:
                 task = next((t for t in self.app.tasks(c) if t['id'] == task_id), None)
                 feedback = c.execute('SELECT * FROM records WHERE id=?',
                                      (feedback_id,)).fetchone()
