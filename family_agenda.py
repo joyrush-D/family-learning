@@ -1298,6 +1298,47 @@ def _exemption_unmet(old,notice,shown):
     return '、'.join(clause for clause,words in _lifted_exemptions(old,notice) if not words<=pos or words&neg)
 
 
+# The doers a requirement names (as _school_clause_roles' lead reads them): who reads, signs or hands in.
+_ACTOR_WORDS=r'家长|监护人|父母|爸爸|妈妈|爸妈|学生|孩子|同学们?|班主任|老师'
+
+
+def _polar_clauses(text):
+    """(clause, negated, requirement pieces) of each clause of text, read by its own polarity."""
+    return [(c.strip(),_clause_negated(c),_requirement_pieces(c)) for c in re.split(r'[，,；;。！!？?\n]+',text or '') if c.strip()]
+
+
+def _rebound_actors(old,notice):
+    """Each notice clause whose doer the notice's own words change while every other word of it is one original piece's own,
+    of the same polarity (家长今晚听音频跟读… after 孩子今晚听音频跟读…；孩子签字 after 家长签字): the notice's clause words."""
+    actors=_unit_chars(''.join(re.findall(_ACTOR_WORDS,(old or '')+'\n'+(notice or ''))))
+    if not actors:return []
+    olds=_polar_clauses(old);units=set(family_agent._SCHOOL_COUNT_UNITS.split('|'));found=[]
+    for raw,negated,_ in _polar_clauses(notice):
+        norm=re.sub(_subject_patterns()[2].pattern,' ',re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token(units).sub(' ',_MOVE_NARRATION.sub(' ',raw.lower()))))
+        for piece in _requirement_pieces(norm,False):
+            same=[u for _,n,pieces in olds if n==negated for u in pieces]
+            if any(piece<=u for u in same):continue
+            core=piece-actors
+            if core and piece&actors and any(core<=u-actors and not piece&actors<=u for u in same):
+                found.append(re.sub(r'^[^：:，,]{0,8}[：:]','',raw).strip());break
+    return found
+
+
+def _rebound_unmet(old,notice,shown):
+    """A short reason when the notice changes who does a requirement (_rebound_actors) and the latest words do not state it
+    so: the notice's own clauses and the summary's clauses naming a doer, never the whole message; '' when none."""
+    found=_rebound_actors(old,notice)
+    if not found:return ''
+    held=[set().union(*pieces) for _,_,pieces in _polar_clauses(shown) if pieces]
+    def carried(clause):
+        norm=re.sub(_subject_patterns()[2].pattern,' ',_MOVE_NARRATION.sub(' ',clause.lower()))
+        return all(any(piece<=h for h in held) for piece in _requirement_pieces(norm,False))
+    if all(carried(c) for c in found):return ''
+    said=list(dict.fromkeys(re.sub(r'^[^：:，,]{0,8}[：:]','',c).strip()[:24] for c,_,_ in _polar_clauses(shown) if re.search(_ACTOR_WORDS,c)))[:3]
+    return ('通知改为“'+'”“'.join(c[:24] for c in found)+'”，执行人与原要求不同；新要求的归纳'
+            +('仍写“'+'”“'.join(said)+'”' if said else '未写明执行人'))
+
+
 def _unchanged_lost(old_lines,shown,said,lifted=()):
     """Original clauses the latest shown words no longer carry beyond the notice's own changes; [] when every one is kept.
     An object the notice explicitly changes (透明塑料杯改为两个玻璃杯) is carried only by its changed words written as one
@@ -1574,6 +1615,8 @@ def _one_affair_versions(c,items,store):
         lifted=_lifted_exemptions('\n'.join(old_lines),own_words) if rel['change']=='update' else []
         if lifted and (unmet:=_exemption_unmet('\n'.join(old_lines),own_words,shown)):
             why.append('通知要求“'+unmet[:30]+'”，原要求写明不用；新要求的归纳未写入这项')
+        elif rel['change']=='update' and (rebound:=_rebound_unmet('\n'.join(old_lines),own_words,shown)):
+            why.append(rebound)
         # A notice moves the item only by tying a date role to a day the original does not hold in that same role: 今晚只需
         # 跟读两遍 restates the original's own 今晚 (its work day), whichever role the summary filed it under, and moves nothing;
         # 改为今晚交给数学老师 moves the handback from 明早 onto 今晚, although 今晚 already was the original's work day.

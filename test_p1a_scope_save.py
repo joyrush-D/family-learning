@@ -1345,13 +1345,18 @@ class LiftedExemptionTests(ScopeSaveTests):
         """Root run13 actor-binding negative: the notice swaps who reads and who signs using only the original's characters."""
         task, item = self.notice('更正跟读：家长今晚听音频跟读《星海短句》第1至3句，两遍；孩子签字。', '孩子今晚跟读《星海短句》第1至3句，共两遍；家长签字。',
                                  original='英语：孩子今晚听音频跟读《星海短句》第1至3句，每句三遍；家长签字。')
+        reason = ('通知改为“家长今晚听音频跟读《星海短句》第1至3句”“孩子签字”，执行人与原要求不同；'
+                  '新要求的归纳仍写“孩子今晚跟读《星海短句》第1至3句”“家长签字”')
         for view in self.views(DAY):
             row = self.card(view, task)
             version = row.get('version') or {}
             self.assertEqual(version.get('state'), 'review', version)
             self.assertIn('孩子今晚听音频跟读', '\n'.join(row['lines']), 'the saved requirement stays until a whole one is confirmed')
+            self.assertEqual(version.get('reasons'), [reason], 'the swapped doers are named, never called an unchanged part')
+            self.assertFalse(any('未改' in r for r in version['reasons']))
         before = self.task(task)['action']
         with self.assertRaises(agent.AgentError) as refused:
             agent.apply_school_change(self.app, self.store, form_request(self, item, task))
         self.assertEqual(refused.exception.status, 409)
+        self.assertTrue(str(refused.exception).startswith(reason), 'the save refusal gives the page\'s own reason')
         self.assertEqual(self.task(task)['action'], before, 'old actors are never saved as the latest')

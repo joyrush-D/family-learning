@@ -3340,6 +3340,10 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
     if lifted and (unmet:=_exemption_unmet('\n'.join(old),own_words,shown)):
         # The notice requires what the original exempted (不用抄写 → 抄写); words still exempting or leaving it out are refused.
         raise AgentError('通知要求“'+unmet[:30]+'”，原要求写明不用；新要求的归纳未写入这项，原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
+    from family_agenda import _rebound_unmet
+    if not lifted and (rebound:=_rebound_unmet('\n'.join(old),own_words,shown)):
+        # The notice changes who does a requirement (家长跟读、孩子签字): the page's own reason, refused before any write.
+        raise AgentError(rebound+'；原要求和这条通知都已保留，请写入完整要求后再保存',409,'school_change_incomplete')
     from family_agenda import _notice_count_change,_notice_count_latest,_put_counts,_stated_count_changes
     moved=bool(exact_day(due)) and due!=task['agenda'].get('due_on','') if moves is None else moves
     implicit=_notice_count_change(old,found) if not lifted else None
