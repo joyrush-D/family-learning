@@ -367,6 +367,13 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         with patch.object(agent,'_school_original_actions',cite):
             for m in minutes:agent.run_once(self.app,self.now+dt.timedelta(minutes=m))
 
+    def _as_saved_before_scopes(self):
+        # The stored receipt as code before the scope protocol wrote it: the same reading without the scope_requested mark.
+        with self.store._db() as c:
+            payload=json.loads(c.execute("SELECT payload FROM agent_message_drafts WHERE message_id='503'").fetchone()['payload'])
+            self.assertEqual(payload.pop('scope_requested'),1)
+            c.execute("UPDATE agent_message_drafts SET payload=? WHERE message_id='503'",(json.dumps(payload,ensure_ascii=False),))
+
     def _receipt_row(self):
         with self.store._db() as c:
             row=dict(c.execute("SELECT * FROM agent_message_drafts WHERE message_id='503'").fetchone())
@@ -376,10 +383,11 @@ class ScopedDoubtImageChainTests(_ScopeBase):
 
     def test_an_old_undecided_receipt_is_read_once_more_for_its_scopes(self):
         found=self._scoped(None);ids={k:r['id'] for k,r in found.items()}  # read before scopes: every line held
-        old,job=self._receipt_row()
+        self._as_saved_before_scopes();old,job=self._receipt_row()
         self.reads.side_effect=[scope.swap(self._receipt(copy.deepcopy(scope.FIX),self.SCOPES)['call_1'],self.upload)]
         self._later((2,3))
         self.assertEqual(self.reads.call_count,2)  # one bounded re-read through the normal reader
+        self.assertEqual(json.loads(self._receipt_row()[0]['payload']).get('scope_requested'),1)
         new,job2=self._receipt_row();payload=json.loads(new['payload'])
         self.assertEqual(payload['originals'][0]['uncertainty_scopes'],self.SCOPES)
         self.assertEqual(payload['previous_scope_receipt'],dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated']))
@@ -396,7 +404,7 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         for case in ('decided','exhausted'):
             with self.subTest(case=case):
                 if case=='exhausted':self.setUp()
-                found=self._scoped(None);old,job=self._receipt_row()
+                found=self._scoped(None);self._as_saved_before_scopes();old,job=self._receipt_row()
                 with self.store._db() as c:
                     if case=='decided':c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(found[R_DICT]['id'],))
                     else:c.execute('UPDATE agent_jobs SET attempts=? WHERE id=?',(agent.MAX_ATTEMPTS,job['id']))
