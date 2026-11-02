@@ -4,7 +4,9 @@ import unittest
 from unittest.mock import patch
 
 import app
-from test_homework_print_scope import HomeworkPrintScopeTests
+import test_homework_print_scope as scope  # module import: its own tests are not collected twice here
+
+HomeworkPrintScopeTests=scope.HomeworkPrintScopeTests
 
 PDF='application/pdf'
 
@@ -12,6 +14,7 @@ PDF='application/pdf'
 class TaskMaterialListingTests(unittest.TestCase):
     setUp=HomeworkPrintScopeTests.setUp
     tearDown=HomeworkPrintScopeTests.tearDown
+    new_task=HomeworkPrintScopeTests.new_task
     upload=HomeworkPrintScopeTests.upload
     feedback=HomeworkPrintScopeTests.feedback
     request=HomeworkPrintScopeTests.request
