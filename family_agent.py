@@ -3440,7 +3440,8 @@ def _school_complete_span(text,start,end):
             and (not right or right[0] in '。；;！!？?\n' or quoted[-1:] in tuple('。；;！!？?\n')))
 
 
-_SCHOOL_ARRANGEMENT=r'(?:抽查|检查|抽背|抽测|默写|听写|背诵|朗读|体检|测试|测验|考试|上交|交|带|穿)'
+# The classroom assessments _SCHOOL_LESSON_ASSESSMENT reads (抽读、考查、小测…) are arrangements of their own day as 听写 is.
+_SCHOOL_ARRANGEMENT=r'(?:抽查|检查|抽背|抽测|抽读|抽问|默写|听写|背诵|朗读|体检|测试|测验|小测|考查|考试|口试|笔试|检测|测评|上交|交|带|穿)'
 # 签字 and 签名 are one signature (as _SCHOOL_NATIVE_STEPS reads a follow-up's steps): the role readers and their change and
 # withdrawal guards read either word the same.
 _SCHOOL_SIGN=r'签(?:好|上|过|了)?(?:字|名字?|姓名)'  # 签字 = 签名 = 签上姓名 = 签好名字
