@@ -589,26 +589,26 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
             self.upload_id=value['upload_id'];self.fp=fp
         self.ident=self.candidate(keys=keys,ident='p1b-pdf-d')
         self.refresh(self._mapping(first=True))
-        return self.rows()
+        return self.line_rows()
 
     def _mapping(self,first=False):
         def reply(messages):
             context=json.loads(messages[-1]['content']);parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
-            known={} if first else {text:r['id'] for text,r in self.rows().items()}
+            known={} if first else {text:r['id'] for text,r in self.line_rows().items()}
             return {'actions':[dict(pdf_evidence.draft(goal=t),title=s+'：'+t[t.index('晚')+1:][:14],learning_subject=s,due=self.day.isoformat(),
                                     existing_item_id=(self.ident if s=='数学' else '') if first else known[t],basis=[dict(part=parts[t],text=t)])
                                for s,t in self.lines.items()]}
         return reply
 
-    def rows(self):
+    def line_rows(self):
         with self.store._db() as c:
             return {json.loads(r['plan'])['school_original_action']['requirements'][0]['text']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")
                     if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
 
-    def job(self,key):
+    def job_row(self,key):
         with self.store._db() as c:return dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(key,)).fetchone())
 
-    def group(self):
+    def group_payload(self):
         with self.store._db() as c:return json.loads(c.execute('SELECT payload FROM agent_pdf_material WHERE fingerprint=? AND first_page=1',(self.fp,)).fetchone()['payload'])
 
     def _read(self,minutes,reply):
@@ -624,37 +624,37 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
             dict(uncertainty=U_READ,requirements=[self.lines['英语']],kind='reading')])])
 
     def test_an_old_undecided_pdf_group_is_read_once_more_and_remapped_on_its_own_budgets(self):
-        before=self._old();ids={t:r['id'] for t,r in before.items()};old=self.group()
+        before=self._old();ids={t:r['id'] for t,r in before.items()};old=self.group_payload()
         self.assertEqual({r['state'] for r in before.values()},{'pending'})  # unscoped old doubts hold every line
-        task_key='school-task:'+self.ident;mapper=self.job(task_key)
+        task_key='school-task:'+self.ident;mapper=self.job_row(task_key)
         result,read=self._read(5,[self.receipt()])
         self.assertEqual((result,read.call_count),(dict(used=1,failed=0),1))
         self.assertEqual((read.call_args.kwargs['original_pages'],read.call_args.kwargs['previous_requirements']),([1,2,3],list(self.lines.values())))
-        group=self.group();doc=self.job(self.doc_key)
+        group=self.group_payload();doc=self.job_row(self.doc_key)
         self.assertEqual(group['originals'][0]['uncertainty_scopes'],self.receipt()['originals'][0]['uncertainty_scopes'])
         self.assertEqual((group['previous_group']['payload'],group['previous_group']['scope_supplement']),(old,True))
         self.assertEqual((doc['attempts'],doc['done']),(2,1))  # the read job's own count, one more
         _,calls=self.refresh(self._mapping(),minutes=6)
-        rows=self.rows();self.assertEqual(len(calls),1)
+        rows=self.line_rows();self.assertEqual(len(calls),1)
         self.assertEqual({t:r['id'] for t,r in rows.items()},ids)
         self.assertEqual([rows[self.lines[s]]['state'] for s in ('数学','语文','英语')],['accepted','accepted','pending'])
-        self.assertEqual(self.job(task_key)['attempts'],mapper['attempts']+1)  # the mapping job's own count, never a new budget
-        made=(self.rows(),self.group(),self.job(self.doc_key),self.job(task_key))
+        self.assertEqual(self.job_row(task_key)['attempts'],mapper['attempts']+1)  # the mapping job's own count, never a new budget
+        made=(self.line_rows(),self.group_payload(),self.job_row(self.doc_key),self.job_row(task_key))
         result,read=self._read(7,AssertionError('no second read'))
         _,calls=self.refresh(self._mapping(),minutes=8)
         self.assertEqual((result['used'],read.call_count,len(calls)),(0,0,0))
-        self.assertEqual((self.rows(),self.group(),self.job(self.doc_key),self.job(task_key)),made)
+        self.assertEqual((self.line_rows(),self.group_payload(),self.job_row(self.doc_key),self.job_row(task_key)),made)
 
     def test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group(self):
         for case in ('decided','exhausted'):
             with self.subTest(case=case):
                 if case=='exhausted':self.setUp()
-                rows=self._old();old=self.group()
+                rows=self._old();old=self.group_payload()
                 with self.store._db() as c:
                     if case=='decided':c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(rows[self.lines['英语']]['id'],))
                     else:c.execute('UPDATE agent_jobs SET attempts=? WHERE id=?',(agent.MAX_ATTEMPTS,self.doc_key))
                 result,read=self._read(5,[self.receipt()])
-                self.assertEqual((result['used'],read.call_count,self.group()),(0,0,old))
+                self.assertEqual((result['used'],read.call_count,self.group_payload()),(0,0,old))
 
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
