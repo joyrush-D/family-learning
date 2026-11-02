@@ -626,6 +626,15 @@ struct SubjectList: View {
             if let text = store.current?.source_error, !text.isEmpty {
                 Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18).padding(.vertical, 6)
             }
+            // 与网页清单同一条提示：这个孩子还有学校消息没整理完，清单可能不完整（读取成功与整理完是两回事）；整理状态沿网页版查看。
+            if let count = store.current?.school_pending, count > 0 {
+                let words = "还有 \(count) 条学校消息尚未整理，作业清单可能不完整。原消息已保存。"
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).probe("school-pending", text: words)
+                    Button("在网页版查看整理状态") { store.openWebTools("", "") }.buttonStyle(.borderless).controlSize(.small).probe("school-pending-open")
+                }
+                .padding(.horizontal, 18).padding(.vertical, 6)
+            }
             switch store.mode {
             case .calendar: itemList
             case .wrong: WrongList(store: store)

@@ -48,6 +48,7 @@ def day_view(child, day):
     return {"today": TODAY, "day": day, "child_id": child, "child_name": next(c["name"] for c in CHILDREN if c["id"] == child),
             "children": CHILDREN, "token": "synthetic-only", "groups": [{"subject": s, "items": i} for s, i in groups.items()],
             "closed": [], "wrong": [{"subject": "数学", "items": WRONG[child]}] if WRONG[child] else [],
+            "school_pending": 1 if (child, day) == ("child-1", TODAY) else 0,
             "counts": {"open": len(rows), "closed": 0, "today": len(rows)}}
 
 

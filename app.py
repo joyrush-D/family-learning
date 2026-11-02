@@ -279,6 +279,18 @@ def tasks(connection=None):
         if len(cells) == 7 and re.fullmatch(r'[A-Z]+\d+', cells[0]):
             result.append(dict(zip(['id','child','title','due','original_status','source','action'], cells)))
     manual=[dict(r) for r in connection.execute('SELECT * FROM manual_tasks ORDER BY rowid DESC')]
+    # A family- or child-recorded item without its own goal reads its saved words (study report.text, the full original) as its
+    # action, display only: a goal stays first, school tasks never take these words, and nothing is saved or rewritten.
+    recorded=(family_study.FAMILY_CAPTURE,family_study.CHILD_REPORT_PENDING,family_study.CHILD_REPORT_CONFIRMED)
+    if any(not str(t.get('action') or '').strip() and t['source'] in recorded for t in manual) and \
+            'report' in {r[1] for r in connection.execute('PRAGMA table_info(study_items)')}:
+        words={}
+        for row in connection.execute("SELECT task_id,report FROM study_items WHERE report IS NOT NULL AND report<>''"):
+            try: text=str(json.loads(row['report']).get('text') or '').strip()
+            except (ValueError,TypeError,AttributeError): continue
+            if text: words.setdefault(row['task_id'],text)
+        for t in manual:
+            if not str(t.get('action') or '').strip() and t['source'] in recorded and words.get(t['id']): t['action']=words[t['id']]
     focuses=family_task_focus.read_all(connection)
     updates={r['id']:dict(r) for r in connection.execute('SELECT id,status,updated FROM task_updates')}
     for task in manual+result:
@@ -461,7 +473,18 @@ def day_view(child_id,day):
     cal,schedule_error=schedule_read(week[0],week[-1])
     inbox=family_agenda.snapshot(SimpleNamespace(**globals()),week[0],week[-1])['inbox']
     view=day_projection(inbox,cal,schedule_error,ts,records,child,day,today,learning)
-    return dict(today=today,day=day,child_id=child['id'],child_name=child['name'],children=listed,token=TOKEN,source_error=(cal or {}).get('source_error',''),**view)
+    pending=school_pending(child['id'])
+    return dict(today=today,day=day,child_id=child['id'],child_name=child['name'],children=listed,token=TOKEN,source_error=(cal or {}).get('source_error',''),**view,
+                **({} if pending is None else dict(school_pending=pending)))
+
+def school_pending(child_id):
+    """This child's school messages received but not yet organized: the web list's own rule (schoolProcessingHTML over
+    /api/state agent.sources, positive pending_message_count of sources whose child_id is this child), read from the same
+    agent snapshot. None when the snapshot cannot be read, never a guess; nothing is collected, organized or written."""
+    try: sources=agent_store().snapshot()['sources']
+    except (OSError,sqlite3.Error,ValueError,TypeError,KeyError,family_agent.AgentError): return None
+    return sum(s['pending_message_count'] for s in sources
+               if s.get('child_id')==child_id and type(s.get('pending_message_count')) is int and s['pending_message_count']>0)
 
 def week_days(day):
     first=dt.date.fromisoformat(day);first-=dt.timedelta(days=first.weekday())

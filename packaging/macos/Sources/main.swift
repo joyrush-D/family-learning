@@ -1372,6 +1372,21 @@ extension AppDelegate {
         return []
     }
 
+    /// 探针范围内恰有一个系统弹出菜单或日期控件时，它在屏幕上的位置；没有或不止一个就返回 nil（照旧点探针中心）。
+    func soleControl(in frame: NSRect) -> NSRect? {
+        var found: [NSRect] = []
+        func walk(_ view: NSView) {
+            if view.isHidden { return }
+            if view is NSPopUpButton || view is NSDatePicker, let w = view.window {
+                let r = w.convertToScreen(view.convert(view.bounds, to: nil))
+                if r.width > 0, frame.contains(NSPoint(x: r.midX, y: r.midY)) { found.append(r) }
+            }
+            view.subviews.forEach(walk)
+        }
+        testWindows().compactMap(\.contentView).forEach(walk)
+        return found.count == 1 ? found[0] : nil
+    }
+
     func tables(in view: NSView?) -> [NSTableView] {
         guard let view, !view.isHidden else { return [] }
         if let table = view as? NSTableView { return [table] }
@@ -1417,6 +1432,9 @@ extension AppDelegate {
             // The row can include empty padding beside a short SwiftUI label. The selected original ID below is still mandatory.
             let r = tw.convertToScreen(anchor.convert(anchor.bounds, to: nil)); center = NSPoint(x: r.midX, y: r.midY)
         }
+        // 带标签的复合控件（Picker、DatePicker 整行）：探针框住整行时点在容器空白处打不开控件。探针范围内恰有一个系统弹出/日期控件时，
+        // 改点那个控件自己的中心——仍是真实鼠标事件，不设值、不调用动作；其他控件和列表行照旧。
+        if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY) }
         guard let w = testWindows().first(where: { $0.frame.contains(center) }) else { return ["ok": false, "error": "control outside the test window", "id": id, "scrolled": scrolled, "has_scroll_view": TestTargets.live(id)?.0.enclosingScrollView != nil] }
         // 像家长先把窗口点到最前面：App 不在前台、窗口不是当前窗口时先激活（只激活，不算这一步的点击）。
         var activated = false

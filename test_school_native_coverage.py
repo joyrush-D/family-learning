@@ -932,6 +932,16 @@ class SchoolNativeCoverageTests(unittest.TestCase):
                  task_goal='将《校外出行确认单》交家长签字，两份均交回班主任。', task_state='reference', task_purpose='optional')])
         self._assert_rejected_batch(payload, result)
 
+    def test_the_day_view_carries_this_childs_pending_school_messages_like_the_web(self):
+        # /api/day (the Mac list) reads the web list's own rule over the same snapshot: this child's positive pending counts only.
+        self._two_actions()
+        day=self.now.date().isoformat();mine=self.source['child_id']
+        want=sum(s['pending_message_count'] for s in self.store.snapshot()['sources'] if s['child_id']==mine)
+        view=self.app.day_view(mine,day)
+        self.assertEqual((view['school_pending'],want>0),(want,True))
+        for other in [c['id'] for c in view['children'] if c['id']!=mine]:
+            self.assertEqual(self.app.day_view(other,day)['school_pending'],0,'another child never carries this warning')
+
     def test_pending_message_counts_are_source_scoped_and_reject_stale_bindings(self):
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
         self._two_actions()
