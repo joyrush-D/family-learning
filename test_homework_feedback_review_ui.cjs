@@ -8,6 +8,8 @@ const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 // The current home list: the visible Grove row opens its detail, whose own action opens the task (not a hidden old page).
+// The same task's current Grove detail (opened from its own visible row) without pressing its action.
+async function groveEntry(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().waitFor();return d}
 async function openFromGrove(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
 // The stage line under the count, the note under the fill button and the right-hand save status, read together with the count.
 const reviewStage=panel=>panel.evaluate(el=>{const result=el.querySelector('[data-homework-review-result]');return {stage:result.querySelector('.homework-review-stage')?.textContent??null,hint:result.querySelector('.homework-review-next>p')?.textContent??null,questions:!!result.querySelector('.homework-review-questions'),counts:result.querySelector('.homework-review-counts')?.textContent??null,status:document.querySelector('#taskFeedbackStatus').textContent}});
@@ -374,7 +376,7 @@ async function splitPdfFlow(p,host,width){
   let draftCalls=0;await p.route('**/api/study/draft',r=>{draftCalls++;return r.fulfill({status:503,json:{error:'虚构模型不可用'}})});
   await item.locator('[name=title]').fill(title);await entry.locator('[data-homework-close]').click();await p.locator('[data-homework-new]').first().click();assert.equal(await item.locator('[name=title]').inputValue(),title,'quick entry survives closing and reopening');await item.locator('[name=goal]').fill('先作答再核对');assert.equal(await item.locator('[name=reviewed]').count(),0,'parent save is the explicit confirmation without a duplicate checkbox');await item.locator('[type=submit]').click();await entry.locator('.homework-saved').waitFor();assert.equal(draftCalls,0,'manual entry does not require the model');await p.unroute('**/api/study/draft');await entry.locator('[data-homework-manual]').click();assert.equal(await entry.locator('[data-homework-item]').count(),1,'unused empty candidate is visible');await entry.locator('[data-homework-close]').click();await p.locator('[data-homework-new]').first().click();assert.equal(await entry.locator('.homework-saved').count(),0,'a later capture starts a new session');assert.equal(await entry.locator('[data-homework-item="0"] [name=title]').isVisible(),true);assert.equal(await entry.locator('[name=text]').inputValue(),'','a new task does not inherit the previous original');assert.equal(await entry.locator('[data-homework-original]').evaluate(x=>x.open),false);await entry.locator('[data-homework-close]').click();
   state=await(await fetch(host.url+'api/state')).json();const id=state.tasks.find(t=>t.title===title)?.id;assert(id,'homework entry creates the task');await p.locator('[data-query-target="task:'+id+'"]').waitFor();
-  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/提交作业反馈/);
+  assert.match(await (await groveEntry(p,id)).locator('[data-task="'+id+'"]').first().innerText(),/交作答照片 \/ 写反馈/);
   await openFromGrove(p,id);await p.locator('#taskDialog[open]').waitFor();
   assert.equal(await p.locator('#taskStatusDetails').evaluate(x=>x.open),false,'status update stays secondary');
   await p.locator('#taskForm [name=note]').fill('虚构未保存反馈');
@@ -387,7 +389,7 @@ async function splitPdfFlow(p,host,width){
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'close dismissal keeps unsaved photo');
   assert.equal(await p.locator('#pendingUploads img').count(),1);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
-  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'today confirms saved feedback in the same task');
+  assert.ok(await (await groveEntry(p,id)).locator('[data-grove-record]').count()>0,'today confirms saved feedback in the same task');
   assert(await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').isVisible(),'separate question/reference printing is directly visible');
   const preparation={id:'b'.repeat(32),pdf_sha256:'c'.repeat(64),page_count:1,preview_url:'/api/print/preview/'+'b'.repeat(32)},keysPrint=[];
   await p.route('**/api/print/prepare',r=>r.fulfill({json:{preparation}}));
@@ -715,7 +717,7 @@ async function splitPdfFlow(p,host,width){
   await textWrong.locator('[data-task-wrong-save]').click();await eventually(async()=>/错题已保存在这份作业下/.test(await p.locator('#taskFeedbackStatus').innerText()),'manual text-only wrong item saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='错题照片核对'&&r.linked_task_id===id).length,2);
   assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);await p.reload();
-  assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/查看\/补充反馈/,'reopened today retains saved-feedback state');assert.deepEqual(errors,[]);
+  assert.ok(await (await groveEntry(p,id)).locator('[data-grove-record]').count()>0,'reopened today retains saved-feedback state');assert.deepEqual(errors,[]);
   await p.unroute('**/api/print/homework/draft');
   const photos=[];for(let n=0;n<5;n++){const r=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-complete-'+n+'.png','Content-Type':'application/octet-stream'},body:png});assert.equal(r.status,200);photos.push((await r.json()).attachment.id)}
   const pdf=Buffer.from(await(await fetch(host.url+'attachment/'+encodeURIComponent('演示练习.pdf'))).arrayBuffer());
