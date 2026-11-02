@@ -1158,6 +1158,9 @@ def upload_mime(path, name):
 
 UPLOAD_KEY=re.compile(r'[A-Za-z0-9_-]{16,64}')
 
+class UploadKeyInvalid(Exception):
+    """The upload request key is not 16-64 letters, digits, '-' or '_'; refused before the body is read, nothing stored."""
+
 class UploadKeyConflict(Exception):
     """The upload request key already names another file (other name, size or bytes); nothing of this request is stored."""
 
@@ -1177,7 +1180,7 @@ def keyed_upload(c,key,name,size,digest):
 
 def save_upload(stream, size, encoded_name, request_key=None):
     """A new original, or with a request key the original that key already stored (same name and bytes) without a second copy."""
-    if request_key is not None and not UPLOAD_KEY.fullmatch(request_key): raise ValueError('上传标识不正确')
+    if request_key is not None and not UPLOAD_KEY.fullmatch(request_key): raise UploadKeyInvalid()
     if not 0<size<=MAX_UPLOAD: raise ValueError('每个文件须在20MB以内且不能为空')
     name=unquote(encoded_name,encoding='utf-8',errors='strict').strip()
     if not name or len(name)>200 or '/' in name or '\\' in name or any(ord(c)<32 or ord(c)==127 for c in name):
@@ -2814,6 +2817,8 @@ class Handler(BaseHTTPRequestHandler):
                 if n>MAX_UPLOAD: return self.reply(413,{'error':'每个文件最多20MB'})
                 self.connection.settimeout(30)
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''),self.headers.get('X-Request-Key'))
+                # Each refusal says its own reason; the client's key is never echoed back.
+                except UploadKeyInvalid: return self.reply(400,{'error':'上传标识格式不正确，本次没有保存。','code':'upload_key_invalid'})
                 except UploadKeyConflict: return self.reply(409,{'error':'这个上传标识已对应另一份文件，本次没有保存，原来的原件不变。','code':'upload_key_conflict'})
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))

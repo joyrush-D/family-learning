@@ -152,8 +152,16 @@ class UploadReceiptTests(unittest.TestCase):
         for body,name in [(PNG+b'synthetic-other-bytes','synthetic-photo.png'),(PNG,'synthetic-renamed.png')]:
             status,value=self.post(body,name=name,key=key)
             self.assertEqual((status,value.get('code')),(409,'upload_key_conflict'),value)
-        status,_=self.post(PNG,key='not a key!')
-        self.assertEqual((status,self.uploads(),self.stored()),(400,rows,files))
+        # Each malformed key is refused as a key error with a stable reason (never the file error, never the key echoed), zero writes.
+        for bad in ['','short','a'*15,'a'*65,'synthetic key with space','synthetic/key/with/slash']:
+            status,value=self.post(PNG,key=bad)
+            self.assertEqual((status,value),(400,{'error':'上传标识格式不正确，本次没有保存。','code':'upload_key_invalid'}),repr(bad))
+            self.assertTrue(not bad or bad not in json.dumps(value,ensure_ascii=False),repr(bad))
+            self.assertEqual((self.uploads(),self.stored()),(rows,files),repr(bad))
+        # A real file error with a valid key keeps the old file wording and writes nothing either.
+        status,value=self.post(PNG,name='bad/name.png',key='synthetic-upload-key-0007')
+        self.assertEqual((status,value),(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'}))
+        self.assertEqual((self.uploads(),self.stored()),(rows,files))
         self.assertEqual((app.DATA/'uploads'/first['attachment']['id']).read_bytes(),PNG)
 
     def test_a_failure_before_storing_then_the_same_key_stores_exactly_one_original(self):
