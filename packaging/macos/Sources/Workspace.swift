@@ -1530,8 +1530,12 @@ extension WorkspaceStore {
             save.unknown = false
             save.login = code == "login_required"
             if save.login { loginRequired = true }
-            save.conflict = status == 409
-            save.message = status == 409 ? text + " 输入已保留；请先“读取最新”核对，再决定是否保存。" : code == "csrf_expired" ? "连接已更新，输入已保留；请再点一次保存。" : text
+            // 照片上传标识冲突（同一次选取的文件变了）不是别处更新：不提示读取最新，再保存时按现在的文件另传一份。
+            let stale = status == 409 && code != "upload_key_conflict"
+            save.conflict = stale
+            save.message = stale ? text + " 输入已保留；请先“读取最新”核对，再决定是否保存。"
+                : code == "upload_key_conflict" ? text + " 输入已保留；再按保存会按现在的文件另传一份。"
+                : code == "csrf_expired" ? "连接已更新，输入已保留；请再点一次保存。" : text
         }
     }
 }
