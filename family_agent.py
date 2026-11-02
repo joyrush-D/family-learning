@@ -3889,7 +3889,7 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
     alone=bool(following) and not text[:head].strip() and not text[end+following.end():].strip()
     if following and all(re.fullmatch(role+r'(?:完成|做完|写完|读完|(?:请家长)?(?:'+_SCHOOL_SIGN+r'))\s*',c)
                          # 明天早读检查 closing such a message (语文今天先做《山间》课后第2、4题，答案只需写结论。明天早读检查。) checks it.
-                         or alone and re.fullmatch(role+r'检查\s*',c)
+                         or alone and re.fullmatch(role+r'(?:检查|查)\s*',c)
                          or re.fullmatch(role+r'(?:让孩子)?(?:交|交回|上交|提交)(?:给[^，,]{1,8})?\s*',c)
                          or ((m:=re.fullmatch(role+r'(?:让孩子)?(?:交回|上交|交)([^，,给至到]{1,8})\s*',c)) and m[1] in own)
                          or ((m:=re.fullmatch(role+r'检查([^，,]{1,8})\s*',c)) and m[1] in own)
@@ -4322,6 +4322,17 @@ def _school_sibling_free_goal(quote,text,goal,others):
     if kept==goal.strip():return goal
     if kept and _school_clause_kept(quote,kept):return kept
     return quote+('' if re.search(r'[。！!？?]$',quote) else '。')
+
+
+def _school_own_submission_sibling(brief,other):
+    """Whether another proposal from the same original is only this activity's own submission step (录音上传班级作业区 beside
+    朗读第5课课文两遍，录音上传班级作业区): the same check that later folds it into this activity (_school_submission_step)
+    proves the relation, so its words stay in this activity's complete method, quantity and submission. Another form,
+    object or channel is still another item whose words this summary may not borrow."""
+    if brief.get('purpose')!='learning' or not brief.get('submission') or not isinstance(other,dict) or other.get('task_purpose')!='admin':
+        return False
+    step=dict(title=str(other.get('task_title') or ''),goal=str(other.get('task_goal') or ''))
+    return bool(step['goal']) and _school_submission_step(step,brief)
 
 
 def _school_sibling_free_title(quote,text,title,others):
@@ -5045,7 +5056,7 @@ _SCHOOL_ROLE_DAY=(r'(?:\d{4}-\d{2}-\d{2}|(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1
 _SCHOOL_ROLE_HEAD=(_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?|\s*(?:早上|早晨|上午|中午|下午|傍晚|晚上|早读|课前|到校后?))?'
                    r'\s*(?:之前|以前|前)?')
 # Choosing on the item's own form (圈选、勾选、选择) is the family's own step of it, finished like a signature.
-_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查'),('finish',r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN))
+_SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查|查(?=\s*(?:[。；;，,！!？?\n]|$))'),('finish',r'完成|做完|写完|读完|圈选|勾选|选择|'+_SCHOOL_SIGN))
 # Its own object may stand before the predicate as a ba-phrase (把签收联交到…, 将回条交给…): still that clause's own predicate.
 # A signature is made on the paper itself, so its place needs no 上 (在告知书签名、在《知情单》签名、在通知单背面签名): the
 # paper's head noun directly followed by the signing predicate is read off. A sign word inside the noun (在签名册登记), a
@@ -7319,6 +7330,47 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None,*,noti
     return dict(proposal,task_title=value['title'],task_goal=value['goal'],task_submission='',due=due),action
 
 
+_SCHOOL_RELATIVE_OFFSET={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
+
+
+def _school_bracket_restated(text,published):
+    """The text with each relative day's own bracketed calendar day (今晚（2026年11月8日）、明早（11月9日早上）) read once, as the
+    relative word alone, when both name the same day of the sending day; None when any bracket names another day or another
+    part of the day (明天（11月10日）交 sent on 11月8日), or the sending day is unknown, so the existing date protections keep it."""
+    import datetime as _dt
+    pattern=(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)\s*[（(]\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]'
+             r'\s*(早上|早晨|上午|中午|下午|傍晚|晚上)?\s*[）)]')
+    if not re.search(pattern,text):return text
+    try:sent=_dt.date.fromisoformat(published or '')
+    except ValueError:return None
+    conflict=[]
+    def one(m):
+        day=sent+_dt.timedelta(days=_SCHOOL_RELATIVE_OFFSET[m[1]]);named=set()
+        for year in ([int(m[2])] if m[2] else [sent.year,sent.year+1]):
+            try:named.add(_dt.date(year,int(m[3]),int(m[4])))
+            except ValueError:pass
+        part=m[5] or ''
+        if day not in named or m[1].endswith('早') and part not in ('','早上','早晨','上午') or m[1].endswith('晚') and part not in ('','晚上','傍晚'):
+            conflict.append(m[0])
+        return m[1]
+    restated=re.sub(pattern,one,text)
+    return None if conflict else restated
+
+
+def _school_original_roles(anchors,cited,others):
+    """One original action's own completion and handback/check roles (今晚做练习册第7页第2–4题…；明早交。) read from its own
+    action quotes only, as _school_role_days reads an ordinary item's; another action's quote within them, differing roles of
+    two quotes, an unknown sending day or a conflicting bracketed day give None, and the existing date checks decide."""
+    from family_agenda import sent_day
+    times={e['ref']:e.get('time','') for e in cited};reads=[]
+    for anchor in anchors:
+        text=_school_bracket_restated(anchor['quote'],sent_day(times.get(anchor['ref'],'')))
+        if text is None:return None
+        found=_school_role_days(text,[dict(text=text,time=times.get(anchor['ref'],''))],[o for o in others if o and o!=anchor['quote']])
+        if found:reads.append(found)
+    return reads[0] if reads and all(r==reads[0] for r in reads) else None
+
+
 def _school_native_roles(action):
     """This outcome's own completion and handback roles in its own quote only (今天完成…。明天交给数学课代表), read as the
     ordinary path reads them (_school_role_days); no header, sibling, other teacher or attachment day."""
@@ -7751,7 +7803,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     break
             if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
                 # Another action quoted from this same original lends no requirement or range to this item's title or summary.
-                siblings=title_quotes[:index]+title_quotes[index+1:]
+                siblings=[q for i,q in enumerate(title_quotes) if i!=index and not _school_own_submission_sibling(brief,result['proposals'][i])]
                 brief['goal']=_school_sibling_free_goal(dated_quote,cited_evidence[0]['text'],brief['goal'],siblings)
                 brief['title']=_school_sibling_free_title(dated_quote,cited_evidence[0]['text'],brief['title'],siblings)
                 brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
@@ -8781,7 +8833,13 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         brief['origin_basis']=_school_message_basis(cited)  # Keep the immutable full message for later stale-source checks.
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
-        dates=set().union(*(deadlines(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors))
+        restated=[_school_bracket_restated(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors]
+        dates=set().union(*(deadlines(r if r is not None else a['quote'],stamps.get(a['ref'],'')) for a,r in zip(action_anchors,restated)))
+        # Another action's own requirement words (never a shared background header) make an overlapping range shared.
+        siblings=[q['text'] for v in result['actions'] if v is not value and isinstance(v,dict) and isinstance(v.get('basis'),list)
+                  for q in v['basis'] if isinstance(q,dict) and isinstance(q.get('text'),str) and q.get('part') in lookup
+                  and not lookup[q['part']].get('background_only')]
+        roles=None if conditions or generated_match or None in restated else _school_original_roles(action_anchors,cited,siblings)
         own_dated=False
         if not dates and requirements and not conditions:
             # A read original's own requirement restating its own work day (2026年11月4日晚听音频跟读…) dates that work by the
@@ -8795,8 +8853,14 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             if len(inherited_dates)==1 and not dates:dates=inherited_dates
         stated=dates if conditions else set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
         if own_dated and not stated:stated=dates
+        if roles and dates<=roles[0]|{roles[1]} and stated<=roles[0]|{roles[1]} and (not due or due in roles[0]|{roles[1]}):
+            # Its own completion day and its handback/check day are two roles of one action, not two candidate days: the
+            # handback/check day its own words state is its due, whichever of the two the reply or the summary named.
+            due=roles[1];dates=stated={roles[1]}
         resolved=due or (next(iter(dates)) if len(dates)==1 else '')
-        if resolved and (not date(resolved) or dates!={resolved} or stated and stated!={resolved}):
+        if None in restated:
+            due='';brief.update(state='review',reason='本项相对日期与括注日期不一致，完成日期待补充；已读要求保留。')
+        elif resolved and (not date(resolved) or dates!={resolved} or stated and stated!={resolved}):
             due='';brief.update(state='review',reason='本项日期与对应原件行动不一致，日期待补充；已读要求保留。')
         elif resolved and not stated and inherited_dates!={resolved}:
             due='';brief.update(state='review',reason='资料中的日期未能对应本项要求，完成日期待补充；已读要求保留。')
