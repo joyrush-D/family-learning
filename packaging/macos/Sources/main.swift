@@ -1347,6 +1347,31 @@ extension AppDelegate {
         return false
     }
 
+    /// find_text 要找的文字在还没建出来的行里时（系统列表只为可见区附近建行）：同上用表格公开的“显露这一行”逐行往下（以表格行数、
+    /// 最多 200 行为限），每翻一行只认这时真正建出并显示在窗口里的控件文字，或中心在测试窗口内的无障碍文字；翻到就停。
+    /// 不读清单数据、不选择、不点击；翻遍仍看不到就如实返回空。
+    func revealUnbuiltText(_ text: String) async -> [String] {
+        func seen() -> [String] {
+            let built = TestTargets.anchors.keys.sorted().filter { id in
+                guard let (view, words) = TestTargets.live(id) else { return false }
+                return words.contains(text) && onScreen(view)
+            }
+            let windows = testWindows().map(\.frame)
+            let ax = nodes().filter { node in
+                node.text.contains(text) && node.frame.width > 0 && windows.contains { $0.contains(NSPoint(x: node.frame.midX, y: node.frame.midY)) }
+            }
+            return built + ax.map { $0.id.isEmpty ? "(ax)" : $0.id }
+        }
+        for table in testWindows().flatMap({ tables(in: $0.contentView) }) {
+            for index in 0..<min(table.numberOfRows, 200) {
+                table.scrollRowToVisible(index); await sleep(0.12)
+                let hits = seen()
+                if !hits.isEmpty { await sleep(0.3); return hits }
+            }
+        }
+        return []
+    }
+
     func tables(in view: NSView?) -> [NSTableView] {
         guard let view, !view.isHidden else { return [] }
         if let table = view as? NSTableView { return [table] }
@@ -1501,14 +1526,24 @@ extension AppDelegate {
         }
         if let text = step["find_text"] as? String {
             let start = Date(), absent = step["absent"] as? Bool == true
+            var sweeps = 0
             while Date().timeIntervalSince(start) < limit {
                 let hits = nodes().filter { $0.text.contains(text) && $0.frame.width > 0 }
                 if absent {
                     let anywhere = TestTargets.anchors.keys.filter { (TestTargets.live($0)?.1 ?? "").contains(text) }
                     if hits.isEmpty && anywhere.isEmpty { return ["ok": true, "text": text, "absent": true] }
                 } else {
-                    let visible = await shown(text)
-                    if !visible.isEmpty || !hits.isEmpty { return ["ok": true, "text": text, "ax_ids": hits.map(\.id).filter { !$0.isEmpty }, "shown_ids": visible] }
+                    var visible = await shown(text), revealed = false
+                    // 窗口里已看得到就直接用，不滚动；还看不到时文字可能在还没建出来的末尾行：等清单读完 1 秒后，最多两遍按真实表格
+                    // 有界往下翻，只认翻出后真正显示的文字。absent 的判断不变。
+                    if visible.isEmpty && hits.isEmpty && sweeps < 2 && Date().timeIntervalSince(start) >= 1 {
+                        sweeps += 1; visible = await revealUnbuiltText(text); revealed = !visible.isEmpty
+                    }
+                    if !visible.isEmpty || !hits.isEmpty {
+                        var result: [String: Any] = ["ok": true, "text": text, "ax_ids": hits.map(\.id).filter { !$0.isEmpty }, "shown_ids": visible]
+                        if revealed { result["revealed_unbuilt_row"] = true }
+                        return result
+                    }
                 }
                 await sleep(0.25)
             }
