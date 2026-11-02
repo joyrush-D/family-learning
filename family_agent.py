@@ -7560,6 +7560,21 @@ def _school_bracket_restated(text,published,keep=False):
     return restated if keep or not conflict else None
 
 
+_SCHOOL_RESOURCE_TIME=r'发放|下发|分发|发下|印发|统一发|可领'
+
+
+def _school_resource_time_free(text):
+    """The words without a clause that only tells when a material is given out or can be collected (配套空白表2026年11月3日
+    发放；回执单周三起可领): such a day is information, not a completion, handback or check day of the item. A clause with its
+    own role keeps its day (11月6日发放后当天填好交回), and every other day stays for the existing date checks."""
+    kept=[]
+    for part in re.split(r'(?<=[，,。；;\n])',text or ''):
+        if (re.search(_SCHOOL_RESOURCE_TIME,part) and not _school_clause_roles(part)&{'handback','check','finish'}
+                and re.search(r'\d|[今明后]天|周[一二三四五六日天]|星期',part)):continue
+        kept.append(part)
+    return ''.join(kept)
+
+
 def _school_original_roles(anchors,cited,others):
     """One original action's own completion and handback/check roles (今晚做练习册第7页第2–4题…；明早交。) read from its own
     action quotes only, as _school_role_days reads an ordinary item's; another action's quote within them, differing roles of
@@ -9072,13 +9087,15 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         brief['origin_basis']=_school_message_basis(cited)  # Keep the immutable full message for later stale-source checks.
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
-        restated=[_school_bracket_restated(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors]
-        dates=set().union(*(deadlines(r if r is not None else a['quote'],stamps.get(a['ref'],'')) for a,r in zip(action_anchors,restated)))
+        # A clause only saying when a material is given out (空白表11月6日发放) dates no role of this action; its words stay.
+        action_anchors_dated=[dict(a,quote=_school_resource_time_free(a['quote'])) for a in action_anchors]
+        restated=[_school_bracket_restated(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors_dated]
+        dates=set().union(*(deadlines(r if r is not None else a['quote'],stamps.get(a['ref'],'')) for a,r in zip(action_anchors_dated,restated)))
         # Another action's own requirement words (never a shared background header) make an overlapping range shared.
         siblings=[q['text'] for v in result['actions'] if v is not value and isinstance(v,dict) and isinstance(v.get('basis'),list)
                   for q in v['basis'] if isinstance(q,dict) and isinstance(q.get('text'),str) and q.get('part') in lookup
                   and not lookup[q['part']].get('background_only')]
-        roles=None if conditions or generated_match or None in restated else _school_original_roles(action_anchors,cited,siblings)
+        roles=None if conditions or generated_match or None in restated else _school_original_roles(action_anchors_dated,cited,siblings)
         own_dated=False
         if not dates and requirements and not conditions:
             # A read original's own requirement restating its own work day (2026年11月4日晚听音频跟读…) dates that work by the
@@ -9091,7 +9108,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if generated_match:
             inherited_dates=deadlines(batch_proof['action_text']+'\n'+batch_proof['shared_date_text'],sent_day(batch_proof['original_time']))
             if len(inherited_dates)==1 and not dates:dates=inherited_dates
-        stated=dates if conditions else set().union(*(deadlines(brief['goal'],s) for s in stamps.values()))
+        stated=dates if conditions else set().union(*(deadlines(_school_resource_time_free(brief['goal']),s) for s in stamps.values()))
         if own_dated and not stated:stated=dates
         if roles and dates<=roles[0]|{roles[1]} and stated<=roles[0]|{roles[1]} and (not due or due in roles[0]|{roles[1]}):
             # Its own completion day and its handback/check day are two roles of one action, not two candidate days: the
