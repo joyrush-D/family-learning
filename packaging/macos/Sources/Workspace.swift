@@ -1443,6 +1443,7 @@ struct Inspector: View {
                     if let v = r.retry { RetryLines(v: v, note: r.note).probe("retry-\(r.id)", text: v.lines.map { $0.joined(separator: "：") }.joined(separator: "\n") + "\n下一步 " + v.next) }
                     else { Text(r.note.isEmpty ? r.title : r.note).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) }
                     if r.note_truncated && (r.retry?.show_note ?? true) { Text("（较长，完整内容在网页版记录中）").font(Palette.small).foregroundStyle(Palette.ink2) }
+                    if let line = r.evidenceLine { Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("record-evidence-\(r.id)", text: line) }
                 }
                 .padding(EdgeInsets(top: 6, leading: 12, bottom: 12, trailing: 6)).frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.paper))
@@ -1674,13 +1675,20 @@ struct CorrectionSheet: View {
     @StateObject var save = SaveState()
     @State var kind = "订正"
     @State var note = ""
+    /// 与网页记录同一字段与选项（app.ASSISTANCE / PRACTICE_RELATIONS）；空＝未知，不从订正或说明推断帮助、完成或掌握。
+    @State var assistance = ""
+    @State var practice = ""
+    static let assistanceChoices = ["", "独立尝试", "少量提示", "逐步帮助", "看过讲解或答案"]
+    static let practiceChoices = ["", "同一道题或同一片段", "相近的新题或新片段", "范围或难度不同"]
 
     var body: some View {
-        SheetFrame(store: store, save: save, title: "记订正", context: "\(store.childName) · \(record.title)", dirty: !note.isEmpty,
+        SheetFrame(store: store, save: save, title: "记订正", context: "\(store.childName) · \(record.title)", dirty: !note.isEmpty || !assistance.isEmpty || !practice.isEmpty,
                    canSave: !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, saveTitle: "保存", onSave: submit) {
             Section {
                 Picker("类型", selection: $kind) { Text("订正").tag("订正"); Text("复测").tag("复测") }.pickerStyle(.segmented).probe("correction-kind")
                 LabeledContent("怎么订正的 / 复测结果") { TextEditor(text: $note).multilineTextAlignment(.leading).frame(minHeight: 80).probe("correction-note").accessibilityLabel("订正说明") }
+                Picker("这次的帮助", selection: $assistance) { ForEach(Self.assistanceChoices, id: \.self) { Text($0.isEmpty ? "未知" : $0).tag($0) } }.probe("correction-assistance")
+                Picker("和原题的关系", selection: $practice) { ForEach(Self.practiceChoices, id: \.self) { Text($0.isEmpty ? "未知" : $0).tag($0) } }.probe("correction-practice")
             }
         }
     }
@@ -1689,7 +1697,8 @@ struct CorrectionSheet: View {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         let body: [String: Any] = ["child": store.childName, "day": store.view?.today ?? store.day, "category": "学习进展",
                                    "title": (kind + "：" + record.title).prefix(200).description, "subject": record.subject, "note": note,
-                                   "related_record_id": record.id, "followup_kind": kind, "request_key": save.key]
+                                   "related_record_id": record.id, "followup_kind": kind, "assistance": assistance, "practice_relation": practice,
+                                   "request_key": save.key]
         Task { await store.finish(await store.client.post("/api/record", body), save, done: "已记下\(kind)。") }
     }
 }
@@ -1700,6 +1709,11 @@ struct WrongAddSheet: View {
     @ObservedObject var store: WorkspaceStore
     /// 有值时是当前原作业：孩子、作业和科目固定，不用先写反馈；题号/题面/原答/订正任一项即可，照片可不选，选了保整张原图。
     var item: DayItem? = nil
+    /// 直接错题的记录日：打开时定下的上海时间今天，显示出来并随同一提交标识重试；不是老师截止、原作答日或安排日，也不改作业。
+    @State var recordDay: String = {
+        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: Date())
+    }()
     @StateObject var save = SaveState()
     @State var subject = ""
     @State var label = ""
@@ -1720,6 +1734,10 @@ struct WrongAddSheet: View {
                    saveTitle: "保存错题", onSave: submit) {
             Section {
                 if item == nil { TextField("科目（可不填）", text: $subject).probe("wrong-add-subject") }
+                else {
+                    LabeledContent("记录日") { Text("\(recordDay)（上海时间今天）").probe("wrong-add-record-day", text: recordDay) }
+                    Text("这是记下这道错题的日期，不是老师截止或作业日期，也不会改这份作业。").font(.caption).foregroundStyle(Palette.ink2)
+                }
                 TextField(item == nil ? "哪一题（必填）" : "哪一题（可不填）", text: $label).probe("wrong-add-label")
                 TextField("题面（可不填）", text: $text).probe("wrong-add-text")
                 TextField("孩子原答（可不填）", text: $answer).probe("wrong-add-answer")
@@ -1762,7 +1780,7 @@ struct WrongAddSheet: View {
                 id = sent.ids.first ?? ""
             } else if item == nil { save.busy = false; return }
             let today = store.view?.today ?? store.day
-            let day = store.day.isEmpty || store.day > today ? today : store.day
+            let day = item != nil ? recordDay : store.day.isEmpty || store.day > today ? today : store.day
             var body: [String: Any] = ["child": store.childName, "day": day, "subject": subject.trimmingCharacters(in: .whitespaces), "request_key": save.key,
                                        "items": [["attachment": id, "label": label, "text": text, "answer": answer, "correction": correction]]]
             if let item = item {

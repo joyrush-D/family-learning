@@ -884,9 +884,12 @@ function sameAffairState(t){const group=sameAffairTasks(t);if(group.length<2)ret
  return closed.length&&open.length?{open,closed,note:'同一事项另有一份已标记“'+taskStatusLabel(status(closed[0]))+'”，是否还需要再做或再交待核对；各份原状态和记录保留，不据反馈推定完成。'}:null}
 function recordTask(record,task){const own=String(record?.source||'').startsWith('事项:')?String(record.source).slice(3):record?.linked_task_id;return sameAffairTasks(task).find(t=>t.id===own)||task}
 // The same homework with no saved feedback: a hand-noted item or one whole photo goes straight under this task (no placeholder feedback, no model, no completion).
+function taskDirectWrongDay(){return new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())}
+function taskDirectWrongDayText(day){return '记录日：'+day+'（上海时间今天；不是老师截止或作业日期，也不改这份作业）'}
 function taskDirectWrongHTML(task){
  if(task.agenda?.category!=='homework')return '';
- return `<details class="task-direct-wrong" data-task-wrong-form="direct"><summary>直接记错题</summary><p class="small muted">不用先写反馈或检查；题号、题面、孩子原答、订正写任意一项即可，不知道的留空。照片可加一张，整张原图保留。不调用 AI，也不会把作业标为已完成。</p><label>这道题的照片（可选）<input type="file" accept="image/jpeg,image/png,image/webp" data-task-wrong-file></label><label>题号或位置<input data-wrong-field="label" maxlength="80"></label><label>题面（可选）<textarea data-wrong-field="text" maxlength="2000"></textarea></label><label>孩子原答（可选）<input data-wrong-field="answer" maxlength="1000"></label><label>订正或正确答案（可选）<input data-wrong-field="correction" maxlength="1000"></label><label>家长备注（可选）<textarea data-wrong-field="note" maxlength="1000"></textarea></label><button type="button" data-task-wrong-save="direct">保存这条错题</button><p role="status" data-task-wrong-status></p></details>`;
+ const day=taskDirectWrongDay();
+ return `<details class="task-direct-wrong" data-task-wrong-form="direct" data-record-day="${day}"><summary>直接记错题</summary><p class="small muted">不用先写反馈或检查；题号、题面、孩子原答、订正写任意一项即可，不知道的留空。照片可加一张，整张原图保留。不调用 AI，也不会把作业标为已完成。</p><p class="small" data-task-wrong-day>${esc(taskDirectWrongDayText(day))}</p><label>这道题的照片（可选）<input type="file" accept="image/jpeg,image/png,image/webp" data-task-wrong-file></label><label>题号或位置<input data-wrong-field="label" maxlength="80"></label><label>题面（可选）<textarea data-wrong-field="text" maxlength="2000"></textarea></label><label>孩子原答（可选）<input data-wrong-field="answer" maxlength="1000"></label><label>订正或正确答案（可选）<input data-wrong-field="correction" maxlength="1000"></label><label>家长备注（可选）<textarea data-wrong-field="note" maxlength="1000"></textarea></label><button type="button" data-task-wrong-save="direct">保存这条错题</button><p role="status" data-task-wrong-status></p></details>`;
 }
 function drawTaskFeedback(task,recentId=null){
  videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();
@@ -1001,7 +1004,9 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
    if(!['label','text','answer','correction'].some(value)){status.textContent='请至少写题号、题面、孩子原答或订正中的一项；不知道的留空即可。';return}
    if(file&&(!['image/jpeg','image/png','image/webp'].includes(file.type)||!file.size||file.size>20*1024*1024)){status.textContent='照片只支持20MB以内的 JPG、PNG 或 WebP；已填的文字仍保留。';return}
    if(!file)taskWrongUpload=null;else if(taskWrongUpload?.file!==file)taskWrongUpload={file,key:crypto.randomUUID().replaceAll('-',''),id:''};
-   taskWrongPending={child:task.child,day:new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),subject:String(task.agenda?.subject||'').trim(),task_id:task.id,
+   // The record day is fixed once here, shown on the panel, and kept with the pending body for any retry of the same key.
+   const day=taskDirectWrongDay();panel.dataset.recordDay=day;panel.querySelector('[data-task-wrong-day]').textContent=taskDirectWrongDayText(day);
+   taskWrongPending={child:task.child,day,subject:String(task.agenda?.subject||'').trim(),task_id:task.id,
     request_key:crypto.randomUUID().replaceAll('-',''),items:[{attachment:taskWrongUpload?.id||'',label:value('label'),text:value('text'),answer:value('answer'),correction:value('correction'),note:value('note')}]};
   }else{
    const photo=panel.querySelector('[data-task-wrong-photo]')?.value||'';

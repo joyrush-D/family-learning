@@ -583,6 +583,27 @@ class WrongReviewHTTPTest(unittest.TestCase):
                          [(task['id'], None, [ids[0]])])
         self.assertEqual(len([u for u in state['uploads'] if u['name'] == '虚构整页.png']), 1)
 
+    def test_direct_wrong_correction_evidence_reaches_the_day_projection(self):
+        """原生同项重开读日视图投影：直接错题的订正保原帮助/练习关系字段，未选保空，不推断。"""
+        today = app.dt.datetime.now(app.dt.timezone(app.dt.timedelta(hours=8))).date().isoformat()
+        task = app.new_task(dict(child='示例甲', title='虚构直接订正作业', category='homework', due=today))
+        status, saved = self.request('/api/wrong/save', dict(child='示例甲', day=today, subject='数学', request_key=uuid.uuid4().hex,
+                                                             task_id=task['id'], items=[dict(attachment='', label='第2题', answer='35')]))
+        self.assertEqual(status, 200, saved)
+        wrong_id = saved['saved'][0]['id']
+        for assistance, relation in (('少量提示', '同一道题或同一片段'), ('', '')):
+            status, out = self.request('/api/record', dict(child='示例甲', day=today, category='学习进展', subject='数学',
+                                                           title='订正：虚构第2题', note='虚构：订正为25。', related_record_id=wrong_id,
+                                                           followup_kind='订正', assistance=assistance, practice_relation=relation,
+                                                           request_key=uuid.uuid4().hex))
+            self.assertEqual(status, 200, out)
+        view = app.day_view('child-1', today)
+        items = [i for g in view['groups'] + view['closed'] for i in g['items'] if i.get('task_id') == task['id']]
+        self.assertTrue(items, 'the homework is on its own day')
+        rows = {r['id']: (r['assistance'], r['practice_relation']) for i in items for r in i['records'] if r['related_record_id'] == wrong_id}
+        self.assertEqual(sorted(rows.values()), [('', ''), ('少量提示', '同一道题或同一片段')])
+        self.assertEqual({w['id'] for i in items for w in i['wrong']}, {wrong_id})
+
     def test_requires_parent_token(self):
         status, _ = self.request('/api/wrong/annotate',
                                  dict(child='示例甲', attachments=[]),

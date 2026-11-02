@@ -24,6 +24,9 @@ struct SavedRecord: Decodable, Hashable, Identifiable {
     let attachments: [String]
     let followup_kind: String
     let related_record_id: Int?
+    /// 订正/复测当时记下的帮助程度与和原题的关系（原记录字段；较早后台没有就是 nil，空字符串＝未知）。
+    var assistance: String? = nil
+    var practice_relation: String? = nil
     /// The task this saved record belongs to; a grouped same-affair row can show another member's record.
     let task_id: String?
     /// 错题本：该错题按显式关联指向的同一孩子原作业标题；未关联或较早后台为 nil。
@@ -318,3 +321,11 @@ struct WorkspaceError: Error { let text: String; let login: Bool; init(_ text: S
 
 /// 每次提交一个稳定标识：重试、丢回执后重发都用同一个，服务端据此不重复写。
 func requestKey() -> String { "mac" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
+
+extension SavedRecord {
+    /// 原样显示已保存的选择；没有选择就不显示，不推断。
+    var evidenceLine: String? {
+        let parts = [assistance.flatMap { $0.isEmpty ? nil : "帮助：" + $0 }, practice_relation.flatMap { $0.isEmpty ? nil : "和原题：" + $0 }].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+}
