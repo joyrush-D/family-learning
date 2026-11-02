@@ -1086,6 +1086,7 @@ extension AppDelegate {
 
     func openWebTools(_ task: String, _ intent: String = "", fragment: String? = nil) {
         guard let policy = config.policy, let web = webView, AppDelegate.webIntents.contains(intent) else { return }
+        guard workspace?.reviewHold() != true else { return }  // the locked review card and its same-request retry stay in view
         guard workspace?.hasUnsavedInput != true || confirmDiscard("打开网页版") else { return }
         workspace?.sheet = nil; workspace?.sheetDirty = false
         var c = URLComponents(url: policy.origin.url, resolvingAgainstBaseURL: false)!

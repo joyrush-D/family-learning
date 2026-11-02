@@ -21,7 +21,12 @@ function restore(E,graph,diag){const run=held=>{const answers=diag.items.map(i=>
  function retryItem(E,raw,full,diag,seen){const qs=raw.questions.filter(q=>!seen.has(q.id));const g=E.buildGraph(raw.topics,raw.dependencies,qs);const s=E.createSession(g,[diag.topic_id],{limit:1,seed:'retry-'+diag.id});const it=E.nextItem(g,s);const orig=it&&E.questionById(full,it.question.id);return it&&!seen.has(it.question.id)&&orig&&orig.prompt===it.question.prompt?it:null}
  // 长推断祖先不堆屏幕：直接测过的点逐条列出，图谱推断的先修点合成一行（全部原样保存在服务端summary里）。
  function summaryLines(graph,session,E){const sum=E.summarize(graph,session),unc=new Set(sum.unconfirmed);return session.order.filter(id=>session.status[id]||session.attempts[id]).map(id=>{const st=session.status[id];const key=!st?'unknown':st.s==='mastered'?'mastered_'+st.src:st.s==='weak'&&unc.has(id)?'unconfirmed':st.s;return {id,name:graph.byId[id]?.name||id,label:STATUS[key]||STATUS.unknown,asked:(session.attempts[id]||[]).length,inferred:key==='mastered_inferred'}})}
- const logic={STATUS,OUTCOME,VERDICT,ANSWER_MAX,restore,judge,seenQids,retryItem,summaryLines};
+ // 家庭复习在日历上的显示标题由原错题标题派生：沿用日历原有的200字（码位）上限，超出时按完整字形截短并以“…”标明；
+ // 原错题标题、题面、原答与关联都不动，同一次提交的请求体一经生成就不再变。
+ function reviewTitle(title){const full='家庭复习：'+(title||'原错题'),cp=s=>Array.from(s).length;if(cp(full)<=200)return full;
+  const parts=typeof Intl!=='undefined'&&Intl.Segmenter?Array.from(new Intl.Segmenter('zh',{granularity:'grapheme'}).segment(full),x=>x.segment):Array.from(full);
+  let out='',n=0;for(const p of parts){const k=cp(p);if(n+k>199)break;out+=p;n+=k}return out+'…'}
+ const logic={STATUS,OUTCOME,VERDICT,ANSWER_MAX,restore,judge,seenQids,retryItem,summaryLines,reviewTitle};
  if(typeof document==='undefined')return logic;
 
  const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
@@ -117,7 +122,7 @@ function restore(E,graph,diag){const run=held=>{const answers=diag.items.map(i=>
   // 批准＝点这一次；同一草稿保留同一编号，回执丢失时“重试保存”原样再发，服务端按编号与内容只存一份。
   b.querySelector('[data-topic-review-save]')?.addEventListener('click',()=>{const st=p.state,r=p.review||{};if(!r.day||!st?.record)return;r.id??=hex();p.review=r;
    const cur=st.links.filter(l=>l.basis==='current').at(-1),topic=cur?.state==='confirmed'&&st.topics?.[cur.topic_id]?cur.topic_id:'';
-   send(p,'/api/calendar/save',{id:r.id,version:0,child_ids:[p.child_id],title:'家庭复习：'+(st.record.title||'原错题'),category:'study',day:r.day,start_time:'',end_time:'',location:'',note:topic?'知识点：'+st.topics[topic].name:'',status:'confirmed',repeat:'none',until:'',
+   send(p,'/api/calendar/save',{id:r.id,version:0,child_ids:[p.child_id],title:reviewTitle(st.record.title),category:'study',day:r.day,start_time:'',end_time:'',location:'',note:topic?'知识点：'+st.topics[topic].name:'',status:'confirmed',repeat:'none',until:'',
     review:{child_id:p.child_id,record_id:p.record_id,topic_id:topic,task_id:st.task?.id||'',basis:st.record.basis}},()=>{p.review={};return '家庭复习已放进日历（家长安排，不是老师作业）'})});
   // 查找用输入框里的新词（不带年级）；点年级沿用上次的词，只看那一年级（“全部”取消）。只读，不链接。
   const find=async grade=>{const query=grade===undefined?String(p.draft.search||'').trim():p.search?.query;if(!query)return;try{p.search={query,...await post('/api/topic/search',{...base,query,...(grade==null?{}:{grade})})};p.message=''}catch(x){p.message=x.message}draw(p)};

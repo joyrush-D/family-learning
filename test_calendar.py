@@ -449,6 +449,15 @@ class FamilyReviewLinkTests(unittest.TestCase):
         self.assertEqual([sorted(p) for p in app.day_schedule(cal,'child-1','2026-10-30',[])['plans'] if p['id']=='e'*32],
                          [sorted(['id','title','start_time','end_time','location','note','status','source','repeat','shared','task_id'])])
         self.assertEqual([e['review']['basis_state'] for e in app.calendar_snapshot('2026-10-31','2026-10-31')['events'] if e.get('review')],['current'])
+        # A wrong record titled at its own 200 limit: the panel's bounded review title (topic-diagnosis.js reviewTitle) is
+        # accepted under the calendar's unchanged 200, the raw record title stays whole, and the unbounded 205 is still refused.
+        long='虚'*193+'é'+'\U0001F468‍\U0001F469‍\U0001F467'
+        lw=app.save_record(dict(child='示例甲',day='2026-10-29',category='学习进展',subject='数学',title=long,note='题面：3+4=?\n学生原答：8',source=source))['record_id']
+        with app.connect() as c: lrec=family_taxonomy.wrong_record(SimpleNamespace(**vars(app)),c,'child-1',lw)
+        link=dict(ev['review'],record_id=lw,basis=family_taxonomy.record_hash(lrec))
+        status,lr=self.save(dict(ev,id='f'*32,day='2026-11-02',title='家庭复习：'+'虚'*193+'…',review=link))
+        self.assertEqual((status,len(lr['title']),lr['review']['record_id'],len(lrec['title']),lrec['title']),(200,199,lw,200,long))
+        self.assertEqual(self.save(dict(ev,id='0'*32,day='2026-11-02',title='家庭复习：'+long,review=link))[0],400)
 
 
 if __name__=='__main__': unittest.main()
