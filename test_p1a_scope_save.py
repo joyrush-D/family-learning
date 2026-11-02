@@ -1033,3 +1033,107 @@ class DateRoleCountMoveTests(ScopeSaveTests):
             self.assertNotIn('四遍', saved)
             for unit in ('一遍', '听配套音频', '录音上传'):
                 self.assertIn(unit, saved)
+
+
+class LessonUnitTests(ScopeSaveTests):
+    """Root run9 known-scope lesson, H2 and run10 layout positives (newly written fictional equivalents through the same
+    batch/Store/refresh/views/load_app): a lesson the original holds on its own day is its own item from the first notice,
+    whatever the reply's line breaks or quote span; a stated scope is organized by the ordinary rule, only a scope the teacher
+    leaves for later waits for the teacher; nothing is borrowed from the home item, and every home standard stays."""
+    T = dict(sender='虚构桑英语老师', sender_id='fic-lesson-teacher')
+
+    def test_a_stated_lesson_scope_is_organized_and_never_reported_unknown(self):
+        ref = 'message:%s:801' % EN
+        self.batch(EN, [msg('801', '英语：今晚听音频跟读Unit 4第1至6个单词，每词两遍；周五课堂听写Unit 4第1至6个单词。', '16:40', **self.T)],
+                   lambda targets, pending: [proposal(ref, '今晚听音频跟读Unit 4第1至6个单词，每词两遍', '英语：跟读Unit 4第1至6个单词两遍',
+                                                      '今晚听音频跟读Unit 4第1至6个单词，每词两遍。\n周五课堂听写Unit 4第1至6个单词。')])
+        lesson, = [i for i in self.items_for(ref) if '听写' in i['title']]
+        home, = [i for i in self.items_for(ref) if '跟读' in i['title']]
+        brief = lesson['plan']['school_task']
+        for word in ('尚未说明', '未说明', '范围未知', '范围未定', '等待补充'):
+            self.assertNotIn(word, brief.get('reason', ''), 'the teacher stated this scope')
+        self.assertFalse(lesson['state'] == 'pending' and brief.get('state') == 'review', 'no parent confirmation for a stated scope')
+        self.assertEqual(lesson['due'], FRI)
+        self.assertNotEqual(home['id'], lesson['id'])
+        self.assertEqual(lesson['plan']['school_split_from']['lesson']['scope']['state'], 'stated')
+        for view in self.views(FRI):
+            card, = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
+            self.assertIn('听写Unit 4第1至6个单词', '\n'.join(card['lines']))
+            self.assertEqual(card['when'], 'today')
+            self.assertEqual([f.get('kind') for f in card['facts'] if f.get('role') == 'due'], ['inspection'])
+            self.assertEqual(card['publisher'], self.T['sender'])
+        for view in self.views(DAY):
+            self.assertFalse([r for g in view['groups'] for r in g['items'] if '听写' in r['title'] and r.get('when') == 'today'],
+                             'the lesson is no to-do on its sending day')
+            card, = [r for g in view['groups'] for r in g['items'] if '跟读' in r['title']]
+            self.assertNotIn('听写', '\n'.join(card['lines']))
+            self.assertNotIn(FRI, [f.get('value') for f in card['facts']], 'the home item never takes the lesson day')
+
+    def test_h2_the_held_assessment_has_its_own_day_from_the_first_notice_and_the_reminder_joins_it(self):
+        day, mon = '2026-11-18', '2026-11-23'
+        r1, r2 = 'message:%s:511' % EN, 'message:%s:512' % EN
+        at = lambda ident, text, clock: dict(msg(ident, text, clock, **self.T), time=day + 'T' + clock + ':00+08:00')
+        lesson_words = '下周一英语课进行课堂抽读考查，考查的篇目和范围另行通知，只在课堂进行，不要求提前在家练习考查'
+        home_words = '今晚听配套音频，跟读《雾岸小诗》第1至3句，每句两遍，并把录音上传到班级练习栏'
+        self.batch(EN, [at('511', '英语：' + home_words + '；' + lesson_words + '。', '16:20')], lambda targets, pending: [
+            proposal(r1, '英语：' + home_words, '英语：《雾岸小诗》今晚跟读', home_words + '。\n' + lesson_words + '。', due=day)])
+        lesson, = [i for i in self.items_for(r1) if '抽读考查' in i['title']]
+        home, = [i for i in self.items_for(r1) if '雾岸小诗' in i['title']]
+        self.assertEqual(lesson['due'], mon)
+        self.assertEqual((lesson['state'], lesson['plan']['school_task']['reason']), ('pending', '老师尚未说明课堂考查范围，等待补充。'))
+        self.assertNotIn('抽读考查', home['plan']['school_task']['goal'])
+        for unit in ('听配套音频', '《雾岸小诗》第1至3句', '每句两遍', '录音上传到班级练习栏'):
+            self.assertIn(unit, home['plan']['school_task']['goal'])
+        for when in (day, '2026-11-19'):
+            for view in self.views(when):
+                self.assertEqual([(u['day'], u['id']) for u in view['upcoming'] if '抽读考查' in u['title']], [(mon, lesson['id'])])
+        def reminder(targets, pending):
+            found = [t for t in pending if '课堂抽读考查' in t['title'] and '雾岸小诗' not in t['title']]
+            self.assertEqual([t['id'] for t in found], ['pending:' + lesson['id']], 'the first notice already listed the lesson')
+            return [proposal(r2, '下周一英语课的课堂抽读考查是前面说的那一次，不另加一次', '英语：下周一课堂抽读考查',
+                             '下周一英语课进行课堂抽读考查。\n具体篇目和范围仍等老师另行通知。', due=mon, state='review', change='same',
+                             target=found[0]['id'])]
+        self.batch(EN, [at('512', '再次提醒：下周一英语课的课堂抽读考查是前面说的那一次，不另加一次；具体篇目和范围仍等老师另行通知。', '17:20')], reminder)
+        notice, = self.items_for(r2)
+        self.assertEqual(notice['plan']['school_pending_of']['item_id'], lesson['id'])
+        for view in self.views(mon):
+            card, = [r for g in view['groups'] for r in g['items'] if '抽读考查' in r['title']]
+            self.assertEqual((card['id'], card['when']), (lesson['id'], 'today'))
+            words = '\n'.join(card['lines'])
+            self.assertIn('课堂抽读考查', words)
+            for borrowed in ('雾岸小诗', '第1至3句'):
+                self.assertNotIn(borrowed, words)
+            self.assertIn([f.get('kind') for f in card['facts'] if f.get('role') == 'due'], (['inspection'], ['arranged']))
+
+    def layout(self, ident, text, goal, extra=()):
+        ref = 'message:%s:%s' % (EN, ident)
+        self.batch(EN, [msg(ident, text, '16:20', **self.T)], lambda targets, pending: [proposal(ref, text, '英语：跟读Unit 9第1—6个单词', goal)])
+        lesson, = [i for i in self.items_for(ref) if '听写' in i['title']]
+        home, = [i for i in self.items_for(ref) if '听写' not in i['title']]
+        self.assertEqual((lesson['state'], lesson['due']), ('pending', FRI))
+        self.assertEqual(lesson['plan']['school_task']['reason'], '老师尚未说明课堂考查范围，等待补充。')
+        self.assertEqual(lesson['plan']['school_split_from']['lesson']['scope']['state'], 'deferred')
+        self.assertEqual(home['plan']['school_split']['quote'], text, 'the reply quote stays verbatim in the receipt mark')
+        words = home['plan']['school_task']['goal']
+        for unit in ('听音频', 'Unit 9第1到6个单词', '每词三遍', '只做口头跟读', '不用抄写') + tuple(extra):
+            self.assertIn(unit, words)
+        self.assertNotIn('听写', words)
+        for view in self.views(FRI):
+            card, = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
+            self.assertNotIn('Unit 9', '\n'.join(card['lines']), 'the lesson scope is never borrowed')
+            self.assertEqual([f.get('kind') for f in card['facts'] if f.get('role') == 'due'], ['inspection'])
+        for view in self.views(DAY):
+            card, = [r for g in view['groups'] for r in g['items'] if '跟读' in r['title'] and '听写' not in r['title']]
+            self.assertNotIn('听写', '\n'.join(card['lines']))
+            self.assertNotIn(FRI, [f.get('value') for f in card['facts']], 'the home item never takes the lesson day')
+            for unit in extra:
+                self.assertIn(unit, '\n'.join(card['lines']))
+
+    def test_l1_a_one_paragraph_summary_still_leaves_the_lesson_its_own_item(self):
+        text = '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。'
+        self.layout('991', text, '今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写。周五课堂听写，范围由老师明天再说。')
+
+    def test_l2_a_lesson_in_the_middle_of_a_whole_quote_is_its_own_item_and_the_parent_signature_stays(self):
+        text = '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。今晚跟读后请家长在跟读记录卡签字。'
+        self.layout('992', text, '今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写。\n周五课堂听写，范围由老师明天再说。\n今晚跟读后请家长在跟读记录卡签字。',
+                    extra=('家长', '跟读记录卡', '签字'))
