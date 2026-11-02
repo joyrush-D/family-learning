@@ -475,7 +475,10 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         for case in ('remaining','cooling','exhausted'):
             with self.subTest(case=case):
                 if case!='remaining':self.setUp()
-                with patch.object(scope,'FIX',self._receipt(copy.deepcopy(scope.FIX),None)),patch.object(agent,'_school_original_actions',side_effect=broken):
+                fix=self._receipt(copy.deepcopy(scope.FIX),None);sheet=copy.deepcopy(fix['call_3']['actions'][1])  # the mapper answers all three lines
+                sheet.update(title='英语：练习纸第二部分',goal=R_SHEET,reason='原件第三项要求。',due='2026-11-04',existing_item_id='',basis=[dict(part='',text=R_SHEET)])
+                fix['call_3']['actions'].append(sheet)
+                with patch.object(scope,'FIX',fix),patch.object(agent,'_school_original_actions',side_effect=broken):
                     self._chain()  # the normal reader saves the receipt; the first mapping is refused by its program check
                     if case=='exhausted':
                         for n in (1,2):agent.run_once(self.app,self.now+dt.timedelta(minutes=n*day))
