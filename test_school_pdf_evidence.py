@@ -2258,17 +2258,23 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
                             config.write_text(json.dumps(value, ensure_ascii=False))
                             changed.append(config.read_text() != original_config)
                     def claimed(*a, **kw):
-                        fp = real(*a, **kw); mutate(); return fp
+                        # Change once, right after the school-task claim is really taken (not its claim=False decision).
+                        fp = real(*a, **kw)
+                        if fp and kw.get('claim', True) and str(a[0]).startswith('school-task:') and not changed: mutate()
+                        return fp
                     def model(messages):
                         mutate(); return draft()
-                    if phase == 'claim':
-                        with patch.object(self.store, '_job', side_effect=claimed): result, calls = self.refresh(draft())
-                    else: result, calls = self.refresh(model)
-                    self.assertEqual((changed, result['used'], result['failed'], len(calls), self.item(ident)),
-                                     ([True], int(phase == 'model'), 0, int(phase == 'model'), before))
-                    config.write_text(original_config)
-                    with self.store._db() as c:
-                        c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (original_message,) + args)
+                    try:
+                        if phase == 'claim':
+                            with patch.object(self.store, '_job', side_effect=claimed): result, calls = self.refresh(draft())
+                        else: result, calls = self.refresh(model)
+                        self.assertEqual((changed, result['used'], result['failed'], len(calls), self.item(ident)),
+                                         ([True], int(phase == 'model'), 0, int(phase == 'model'), before))
+                    finally:  # every scenario starts from the same message, configuration and job state
+                        config.write_text(original_config)
+                        with self.store._db() as c:
+                            c.execute('UPDATE agent_messages SET payload=? WHERE source_id=? AND id=?', (original_message,) + args)
+                            c.execute("DELETE FROM agent_jobs WHERE id LIKE 'school-task:%'")
 
     def test_complete_word_original_is_named_as_word_with_converted_pages_and_parent_confirms(self):
         """A layout Word original: same page-group path, but the model and the parent are told it is Word, by its original name,

@@ -629,7 +629,7 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
     stubbed, 0 API) -> one bounded re-read on the document job's own attempts -> re-map on its own job -> same ids (fictional)."""
     RES='朗读示范音频未随资料附上，需家长另行获取。'
 
-    def _old(self):
+    def _old(self,first='map'):
         import family_pdf_material as pdfm
         with self.store._db() as c:  # setUp's own notice links the same PDF unread; only this notice is under test
             c.execute('DELETE FROM agent_message_attachments WHERE source_id=? AND message_id=?',(self.keys['source_id'],self.keys['message_id']))
@@ -648,7 +648,8 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts,done) VALUES(?,?,1,1)',(self.doc_key,agent._hash(pdfm._job_value(value['fingerprint'],done))))
             self.upload_id=value['upload_id'];self.fp=fp
         self.ident=self.candidate(keys=keys,ident='p1b-pdf-d')
-        self.refresh(self._mapping(first=True))
+        if first=='map':self.refresh(self._mapping(first=True))
+        else:self.refresh(agent.family_llm.LLMDraftError('映射返回无法核对'))  # the first mapping fails normally
         return self.line_rows()
 
     def _mapping(self,first=False):
@@ -704,6 +705,26 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
         _,calls=self.refresh(self._mapping(),minutes=8)
         self.assertEqual((result['used'],read.call_count,len(calls)),(0,0,0))
         self.assertEqual((self.line_rows(),self.group_payload(),self.job_row(self.doc_key),self.job_row(task_key)),made)
+
+    def test_a_failed_first_mapping_keeps_its_own_budget_after_the_supplement(self):
+        day=24*60
+        for case in ('remaining','cooling','exhausted'):
+            with self.subTest(case=case):
+                if case!='remaining':self.setUp()
+                self._old(first='fail');task_key='school-task:'+self.ident
+                if case=='exhausted':
+                    for n in (1,2):self.refresh(agent.family_llm.LLMDraftError('映射返回无法核对'),minutes=n*day)
+                failed=self.job_row(task_key);self.assertTrue(failed['error'])
+                at=1 if case=='cooling' else 3*day  # cooling: before the failed mapping's own retry time
+                result,read=self._read(at,[self.receipt()])
+                self.assertEqual((result,read.call_count),(dict(used=1,failed=0),1))  # the supplement read itself happens
+                _,calls=self.refresh(self._mapping(first=True),minutes=at+1)
+                after=self.job_row(task_key)
+                if case=='remaining':
+                    self.assertEqual((len(calls),after['attempts']),(1,failed['attempts']+1))  # its remaining count, never restarted
+                    self.assertEqual(self.line_rows()[self.lines['数学']]['id'],self.ident)
+                else:
+                    self.assertEqual((len(calls),after['attempts'],after['error']),(0,failed['attempts'],failed['error']))
 
     def test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group(self):
         for case in ('decided','exhausted'):
@@ -780,7 +801,8 @@ def load_tests(loader,tests,pattern):
         suite.addTest(ScopedDoubtPdfTests(name))
     for name in ('test_an_untouched_default_candidate_keeps_its_id_on_the_first_requirement','test_an_edited_candidate_is_never_taken_by_a_reply_naming_no_id'):
         suite.addTest(PointerRecoveryPdfTests(name))
-    for name in ('test_an_old_undecided_pdf_group_is_read_once_more_and_remapped_on_its_own_budgets','test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group'):
+    for name in ('test_an_old_undecided_pdf_group_is_read_once_more_and_remapped_on_its_own_budgets','test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group',
+                 'test_a_failed_first_mapping_keeps_its_own_budget_after_the_supplement'):
         suite.addTest(PdfScopeSupplementTests(name))
     return suite
 
