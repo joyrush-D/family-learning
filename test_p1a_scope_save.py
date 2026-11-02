@@ -676,11 +676,15 @@ class CorrectionUnitTests(ScopeSaveTests):
             self.assertNotIn('三遍', words)
             self.assertNotIn('听写', words)
             lessons = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
-            self.assertEqual(len(lessons), 1, 'one pending lesson row before its day')
-            self.assertNotEqual(lessons[0].get('when'), 'today', 'the lesson is no to-do today')
+            later = [u for u in view['upcoming'] if '听写' in u['title']]
+            # Root run17 native contract: before its day the untouched lesson, restated unchanged, is one upcoming line (its
+            # own id), never a full row of this day; was one pending row in the groups (when later).
+            self.assertEqual((len(lessons), len(later)), (0, 1), 'one pending lesson line before its day')
+            self.assertEqual(later[0]['day'], FRI, 'the lesson is no to-do today')
         for view in self.views(FRI):
             cards = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
             self.assertEqual(len(cards), 1, 'the restated lesson is one card')
+            self.assertEqual(cards[0]['id'], later[0]['id'], 'its own day shows the same pending item in full')
             self.assertNotIn('Unit 9', '\n'.join(cards[0]['lines']), 'the lesson scope is never borrowed from the reading item')
             self.assertEqual([f.get('kind') for f in cards[0]['facts'] if f.get('role') == 'due'], ['inspection'])
         item, = [i for i in self.items_for(r7) if i['state'] == 'pending' and '跟读' in i['title']]
