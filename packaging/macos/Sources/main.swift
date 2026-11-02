@@ -1285,7 +1285,7 @@ extension AppDelegate {
     }
 
     // MARK: 原生验收（仅 --smoke-test + 虚构后台）：经无障碍树找控件，在其位置投递真实鼠标/键盘事件，读回控件文字；截图只取本窗口。
-    struct AXNode { let id: String; let text: String; let frame: NSRect }
+    struct AXNode { let id: String; let text: String; let frame: NSRect; var role = "" }
 
     func axNodes(_ root: NSObject, _ out: inout [AXNode], _ depth: Int = 0) {
         guard depth < 80, out.count < 4000 else { return }
@@ -1298,7 +1298,8 @@ extension AppDelegate {
         let text = [string("accessibilityLabel"), string("accessibilityTitle"), string("accessibilityValue")].filter { !$0.isEmpty }.joined(separator: " ")
         var frame = NSRect.zero
         if root.responds(to: NSSelectorFromString("accessibilityFrame")), let v = root.value(forKey: "accessibilityFrame") as? NSValue { frame = v.rectValue }
-        out.append(AXNode(id: id, text: text, frame: frame))
+        let role = root.responds(to: NSSelectorFromString("accessibilityRole")) ? (root.value(forKey: "accessibilityRole") as? String ?? "") : ""
+        out.append(AXNode(id: id, text: text, frame: frame, role: role))
         guard root.responds(to: NSSelectorFromString("accessibilityChildren")), let children = root.value(forKey: "accessibilityChildren") as? [Any] else { return }
         for child in children { if let o = child as? NSObject { axNodes(o, &out, depth + 1) } }
     }
@@ -1373,8 +1374,13 @@ extension AppDelegate {
     }
 
     /// 探针范围内恰有一个系统弹出菜单或日期控件时，它在屏幕上的位置；没有或不止一个就返回 nil（照旧点探针中心）。
+    /// SwiftUI 的菜单式 Picker 不一定是 AppKit 弹出按钮：同时认无障碍树里角色为弹出按钮/日期字段/菜单按钮的元素（同一控件只算一次）。
     func soleControl(in frame: NSRect) -> NSRect? {
         var found: [NSRect] = []
+        let roles: Set<String> = ["AXPopUpButton", "AXDateField", "AXMenuButton"]
+        for node in nodes() where roles.contains(node.role) && node.frame.width > 0 && frame.contains(NSPoint(x: node.frame.midX, y: node.frame.midY)) {
+            found.append(node.frame)
+        }
         func walk(_ view: NSView) {
             if view.isHidden { return }
             if view is NSPopUpButton || view is NSDatePicker, let w = view.window {
@@ -1384,7 +1390,9 @@ extension AppDelegate {
             view.subviews.forEach(walk)
         }
         testWindows().compactMap(\.contentView).forEach(walk)
-        return found.count == 1 ? found[0] : nil
+        var unique: [NSRect] = []
+        for r in found where !unique.contains(where: { abs($0.midX - r.midX) < 4 && abs($0.midY - r.midY) < 4 }) { unique.append(r) }
+        return unique.count == 1 ? unique[0] : nil
     }
 
     func tables(in view: NSView?) -> [NSTableView] {
@@ -1434,7 +1442,10 @@ extension AppDelegate {
         }
         // 带标签的复合控件（Picker、DatePicker 整行）：探针框住整行时点在容器空白处打不开控件。探针范围内恰有一个系统弹出/日期控件时，
         // 改点那个控件自己的中心——仍是真实鼠标事件，不设值、不调用动作；其他控件和列表行照旧。
-        if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY) }
+        var redirected = false
+        if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY); redirected = true }
+        // 诊断：探针范围里能看到的可交互角色（只记录，供核对命中，不参与选择）。
+        let probeRoles = nodes().filter { !$0.role.isEmpty && $0.frame.width > 0 && node.frame.contains(NSPoint(x: $0.frame.midX, y: $0.frame.midY)) }.map(\.role)
         guard let w = testWindows().first(where: { $0.frame.contains(center) }) else { return ["ok": false, "error": "control outside the test window", "id": id, "scrolled": scrolled, "has_scroll_view": TestTargets.live(id)?.0.enclosingScrollView != nil] }
         // 像家长先把窗口点到最前面：App 不在前台、窗口不是当前窗口时先激活（只激活，不算这一步的点击）。
         var activated = false
@@ -1505,7 +1516,7 @@ extension AppDelegate {
             }
         }
         return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
-                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
+                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "probe_roles": Array(Set(probeRoles)).sorted(), "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
     }
 
     func key(_ chars: String, _ modifiers: [String], code: UInt16 = 0) async {
