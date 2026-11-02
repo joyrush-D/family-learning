@@ -16,6 +16,18 @@ class CalendarError(ValueError):
 FIELDS=('child_ids','title','category','day','start_time','end_time','location','note','status','repeat','until')
 REPEAT_FIELDS=('repeat_days','extra_times')
 FIELDS+=REPEAT_FIELDS
+# A family review's typed link, kept apart from FIELDS (whose exact key sets every saved occurrence and old request hash
+# depend on) in its own optional column: the child, the original wrong record, the parent's confirmed topic ('' = none),
+# the record's own original task ('' = a standalone wrong record) and the record basis approved on.
+REVIEW_KEYS=('child_id','record_id','topic_id','task_id','basis')
+
+def _review(value):
+    if value=={} : return {}
+    if (not isinstance(value,dict) or set(value)!=set(REVIEW_KEYS) or not isinstance(value['child_id'],str) or not value['child_id']
+            or type(value['record_id']) is not int or not 0<value['record_id']<2**63 or any(not isinstance(value[k],str) or len(value[k])>100 for k in ('topic_id','task_id'))
+            or not isinstance(value['basis'],str) or not re.fullmatch('[a-f0-9]{64}',value['basis'])):
+        raise CalendarError('家庭复习的原错题关联不正确')
+    return {k:value[k] for k in REVIEW_KEYS}
 CATEGORIES={'school','activity','study','family','other'}
 
 
@@ -110,9 +122,9 @@ class Store:
                 repeat TEXT NOT NULL, until TEXT NOT NULL, last_request_hash TEXT NOT NULL,
                 created TEXT NOT NULL, updated TEXT NOT NULL)''')
             columns={r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}
-            for name in (*REPEAT_FIELDS,'occurrence'):
+            for name in (*REPEAT_FIELDS,'occurrence','review'):
                 if name not in columns:
-                    default='{}' if name=='occurrence' else '[]'
+                    default='{}' if name in ('occurrence','review') else '[]'
                     try: c.execute('ALTER TABLE calendar_events ADD COLUMN '+name+" TEXT NOT NULL DEFAULT '"+default+"'")
                     except sqlite3.OperationalError:
                         if name not in {r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}: raise
@@ -192,6 +204,10 @@ class Store:
         result['occurrence']=json.loads(raw.get('occurrence','{}'))
         if not isinstance(result['occurrence'],dict):
             raise CalendarError('逐次安排记录格式无法核对，请保留记录并检查备份',503,'calendar_data_error')
+        review=json.loads(raw.get('review') or '{}')  # absent column or '{}': an ordinary plan, read exactly as before
+        if review:
+            try: result['review']=_review(review)
+            except CalendarError: raise CalendarError('家庭复习的原错题关联无法核对，请保留记录并检查备份',503,'calendar_data_error') from None
         return result
 
     @staticmethod
@@ -232,13 +248,14 @@ class Store:
             raise CalendarError('逐次安排的原记录或历史无法核对，请保留记录并检查备份',503,'calendar_data_error') from None
 
     @staticmethod
-    def _write(c,ident,version,fields,digest,old,origin=None):
+    def _write(c,ident,version,fields,digest,old,origin=None,review=None):
         now=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).isoformat(timespec='seconds')
         values=dict(id=ident,version=version+1,**fields,last_request_hash=digest,
                     created=old['created'] if old else now,updated=now)
         values['child_ids']=_json(values['child_ids'])
         for key in REPEAT_FIELDS: values[key]=_json(values[key])
         if origin is not None: values['occurrence']=_json(origin)
+        if review: values['review']=_json(review)
         if old:
             columns=[k for k in values if k!='id']
             c.execute('UPDATE calendar_events SET '+','.join(k+'=?' for k in columns)+' WHERE id=?',
@@ -247,31 +264,45 @@ class Store:
             c.execute('INSERT INTO calendar_events ('+','.join(values)+') VALUES ('+','.join('?' for _ in values)+')',list(values.values()))
         return Store._manual(values)
 
-    def save(self,obj):
-        if not isinstance(obj,dict) or set(obj)-set(FIELDS)-{'id','version'}:
+    def save(self,obj,review_check=None):
+        """review_check(connection, review) verifies a new family review's link inside this same transaction."""
+        if not isinstance(obj,dict) or set(obj)-set(FIELDS)-{'id','version','review'}:
             raise CalendarError('只能保存手动安排字段，学校来源保持只读')
         ident=obj.get('id'); version=obj.get('version')
         if not isinstance(ident,str) or not re.fullmatch('[a-f0-9]{32}',ident): raise CalendarError('手动安排编号不正确')
         if type(version) is not int or not 0<=version<=2147483647: raise CalendarError('安排版本不正确')
         fields=self._fields(obj,self._children())
-        digest=hashlib.sha256(_json(dict(id=ident,version=version,**fields)).encode()).hexdigest()
+        asked=_review(obj['review']) if 'review' in obj else None
         with self._db() as c:
             c.execute('BEGIN IMMEDIATE')
             old=c.execute('SELECT * FROM calendar_events WHERE id=?',(ident,)).fetchone()
             if old and json.loads(old['occurrence']): raise CalendarError('请从“处理本次”修改这次安排',409,'calendar_occurrence_required')
+            # A saved review link is fixed; a request without the key carries it unchanged, so an older editor can still
+            # reschedule, cancel or complete it. Without a review the hashed JSON is exactly the old request's.
+            saved=json.loads(dict(old).get('review') or '{}') if old else {}
+            review=saved if asked is None else asked
+            digest=hashlib.sha256(_json(dict(id=ident,version=version,**fields,**({'review':review} if review else {}))).encode()).hexdigest()
             # Reconcile a lost response before rejecting the now-stale version.
             if old and old['last_request_hash']==digest: return self._manual(old)
-            if old and not any(key in obj or json.loads(old[key]) for key in REPEAT_FIELDS):
+            if old and not review and not any(key in obj or json.loads(old[key]) for key in REPEAT_FIELDS):
                 legacy=hashlib.sha256(_json(dict(id=ident,version=version,**{k:v for k,v in fields.items() if k not in REPEAT_FIELDS})).encode()).hexdigest()
                 if old['last_request_hash']==legacy: return self._manual(old)
             if (old is None and version!=0) or (old is not None and old['version']!=version):
                 raise CalendarError('这条安排已更新，请刷新核对；当前输入未覆盖',409,'calendar_conflict')
+            if old and review!=saved:
+                raise CalendarError('家庭复习关联的原错题和知识点保存后不能更改；需要不同的关联请另建一条',409,'calendar_review_conflict')
+            if review:
+                if fields['child_ids']!=[review['child_id']]: raise CalendarError('家庭复习只属于原错题的这个孩子',409,'calendar_review_owner')
+                if fields['repeat']!='none': raise CalendarError('家庭复习是单次安排，不能设为重复')
+                if old is None:
+                    if review_check is None: raise CalendarError('家庭复习须核对原错题后才能保存',400,'calendar_review_unchecked')
+                    review_check(c,review)
             if old and any(key not in obj and json.loads(old[key]) for key in REPEAT_FIELDS):
                 raise CalendarError('此计划包含新的重复设置，请刷新页面后修改',409,'calendar_conflict')
             if old and old['repeat']!='none' and fields['repeat']=='none' and any(
                     json.loads(r[0]).get('series_id')==ident for r in c.execute("SELECT occurrence FROM calendar_events WHERE occurrence!='{}'")):
                 raise CalendarError('此重复计划已有逐次记录，请保留重复规则；需要单次安排时可另建一条',409,'calendar_conflict')
-            return self._write(c,ident,version,fields,digest,old)
+            return self._write(c,ident,version,fields,digest,old,review=review)
 
     def save_occurrence(self,obj):
         allowed={'series_id','series_version','origin_day','slot_id','version','day','start_time','end_time','status','note'}

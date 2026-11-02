@@ -220,6 +220,14 @@ def ensure_schema(conn):
         snapshot_before_sha256 TEXT NOT NULL DEFAULT '', created_at REAL NOT NULL, updated_at REAL NOT NULL)''')
 
 
+TOPIC_TABLES = ('topic_links', 'topic_diagnoses', 'topic_diagnosis_items', 'topic_retries', 'topic_exposures', 'topic_basis_voids')
+
+
+def _tables(conn):
+    """已存在的知识点表。读取路径（state/links/_evidence）按它只读：缺表就是还没有记录，不建表、不迁移。"""
+    return {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name IN (%s)" % ','.join('?' * len(TOPIC_TABLES)), TOPIC_TABLES)}
+
+
 def record_hash(record):
     keep = {k: record.get(k) for k in ('id', 'child_id', 'child', 'subject', 'title', 'note', 'attachments', 'created',
                                        'question', 'answer', 'correction', 'updated_at')}
@@ -266,7 +274,8 @@ def link(conn, child_id, record, topic_id, state, request_id, topics=None, note=
 
 def links(conn, child_id, record):
     _own(child_id, record)
-    ensure_schema(conn); now = record_hash(record)
+    now = record_hash(record)
+    if 'topic_links' not in _tables(conn): return []  # 只读：冷库没有表就是还没有链接，读取不建表
     rows = conn.execute('SELECT topic_id,state,record_hash,pack_sha,note,created_at FROM topic_links WHERE child_id=? AND record_id=? ORDER BY id',
                         (str(child_id), str(record['id']))).fetchall()
     return [{'topic_id': r[0], 'state': r[1], 'pack_sha': r[3], 'note': r[4], 'created_at': r[5],
@@ -323,15 +332,18 @@ def _payload_hash(obj):
 def _evidence(c, child_id):
     """同孩历次诊断与再试的全部痕迹：题号→{(已出示/已答/看过说明/已再试/出示为新题, 诊断号)}。
     不按原错题版本或单次诊断过滤：重新诊断、更正原错题都洗不掉已见历史；不同孩子互不相干。"""
-    ev = {}
-    for qid, did, helps in c.execute('SELECT i.qid,i.diagnosis_id,i.help FROM topic_diagnosis_items i JOIN topic_diagnoses d ON d.id=i.diagnosis_id '
-                                     'WHERE d.child_id=?', (child_id,)):
-        ev.setdefault(qid, set()).add(('answered', did))
-        if helps: ev[qid].add(('helped', did))
-    for qid, did in c.execute('SELECT qid,diagnosis_id FROM topic_retries WHERE child_id=?', (child_id,)):
-        ev.setdefault(qid, set()).add(('retried', did))
-    for qid, did, mode in c.execute('SELECT qid,diagnosis_id,mode FROM topic_exposures WHERE child_id=?', (child_id,)):
-        ev.setdefault(qid, set()).add(('offered' if mode == 'retry' else 'shown', did))
+    ev, have = {}, _tables(c)  # 只读：缺哪张表就是那类痕迹还没有，不建表
+    if {'topic_diagnosis_items', 'topic_diagnoses'} <= have:
+        for qid, did, helps in c.execute('SELECT i.qid,i.diagnosis_id,i.help FROM topic_diagnosis_items i JOIN topic_diagnoses d ON d.id=i.diagnosis_id '
+                                         'WHERE d.child_id=?', (child_id,)):
+            ev.setdefault(qid, set()).add(('answered', did))
+            if helps: ev[qid].add(('helped', did))
+    if 'topic_retries' in have:
+        for qid, did in c.execute('SELECT qid,diagnosis_id FROM topic_retries WHERE child_id=?', (child_id,)):
+            ev.setdefault(qid, set()).add(('retried', did))
+    if 'topic_exposures' in have:
+        for qid, did, mode in c.execute('SELECT qid,diagnosis_id,mode FROM topic_exposures WHERE child_id=?', (child_id,)):
+            ev.setdefault(qid, set()).add(('offered' if mode == 'retry' else 'shown', did))
     return ev
 
 
@@ -343,7 +355,8 @@ def _fresh(ev, qid, diagnosis_id):
 def settle_basis(app, record):
     """原错题更正后：旧诊断里DeepTutor已判定的新题作答，逐题交原LearningService.repair_question(action='void')作废，
     版本核对一致才保存新快照（原attempt保留并标voided）；旧再试行与复测原话不动，只标依据已变。
-    组件不可用记pending“待作废”：旧结果同样不当当前结果，下次打开安全重试（同一旧快照、同一turn编号）。"""
+    组件不可用记pending“待作废”：旧结果同样不当当前结果，下次显式操作时安全重试（同一旧快照、同一turn编号）。
+    只在家长显式接受的操作（重新确认知识点、开始新诊断）成功保存之后调用；打开面板（state）只读，不作废也不调组件。"""
     now = record_hash(record)
     with app.connect() as c:
         ensure_schema(c)
@@ -379,18 +392,18 @@ def settle_basis(app, record):
 
 def state(app, obj, root=None):
     """统一完整状态：每个写操作都返回它（知识包、链接、诊断、已见题号、图谱），面板不用拼半截状态。"""
+    # 只读：打开面板不建表、不作废旧依据、不调判定组件、不登记出示。依据已变的旧诊断原样列为历史；DeepTutor里还没作废的旧判定
+    # 标“unsettled”（不当当前结果），作废只在显式重新确认知识点或开始新诊断成功之后进行（settle_basis）。
     _fields(obj, ('child_id', 'record_id'), ('child_id', 'record_id'))
     with app.connect() as c:
         record = wrong_record(app, c, obj['child_id'], obj['record_id'])
-    settle_basis(app, record)
-    with app.connect() as c:
-        now = record_hash(record); ev = _evidence(c, record['child_id'])
+        now = record_hash(record); ev = _evidence(c, record['child_id']); have = _tables(c)
         try: pack = load_pack(root)
         except (TaxonomyError, OSError, ValueError): pack = None
         voids = {r[0]: {'state': r[1], 'question_ids': json.loads(r[2])} for r in c.execute(
-            'SELECT diagnosis_id,state,question_ids FROM topic_basis_voids WHERE child_id=? AND record_id=?', (record['child_id'], str(record['id'])))}
+            'SELECT diagnosis_id,state,question_ids FROM topic_basis_voids WHERE child_id=? AND record_id=?', (record['child_id'], str(record['id'])))} if 'topic_basis_voids' in have else {}
         diags = []
-        for d in c.execute('SELECT * FROM topic_diagnoses WHERE child_id=? AND record_id=? ORDER BY id DESC LIMIT 5', (record['child_id'], str(record['id']))).fetchall():
+        for d in (c.execute('SELECT * FROM topic_diagnoses WHERE child_id=? AND record_id=? ORDER BY id DESC LIMIT 5', (record['child_id'], str(record['id']))).fetchall() if 'topic_diagnoses' in have else []):
             items = [dict(r) for r in c.execute('SELECT seq,topic_id,qid,kind,answer,verdict,engine_result,help FROM topic_diagnosis_items WHERE diagnosis_id=? ORDER BY seq', (d['id'],))]
             for i in items:  # read-only overlay of the same rule; the saved verdict, engine result, session and summary stay as saved
                 note = item_doubt(i, pack if d['pack_sha'] == TAXONOMY_SHA else None)
@@ -401,16 +414,29 @@ def state(app, obj, root=None):
                 shown, note = evidence_view(r, pack if d['pack_sha'] == TAXONOMY_SHA else None)
                 if note: r.update(stored_outcome=r['outcome'], outcome=shown, evidence_note=note)
             shown, offers = [], []
-            for qid, mode in c.execute('SELECT qid,mode FROM topic_exposures WHERE diagnosis_id=? ORDER BY id', (d['id'],)):
+            for qid, mode in (c.execute('SELECT qid,mode FROM topic_exposures WHERE diagnosis_id=? ORDER BY id', (d['id'],)) if 'topic_exposures' in have else ()):
                 (offers if mode == 'retry' else shown).append(qid)
             done = {r['qid'] for r in retries}; offer = next((q for q in reversed(offers) if q not in done), '')
+            void = voids.get(d['id'])
+            if void is None and d['record_hash'] != now:  # 还没作废：只读列出，不在打开时作废
+                graded = list(dict.fromkeys(r['qid'] for r in retries if r['deeptutor']))
+                void = {'state': 'unsettled', 'question_ids': graded} if graded else None
             diags.append({'id': d['id'], 'topic_id': d['topic_id'], 'opts': json.loads(d['opts']), 'state': d['state'], 'version': d['version'],
                           'summary': json.loads(d['summary'] or 'null'), 'items': items, 'retries': retries, 'shown': shown,
                           'retry_offer': {'qid': offer, 'fresh': _fresh(ev, offer, d['id'])} if offer else None,
-                          'pack_sha': d['pack_sha'], 'engine_sha256': d['engine_sha256'], 'void': voids.get(d['id']),
+                          'pack_sha': d['pack_sha'], 'engine_sha256': d['engine_sha256'], 'void': void,
                           'basis': 'current' if d['record_hash'] == now else 'basis_changed'})
-        out = {'ok': True, 'record': {k: record[k] for k in ('id', 'day', 'subject', 'title', 'note')}, 'links': links(c, record['child_id'], record),
-               'diagnoses': diags, 'seen_qids': sorted(ev)}
+        out = {'ok': True, 'record': dict({k: record[k] for k in ('id', 'day', 'subject', 'title', 'note')}, basis=now),
+               'links': links(c, record['child_id'], record), 'diagnoses': diags, 'seen_qids': sorted(ev)}
+        # 同一道错题已保存的家庭复习、原作业（显式关联，独立错题没有）和家长核对时留下的知识点线索：只读。
+        context = app.record_review_context(c, record) if hasattr(app, 'record_review_context') else {}
+        hint = context.pop('topic_hint', '')
+        out.update(context)
+        if hint and pack and (not record['subject'] or '数学' in record['subject']):
+            own = child_grades(next((p.get('grade') for p in app.profiles(c) if p['id'] == record['child_id']), ''))
+            found = search(pack['topics'], hint[:60], child_grades=own)  # 原知识包检索；候选不是确认，不自动关联
+            out['hint'] = {'text': hint, 'status': found['status'], 'candidates': found['candidates'][:5]}
+        elif hint: out['hint'] = {'text': hint, 'status': 'none', 'candidates': []}
     status = pack_status(root)
     out.update(pack=status, deeptutor=family_deeptutor.status())
     if status['installed']:
@@ -446,6 +472,7 @@ def link_record(app, obj, root=None):
     with app.connect() as c:
         record = wrong_record(app, c, obj['child_id'], obj['record_id'])
         replayed = _link_write(c, obj['child_id'], record, obj.get('topic_id') or '', obj['state'], obj['request_id'], topics, obj.get('note') or '')
+    if not replayed: settle_basis(app, record)  # 家长显式重新确认后才作废旧依据；失败的请求在上面已拒绝，零写
     return dict(state(app, _base(obj), root), replayed=replayed)
 
 
@@ -467,6 +494,7 @@ def start(app, obj, root=None):
             c.execute('INSERT INTO topic_diagnoses(child_id,record_id,record_hash,topic_id,pack_sha,engine_sha256,opts,request_id,created_at,updated_at) '
                       'VALUES(?,?,?,?,?,?,?,?,?,?)', (record['child_id'], str(record['id']), record_hash(record), obj['topic_id'], TAXONOMY_SHA,
                                                       ENGINE_SHA256, json.dumps(opts), obj['request_id'], now, now))
+    if prev is None: settle_basis(app, record)  # 显式开始新诊断成功之后才作废依据已变的旧诊断
     return dict(state(app, _base(obj), root), replayed=prev is not None)
 
 
