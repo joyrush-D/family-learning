@@ -44,6 +44,23 @@ class DiagnosisTest(unittest.TestCase):
         self.assertTrue(all(e['subject'] in ('数学', '') for e in ev))
         self.assertEqual(len(ev), 3)
 
+    def test_review_bridge_reads_a_current_diagnosis_for_the_exact_record_only(self):
+        # P4: the topic panel's read-only candidate source; the diagnosis' own currentness rule first, then the exact ref.
+        import family_taxonomy
+        wrong = [e['ref'] for e in diag.evidence(_app(), 'child-1', '数学') if e['kind'] == 'wrong_question']
+        draft = dict(knowledge_components=[dict(name='两位数进位加法', error_type='进位漏加', misconception='', status='有支持',
+                     evidence=[wrong[0]], suggestion='')], summary='先解决进位漏加', uncertainties=[])
+        with patch.object(family_llm, '_chat_json', return_value=draft):
+            diag.diagnose(_app(), 'child-1', '数学')
+
+        def terms(ref):
+            with app.connect() as c:
+                rec = family_taxonomy.wrong_record(SimpleNamespace(**vars(app)), c, 'child-1', int(ref[7:]))
+                return [t['name'] for t in app.record_review_context(c, rec)['diagnosis_terms']]
+        self.assertEqual((terms(wrong[0]), terms(wrong[1])), (['两位数进位加法'], []))  # the exact ref only
+        with app.connect() as c: c.execute('UPDATE records SET day=? WHERE id=?', ('2026-09-20', int(wrong[0][7:])))
+        self.assertEqual(terms(wrong[0]), [])  # its evidence changed since the run: no longer a source
+
     def test_diagnose_validates_refs_persists_and_supersedes(self):
         refs = list(self._refs_seen())
         good = refs[0]
