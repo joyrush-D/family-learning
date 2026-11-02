@@ -9005,6 +9005,7 @@ def _school_recover_pointer(row,result,parts,known):
     candidate=dict(row);plan=json.loads(candidate['plan']);brief=plan.get('school_task',{})
     if (candidate['state']!='pending' or candidate['task_id'] or candidate.get('record_id') is not None or candidate.get('care_id')
             or plan.get('school_original_action') or not _school_unsummarized(candidate,brief)
+            or not str(candidate['title']).startswith('待核对：')  # still the generated placeholder title, never a parent's own
             or any(plan.get(k) for k in ('approved','school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id'))):
         return result
     first=next((p['text'] for p in parts if p.get('requirement')),None)
