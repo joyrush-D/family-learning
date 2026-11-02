@@ -1473,9 +1473,8 @@ extension AppDelegate {
         var redirected = false, sampled: [String] = []
         if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY); redirected = true }
         else if rowTable == nil, id.hasPrefix("oral-") || id.hasPrefix("feedback-") || id.hasPrefix("wrong-add") {
-            // 弹出层里的复合控件（只限这些弹出层探针，清单与主界面照旧）：按真实命中找到控件所在的点。
-            let probe = controlPoint(in: node.frame); sampled = probe.hits
-            if let point = probe.point, sampled.last.map({ !$0.contains("TextField") }) == true { center = point; redirected = true }
+            // 只作诊断、不改点击位置：实测 SwiftUI 菜单式 Picker 整行命中同一个 PlatformGroupContainer，按命中找不到单独的控件点。
+            sampled = controlPoint(in: node.frame).hits
         }
         // 诊断：探针范围里能看到的可交互角色（只记录，供核对命中，不参与选择）。
         let probeRoles = nodes().filter { !$0.role.isEmpty && $0.frame.width > 0 && node.frame.contains(NSPoint(x: $0.frame.midX, y: $0.frame.midY)) }.map(\.role)
