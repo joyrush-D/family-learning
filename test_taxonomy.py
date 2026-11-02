@@ -293,6 +293,15 @@ class OriginalQuestionSeenTest(unittest.TestCase):
             for _ in range(2): ft.retry(A, dict(base, diagnosis_id=did, qid='cnm_p125_q3', answer='4.3', verdict='correct', request_id='p4origretry0000001'))
         self.assertEqual(self.count("SELECT count(*) FROM topic_retries WHERE qid='cnm_p125_q3' AND outcome='not_new'"), 1)
         self.assertEqual(self.count('SELECT count(*) FROM topic_retries'), 1)
+        with A.connect() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')], raw)  # raw original/correction untouched
+            q3 = ft.question(ft.load_pack(), 'cnm_p125_q3')
+            other = ft.wrong_record(A, c, 'child-2', 3); unrelated = ft.wrong_record(A, c, 'child-1', 4)
+            self.assertEqual((ft.original_seen(A, c, other, [q3]), ft.original_seen(A, c, unrelated, [q3])), ({}, {}))  # other child / other record
+            # A later correction of the original does not wash the earlier shown prompt into unseen: its revision still counts.
+            c.execute("INSERT INTO revisions(record_id,previous,changed) VALUES(1,?,'2026-11-04')", (json.dumps(dict(c.execute('SELECT * FROM records WHERE id=1').fetchone()), ensure_ascii=False),))
+            c.execute("UPDATE records SET note='题面：（家长改写后的说明）\n学生原答：4.2元' WHERE id=1")
+            self.assertEqual(set(ft.original_seen(A, c, ft.wrong_record(A, c, 'child-1', 1), [q3])), {'cnm_p125_q3'})
 
     def test_old_saved_original_as_new_reads_as_not_new_everywhere_and_a_real_first_new_stays_current(self):
         """Root's CONT6 case: before the guard an old store saved the original q3 as independent_correct with its own 复测 record
@@ -322,15 +331,6 @@ class OriginalQuestionSeenTest(unittest.TestCase):
             self.assertEqual([tuple(r) for t in ('records', 'topic_retries') for r in c.execute('SELECT * FROM %s ORDER BY id' % t)], raw)
         self.assertEqual((views[7]['state'], views[7]['review']), ('history', False)); self.assertIn('原题', views[7]['next'])
         self.assertEqual(views[8]['state'], 'current')
-        with A.connect() as c:
-            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')], raw)  # raw original/correction untouched
-            q3 = ft.question(ft.load_pack(), 'cnm_p125_q3')
-            other = ft.wrong_record(A, c, 'child-2', 3); unrelated = ft.wrong_record(A, c, 'child-1', 4)
-            self.assertEqual((ft.original_seen(A, c, other, [q3]), ft.original_seen(A, c, unrelated, [q3])), ({}, {}))  # other child / other record
-            # A later correction of the original does not wash the earlier shown prompt into unseen: its revision still counts.
-            c.execute("INSERT INTO revisions(record_id,previous,changed) VALUES(1,?,'2026-11-04')", (json.dumps(dict(c.execute('SELECT * FROM records WHERE id=1').fetchone()), ensure_ascii=False),))
-            c.execute("UPDATE records SET note='题面：（家长改写后的说明）\n学生原答：4.2元' WHERE id=1")
-            self.assertEqual(set(ft.original_seen(A, c, ft.wrong_record(A, c, 'child-1', 1), [q3])), {'cnm_p125_q3'})
 
 
 if __name__ == '__main__':
