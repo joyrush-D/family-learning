@@ -398,4 +398,52 @@ class CalendarTests(unittest.TestCase):
         finally: server.shutdown();server.server_close();worker.join()
 
 
+class FamilyReviewLinkTests(unittest.TestCase):
+    """P4: a family review keeps its typed link (child, original wrong record, topic or none, the record's own task or none,
+    approved basis) on the existing calendar store; plain requests keep their old hash and replay. All fictional."""
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory(prefix='synthetic-review-')
+        self.old=app.ROOT,app.DATA,app.DB
+        app.ROOT=Path(self.tmp.name); app.DATA=app.ROOT/'private'; app.DATA.mkdir(); app.DB=app.DATA/'family.sqlite3'
+        (app.ROOT/'家庭运行规则.md').write_text('| child-1 | 示例甲 | 男 | 10岁 | 四年级 |\n| child-2 | 示例乙 | 男 | 13岁 | 初一 |\n')
+        self.store=app.calendar_store()
+
+    def tearDown(self):
+        app.ROOT,app.DATA,app.DB=self.old; self.tmp.cleanup()
+
+    def save(self,obj):
+        try: return 200,self.store.save(obj,app.calendar_review_check)
+        except app.family_calendar.CalendarError as e: return e.status,e.code
+
+    def rows(self):
+        with sqlite3.connect(app.DB) as c: return c.execute('SELECT id,version,review,last_request_hash FROM calendar_events ORDER BY id').fetchall()
+
+    def test_typed_review_replays_by_id_and_version_and_plain_requests_keep_their_old_hash(self):
+        import hashlib, family_taxonomy
+        from types import SimpleNamespace
+        source=family_taxonomy.WRONG_SOURCE
+        w=app.save_record(dict(child='示例甲',day='2026-10-28',category='学习进展',subject='数学',title='虚构错题',note='题面：1+2=?\n学生原答：4',source=source))['record_id']
+        same=app.save_record(dict(child='示例甲',day='2026-10-29',category='学习进展',subject='数学',title='虚构错题',note='题面：2+2=?\n学生原答：5',source=source))['record_id']
+        with app.connect() as c: basis=family_taxonomy.record_hash(family_taxonomy.wrong_record(SimpleNamespace(**vars(app)),c,'child-1',w))
+        ev=dict(id='a'*32,version=0,child_ids=['child-1'],title='家庭复习：虚构错题',category='study',day='2026-10-30',start_time='',end_time='',location='',note='',
+                status='confirmed',repeat='none',until='',review=dict(child_id='child-1',record_id=w,topic_id='',task_id='',basis=basis))
+        self.assertEqual(self.save(dict(ev,id='b'*32,child_ids=['child-2'],review=dict(ev['review'],child_id='child-2'))),(403,'review_cross_child'))
+        self.assertEqual(self.save(dict(ev,id='c'*32,review=dict(ev['review'],record_id=same))),(409,'review_basis_changed'))  # same title, another record
+        self.assertEqual(self.save(dict(ev,id='d'*32,review=dict(ev['review'],task_id='T01'))),(409,'review_task_mismatch'))  # standalone: no invented task
+        self.assertEqual(self.rows(),[])
+        status,first=self.save(ev); self.assertEqual((status,first['version'],first['review']['record_id']),(200,1,w))
+        self.assertEqual(self.save(ev)[1]['version'],1)  # the same request after a lost reply reads back the saved row
+        moved={k:v for k,v in ev.items() if k!='review'}|dict(version=1,day='2026-10-31')  # an editor that does not send the link
+        self.assertEqual(self.save(moved)[1]['review'],first['review']); self.assertEqual(self.save(moved)[1]['version'],2)
+        self.assertEqual(self.save(dict(moved,version=2,review=dict(ev['review'],topic_id='x'))),(409,'calendar_review_conflict'))
+        self.assertEqual(self.save(dict(moved,version=2,child_ids=['child-1','child-2'])),(409,'calendar_review_owner'))
+        self.assertEqual(self.save(dict(moved,version=2,status='completed'))[1]['status'],'completed')
+        plain={k:v for k,v in ev.items() if k!='review'}|dict(id='e'*32,title='虚构钢琴课'); self.save(plain)
+        digest=hashlib.sha256(app.family_calendar._json(dict(id=plain['id'],version=0,**self.store._fields(plain,self.store._children()))).encode()).hexdigest()
+        self.assertEqual([(r[0],r[1],r[2]=='{}') for r in self.rows()],[('a'*32,3,False),('e'*32,1,True)])
+        self.assertEqual([r[3] for r in self.rows() if r[0]=='e'*32],[digest])  # a request without a review hashes exactly as before
+        self.assertEqual(self.save(plain)[1]['version'],1)
+        self.assertEqual([e['review']['basis_state'] for e in app.calendar_snapshot('2026-10-31','2026-10-31')['events'] if e.get('review')],['current'])
+
+
 if __name__=='__main__': unittest.main()
