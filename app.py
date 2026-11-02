@@ -290,7 +290,9 @@ def tasks(connection=None):
             except (ValueError,TypeError,AttributeError): continue
             if text: words.setdefault(row['task_id'],text)
         for t in manual:
-            if not str(t.get('action') or '').strip() and t['source'] in recorded and words.get(t['id']): t['action']=words[t['id']]
+            # Words that are only the title itself add nothing and would repeat it: such an item keeps no action lines.
+            if not str(t.get('action') or '').strip() and t['source'] in recorded and words.get(t['id']) not in (None,str(t.get('title') or '').strip()):
+                t['action']=words[t['id']]
     focuses=family_task_focus.read_all(connection)
     updates={r['id']:dict(r) for r in connection.execute('SELECT id,status,updated FROM task_updates')}
     for task in manual+result:
