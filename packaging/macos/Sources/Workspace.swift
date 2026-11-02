@@ -696,7 +696,7 @@ struct SubjectList: View {
         } else if let s = store.current?.schedule, !(s.lessons.isEmpty && s.plans.isEmpty) {
             Section {
                 ForEach(s.lessons) { t in LessonCard(table: t).listRowSeparator(.hidden) }
-                ForEach(s.plans) { p in PlanRow(plan: p).listRowSeparator(.hidden) }
+                ForEach(s.plans) { p in PlanRow(plan: p, openReview: { r in store.openTopic(r.record_id, r.child_id) }).listRowSeparator(.hidden) }
                 if s.cancelled > 0 { Text("另有 \(s.cancelled) 项安排已取消，未列出。").font(Palette.small).foregroundStyle(Palette.ink2).listRowSeparator(.hidden) }
             } header: {
                 WoodTag(text: "课表与日程", count: "\(s.lessons.reduce(0) { $0 + $1.sessions.count } + s.plans.count) 项").padding(.top, 8).padding(.bottom, 2)
@@ -1092,6 +1092,8 @@ struct LessonCard: View {
 /// 一条日程：钟点（没写就说没写）、名称、地点与来源；关联事项不在本孩子当天清单时如实写“未合并”。
 struct PlanRow: View {
     let plan: PlanItem
+    /// A family review opens the same original wrong record and topic through the existing route (store.openTopic).
+    var openReview: (PlanReview) -> Void = { _ in }
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(planClock(plan.start_time, plan.end_time)).font(.system(size: 13, weight: .semibold))
@@ -1103,6 +1105,11 @@ struct PlanRow: View {
                             plan.source.isEmpty ? "" : "学校来源"].filter { !$0.isEmpty }.joined(separator: " · ")
                 if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
                 if let text = plan.unmerged { Text(text).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
+                if let review = plan.review {
+                    Button { openReview(review) } label: { Label("打开原错题与知识点", systemImage: "leaf") }
+                        .buttonStyle(.borderless).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.leafInk)
+                        .probe("plan-review-open-" + plan.id, text: "打开原错题与知识点")
+                }
             }
             Spacer(minLength: 0)
         }

@@ -34,7 +34,9 @@ function restore(E,graph,diag){const run=held=>{const answers=diag.items.map(i=>
  async function post(path,body){const r=await apiFetch(path,{method:'POST',signal:AbortSignal.timeout(60000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});const v=await r.json().catch(()=>({}));if(!r.ok){const e=Error(v.error||'保存未成功');e.status=r.status;e.code=v.code;throw e}return v}
  function slot(r,childId){return childId?`<div class="topic-diagnosis" data-topic-diagnosis="${esc(r.id)}" data-topic-child="${esc(childId)}"><button type="button" data-topic-open>知识点诊断</button></div>`:''}
  // 面板按“孩子:原错题”分开保存，切换孩子不串状态。
- async function open(box){const id=box.dataset.topicChild+':'+box.dataset.topicDiagnosis;const p=panels[id]??={child_id:box.dataset.topicChild,record_id:Number(box.dataset.topicDiagnosis),pending:null,search:null,message:'',draft:{},keys:{}};p.box=box;p.message=p.pending?p.message:'正在读取…';draw(p);await load(p);draw(p)}
+ async function open(box){const id=box.dataset.topicChild+':'+box.dataset.topicDiagnosis;const p=panels[id]??={child_id:box.dataset.topicChild,record_id:Number(box.dataset.topicDiagnosis),pending:null,search:null,message:'',draft:{},keys:{}};p.box=box;
+  // 每次打开（含同一页面里关掉再开的暖重开）都只读：不沿用上次的显式继续/自动出题状态；回执不明的请求仍在p.pending，可原样重试。
+  p.live=null;p.autoShow=null;p.resume=false;p.message=p.pending?p.message:'正在读取…';draw(p);await load(p);draw(p)}
  async function apply(p,v){p.state=v;if(!v.graph){p.graph=null;p.raw=null;p.target='';return}if(p.target!==v.graph.target||!p.graph){p.E=await engine();p.raw=v.graph;p.graph=p.E.buildGraph(v.graph.topics,v.graph.dependencies,v.graph.questions);p.target=v.graph.target}}
  async function load(p){try{await apply(p,await post('/api/topic/state',{child_id:p.child_id,record_id:p.record_id}));if(p.message==='正在读取…')p.message=''}catch(e){p.message=e.message}}
  // 每个写操作都回完整状态；万一缺字段就整体重读，不拿半截回执替换面板。失败或丢回执：保留同一请求体，
