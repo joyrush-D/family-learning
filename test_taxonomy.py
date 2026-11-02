@@ -293,6 +293,35 @@ class OriginalQuestionSeenTest(unittest.TestCase):
             for _ in range(2): ft.retry(A, dict(base, diagnosis_id=did, qid='cnm_p125_q3', answer='4.3', verdict='correct', request_id='p4origretry0000001'))
         self.assertEqual(self.count("SELECT count(*) FROM topic_retries WHERE qid='cnm_p125_q3' AND outcome='not_new'"), 1)
         self.assertEqual(self.count('SELECT count(*) FROM topic_retries'), 1)
+
+    def test_old_saved_original_as_new_reads_as_not_new_everywhere_and_a_real_first_new_stays_current(self):
+        """Root's CONT6 case: before the guard an old store saved the original q3 as independent_correct with its own 复测 record
+        (which itself contains the q3 prompt). Every read-only consumer now projects it as not new, as saved history; the same
+        kind of row on a question the original never showed (q2) stays current. Reads write nothing; rows stay exactly as saved."""
+        A, base = self.app, dict(child_id='child-1', record_id=1)
+        ft.link_record(A, dict(base, topic_id='cnm_p125', state='confirmed', request_id='p4origlink00000002'))
+        did = ft.start(A, dict(base, topic_id='cnm_p125', request_id='p4origstart0000002'))['diagnoses'][0]['id']
+        pack = ft.load_pack(); topic = pack['by_id']['cnm_p125']
+        with A.connect() as c:
+            basis = ft.record_hash(ft.wrong_record(A, c, 'child-1', 1)); c.execute('ALTER TABLE records ADD COLUMN followup_kind TEXT')
+            for n, qid in ((7, 'cnm_p125_q3'), (8, 'cnm_p125_q2')):
+                q = ft.question(pack, qid); ans = '4.3元' if qid == 'cnm_p125_q3' else str(q.get('answer') or '')  # each its own correct answer
+                # the old store's own 复测 record text (it contains the prompt: not prior exposure)
+                c.execute("INSERT INTO records(id,child,day,subject,title,note,source,attachments,created,related_record_id,followup_kind) VALUES(?,'示例甲','2026-11-03','数学','复测',?,?,'[]','2026-11-03T11:00:00+08:00',1,'复测')",
+                          (n, ft._retry_note(q, topic, ans, 'correct', True), ft.RETRY_SOURCE))
+                c.execute("INSERT INTO topic_retries(diagnosis_id,child_id,record_id,record_hash,topic_id,qid,answer,taxonomy_verdict,deeptutor,outcome,followup_record_id,request_id,created_at) "
+                          "VALUES(?,'child-1','1',?,'cnm_p125',?,?,'correct','{\"is_correct\": true}','independent_correct',?,?,2)", (did, basis, qid, ans, n, 'p4oldsaved%016d' % n))
+            raw = [tuple(r) for t in ('records', 'topic_retries') for r in c.execute('SELECT * FROM %s ORDER BY id' % t)]
+        st = ft.state(A, base)
+        shown = {r['qid']: (r['outcome'], r.get('stored_outcome'), r.get('evidence_note', '')) for r in st['diagnoses'][0]['retries']}
+        self.assertEqual(shown['cnm_p125_q3'][:2], ('not_new', 'independent_correct')); self.assertIn('原题', shown['cnm_p125_q3'][2])
+        self.assertEqual(shown['cnm_p125_q2'], ('independent_correct', None, ''))  # a genuine first new attempt stays current
+        with A.connect() as c:
+            recs = [dict(r) for r in c.execute('SELECT * FROM records')]
+            views = ft.retry_views(c, recs, {'示例甲': 'child-1'})
+            self.assertEqual([tuple(r) for t in ('records', 'topic_retries') for r in c.execute('SELECT * FROM %s ORDER BY id' % t)], raw)
+        self.assertEqual((views[7]['state'], views[7]['review']), ('history', False)); self.assertIn('原题', views[7]['next'])
+        self.assertEqual(views[8]['state'], 'current')
         with A.connect() as c:
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')], raw)  # raw original/correction untouched
             q3 = ft.question(ft.load_pack(), 'cnm_p125_q3')
