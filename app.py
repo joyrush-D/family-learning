@@ -688,9 +688,9 @@ def learning_view(c,child,ts):
             lines.append(['知识点诊断',name+' · '+when+' · 答了'+str(b['answered'])+'题'+('，其中'+str(b['helped'])+'题看过说明' if b['helped'] else '')])
             for a in b['retries']:
                 lines.append(['新题再试',('当时结果 · ' if a.get('stored_outcome') else '')+_epoch_day(a['created_at'])+' · '+RETRY_WORDS.get(a.get('stored_outcome') or a['outcome'],'结果未写明')
-                              +(' · 孩子原答 '+str(a['answer'])[:80] if a['answer'] else '')+(' · 现在待核：'+a['evidence_note'] if a.get('stored_outcome') else '')])  # saved grade as 当时结果, state 现在待核
+                              +(' · 孩子原答 '+str(a['answer'])[:80] if a['answer'] else '')+((' · 现在：' if a['outcome']=='not_new' else ' · 现在待核：')+a['evidence_note'] if a.get('stored_outcome') else '')])  # saved grade as 当时结果, state 现在待核 / 现在：原题
                 if a['outcome'] in ('independent_correct','independent_wrong'): last=a['outcome']
-                elif a.get('stored_outcome'): last='pending'
+                elif a.get('stored_outcome'): last='seen' if a['outcome']=='not_new' else 'pending'
         # A topic the parent linked and has not diagnosed: its saved name and date, linked/pending, never a clue or mastery.
         for l in record_topic_links(c,r,child['id'],tables,diagnosed):
             name,known=topic_name(l['topic_id']) if l['pack_sha']==family_taxonomy.TAXONOMY_SHA else (l['topic_id'],False);when=_epoch_day(l['created_at'])
@@ -701,6 +701,7 @@ def learning_view(c,child,ts):
         nxt=('一次答对还不等于掌握；之后再独立做一道没见过的同类题。' if last=='independent_correct' else
              '这题还没独立做对；回原错题看说明，再另试一道新题。' if last=='independent_wrong' else
              '这次新题再试的当时结果现在待核；核对前不算当前进展，一次结果也不等于掌握。' if last=='pending' else
+             '这次再试的是原错题里出现过的原题，不算独立新题；之后再独立做一道没见过的同类题。' if last=='seen' else
              '已有知识点线索，还没有独立再试。' if current else
              '已关联知识点，待诊断；关联不等于掌握。' if linked else
              '原错题已更正；需要时按更正后的错题重新诊断。' if topics else
@@ -750,8 +751,9 @@ def record_topic_basis(c,r,child_id,tables):
         answered,helped=c.execute("SELECT COUNT(*),COALESCE(SUM(help!=''),0) FROM topic_diagnosis_items WHERE diagnosis_id=? AND kind='answer'",(d['id'],)).fetchone() if 'topic_diagnosis_items' in tables else (0,0)
         retries=[dict(x) for x in c.execute('SELECT outcome,answer,created_at,qid,topic_id,taxonomy_verdict,deeptutor FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? ORDER BY id',
                                              (d['id'],child_id,str(r['id']),now))] if current and 'topic_retries' in tables else []
+        prior=family_taxonomy.prior_original(c,dict(r)) if retries else None  # current basis: the original then was this version
         for x in retries:  # the one read-only evidence rule of the panel and list (family_taxonomy.evidence_view); the saved row is unchanged
-            shown,note=family_taxonomy.evidence_view(x,pack if d['pack_sha']==family_taxonomy.TAXONOMY_SHA else None)
+            shown,note=family_taxonomy.evidence_view(x,pack if d['pack_sha']==family_taxonomy.TAXONOMY_SHA else None,prior)
             if shown!=x['outcome']: x.update(stored_outcome=x['outcome'],outcome=shown,evidence_note=note)
         out.append(dict(topic_id=d['topic_id'],record_hash=d['record_hash'],current=current,created_at=d['created_at'],answered=answered,helped=helped,retries=retries))
     return out

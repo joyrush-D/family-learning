@@ -492,8 +492,9 @@ def state(app, obj, root=None):
                 if note: i.update(stored_verdict=i['verdict'], verdict='manual', replay_result='skip', evidence_note=note)
             retries = [dict(r, deeptutor=json.loads(r['deeptutor'])) for r in c.execute(
                 'SELECT id,topic_id,qid,answer,taxonomy_verdict,deeptutor,outcome,followup_record_id,created_at FROM topic_retries WHERE diagnosis_id=? ORDER BY id', (d['id'],))]
+            prior = prior_original(c, record) if retries and d['record_hash'] == now else None
             for r in retries:  # read-only overlay; the saved outcome stays in stored_outcome and in the row
-                shown, note = evidence_view(r, pack if d['pack_sha'] == TAXONOMY_SHA else None)
+                shown, note = evidence_view(r, pack if d['pack_sha'] == TAXONOMY_SHA else None, prior)
                 if note: r.update(stored_outcome=r['outcome'], outcome=shown, evidence_note=note)
             shown, offers = [], []
             for qid, mode in (c.execute('SELECT qid,mode FROM topic_exposures WHERE diagnosis_id=? ORDER BY id', (d['id'],)) if 'topic_exposures' in have else ()):
@@ -723,7 +724,24 @@ def item_doubt(item, pack):
     return verdict_doubt(q, item.get('answer'), item['verdict']) if q is not None and q.get('topicId') == item.get('topic_id') else ''
 
 
-def evidence_view(row, pack):
+ORIGINAL_SEEN = '这道题的完整题面在原错题里已经出现过（是原题），不是独立新题；当时保存的结果只作历史，不算当前独立证据。'
+
+
+def prior_original(c, record):
+    """一道原错题在它某次新题再试保存时已经给孩子看过的文字，只用于依据仍是现在这一版的再试（record_hash 相同，原错题那时就是这一版）：
+    现在的标题/题面，以及它同一孩子的旧版（revisions）。不读关联的订正/复测记录：再试自己生成的复测记录里本来就有这道题，
+    不能当成此前见过。只读，不建表。"""
+    texts = [(record.get('title') or '') + '\n' + (record.get('note') or '')]
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revisions'").fetchone():
+        for (prev,) in c.execute('SELECT previous FROM revisions WHERE record_id=? ORDER BY id', (record['id'],)):
+            try: old = json.loads(prev or '{}')
+            except ValueError: continue
+            if isinstance(old, dict) and old.get('child') == record.get('child'):
+                texts.append((old.get('title') or '') + '\n' + (old.get('note') or ''))
+    return [_prompt_chars(t) for t in texts]
+
+
+def evidence_view(row, pack, original=None):
     """Read only: (outcome, note) one saved new-question attempt counts as now; the panel, the lists and the progress basis all
     read this one rule. A saved independent pass or miss stays current only while its question is readable from the pinned pack
     (the caller passes the pack only for the diagnosis's own pack version), both saved verdicts read and agree with it, and
@@ -742,6 +760,10 @@ def evidence_view(row, pack):
     readable = q is not None and q.get('topicId') == row.get('topic_id')
     if outcome == 'parent_check': return outcome, (verdict_doubt(q, row.get('answer'), verdict) if agreed and readable else '')
     if not readable: return 'parent_check', '知识包现在读不到这道题或版本不同，当时的结果核对不了。'
+    # original (prior_original): the original wrong record already showed this question's complete prompt before the attempt.
+    if original:
+        p = _prompt_chars(q.get('prompt', ''))[0].strip('\n')
+        if len(p) >= 8 and any(_prompt_at(p, t) for t in original): return 'not_new', ORIGINAL_SEEN
     if not agreed or (verdict == 'correct') != (outcome == 'independent_correct'): return 'parent_check', '这条记录保存的两项核对结果读不全或不一致，当时的结果核对不了。'
     note = verdict_doubt(q, row.get('answer'), verdict)
     return ('parent_check', note) if note else (outcome, '')
@@ -790,10 +812,11 @@ def retry_views(conn, records, profile_ids, root=None):
         known = bool(q and topic and d and d['pack_sha'] == TAXONOMY_SHA and wrong is not None and q.get('topicId') == a['topic_id']
                      and a['taxonomy_verdict'] in ('correct', 'wrong') and isinstance(dt.get('is_correct'), bool))
         same = known and (rec.get('note') or '').strip() == _retry_note(q, topic, a['answer'], a['taxonomy_verdict'], dt['is_correct']).strip()
-        doubt = evidence_view(dict(a), pack)[1] if known and d['pack_sha'] == TAXONOMY_SHA else ''
         # Only a changed original or a recorded void proves a correction; an unreadable original proves neither.
         voided = 'topic_basis_voids' in tables and conn.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?', (a['diagnosis_id'],)).fetchone() is not None
         stale = voided or (wrong is not None and a['record_hash'] != record_hash({k: wrong[k] for k in wrong.keys()} | dict(child_id=child_id)))
+        shown, doubt = evidence_view(dict(a), pack, prior_original(conn, dict(wrong)) if wrong is not None and not stale else None) if known and d['pack_sha'] == TAXONOMY_SHA else (a['outcome'], '')
+        seen = shown == 'not_new'  # the original already showed it: history, not a parent check
         missing = wrong is None and not stale
         lines = ([['题目', f"{q.get('prompt', '')}（{REVIEW_STATUS}）"]] if known else []) + [['孩子原答', a['answer']],
                  ['当时结果' if stale or wrong is None or doubt else '本次结果', ('对' if correct else '错') + ' · ' + (rec.get('assistance') or '独立作答') + ' · 题库核对与复核一致']]
@@ -807,9 +830,10 @@ def retry_views(conn, records, profile_ids, root=None):
         trace = ' · '.join(x for x in [f"题号{a['qid']}", a['topic_id'], f"知识包{(d['pack_sha'] if d else '')[:7] or '未知'}",
                                        f"判定组件{str(dt.get('deeptutor_sha') or '')[:7]}" if dt.get('deeptutor_sha') else '',
                                        f"题库核对{verdicts.get(a['taxonomy_verdict'], '未知')}、复核{'对' if dt.get('is_correct') is True else '错' if dt.get('is_correct') is False else '未知'}"] if x)
-        out[rid] = dict(state='history' if stale or doubt else 'current' if same else 'unclear' if not known else 'edited', lines=lines, review=bool(doubt and not stale),
+        out[rid] = dict(state='history' if stale or doubt else 'current' if same else 'unclear' if not known else 'edited', lines=lines, review=bool(doubt and not stale and not seen),
                         status=' '.join(status), show_note=not same, wrong_id=a['record_id'] if wrong is not None else None, trace=trace,
                         next='需要时按更正后的错题在原错题卡重新诊断。' if stale else
+                        '这次再试的是原错题里出现过的原题，不算独立新题；之后再独立做一道没见过的同类题。' if seen else
                         '请家长对照题目和孩子原答核对；核对前这次只是当时结果，现在待核，不算当前进展。' if doubt else
                         '原错题恢复可读前，这次结果只按当时保存的原文看待，不算当前进展。' if missing else
                         '知识包或这道题现在读不到，这次只是当时结果，现在待核，不算当前进展。' if not known else
