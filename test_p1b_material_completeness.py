@@ -192,11 +192,45 @@ class OriginalRoleChainTests(_ScopeBase):
         self.assertEqual(agenda(),first)
 
 
+import test_school_pdf_evidence as pdf_evidence
+
+
+class PdfOriginalRoleTests(pdf_evidence.SchoolPdfEvidenceTests):
+    """A read PDF original's saved requirement reaches the day view with its own completion and handback days (fictional)."""
+
+    def test_pdf_requirement_roles_reach_the_day_view_and_stay_on_reopen(self):
+        keys=self.native_notice('p1b-pdf-roles');day=self.now.date();after=day+dt.timedelta(days=1)
+        math='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤，%d月%d日早上交。'%(day.month,day.day,after.month,after.day)
+        chinese='语文：%d月%d日早读前背诵第3课第1段。'%(after.month,after.day)
+        self.seed_groups(keys=keys,note='题面背景',uncertainties=[],requirements=[math,chinese])
+        ident=self.candidate(keys=keys,ident='p1b-pdf-roles')
+        def mapping(messages):
+            context=json.loads(messages[-1]['content'])
+            parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
+            return {'actions':[dict(pdf_evidence.draft(goal=math),due=day.isoformat(),existing_item_id=ident,basis=[dict(part=parts[math],text=math)]),
+                               dict(pdf_evidence.draft(goal=chinese),due=after.isoformat(),existing_item_id='',basis=[dict(part=parts[chinese],text=chinese)])]}
+        self.refresh(mapping)
+        row=self.item(ident)
+        self.assertEqual(row['due'],after.isoformat(),row)  # its own handback day, though the reply named the completion day
+        with self.store._db() as c:
+            saved=agent.school_original_requirements(self.store,c,dict(row))
+        self.assertEqual([r['text'] for r in saved],[math])
+        def agendas():
+            return {('math' if '练习册' in t['title']+t.get('action','') else 'chinese'):t['agenda'] for t in self.app.tasks()
+                    if '练习册' in t['title']+t.get('action','') or '背诵' in t['title']+t.get('action','')}
+        first=agendas()
+        self.assertEqual((first['math'].get('complete_on'),first['math']['due_on']),(day.isoformat(),after.isoformat()),first['math'])
+        self.assertEqual(first['chinese']['due_on'],after.isoformat(),first['chinese'])
+        self.assertNotEqual(first['chinese'].get('complete_on'),day.isoformat())  # never borrows the math item's evening
+        self.assertEqual(agendas(),first)  # reopening reads the same facts, no write
+
+
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
     suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
     suite.addTest(SameHomeworkFlowTests('test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen'))
+    suite.addTest(PdfOriginalRoleTests('test_pdf_requirement_roles_reach_the_day_view_and_stay_on_reopen'))
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
         suite.addTest(OriginalRoleChainTests(name))
     return suite
