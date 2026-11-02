@@ -573,6 +573,8 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
 
     def _old(self):
         import family_pdf_material as pdfm
+        with self.store._db() as c:  # setUp's own notice links the same PDF unread; only this notice is under test
+            c.execute('DELETE FROM agent_message_attachments WHERE source_id=? AND message_id=?',(self.keys['source_id'],self.keys['message_id']))
         self.keys=keys=self.native_notice('p1b-pdf-d');self.day=day=self.now.date()
         self.lines=lines=dict(数学='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤。'%(day.month,day.day),
                              语文='语文：%d月%d日晚朗读第3课课文三遍。'%(day.month,day.day),英语='英语：%d月%d日晚完成练习纸第二部分。'%(day.month,day.day))
