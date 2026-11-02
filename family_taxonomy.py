@@ -599,7 +599,8 @@ def evidence_view(row, pack):
     try: dt = json.loads(dt or '{}') if isinstance(dt, str) else dt
     except ValueError: dt = None
     agreed = isinstance(dt, dict) and dt.get('is_correct') is True and row.get('taxonomy_verdict') == 'correct'
-    q = question(pack, row.get('qid')) if pack else None
+    try: q = question(pack, row.get('qid')) if pack else None
+    except (KeyError, TypeError, AttributeError): q = None  # a pack this cannot index reads as an unreadable question: pending
     readable = q is not None and q.get('topicId') == row.get('topic_id')
     if outcome == 'parent_check': return outcome, (numeric_evidence(q, row.get('answer'))[1] if agreed and readable else '')
     if not readable: return 'parent_check', '当时结果；知识包现在读不到这道题或版本不同，核对不了，待核，不算当前进展。'
