@@ -63,12 +63,11 @@ class OwnSubmissionStepSpanTests(unittest.TestCase):
         self.assertFalse(agent._school_own_step_quote(quote,self.text,'末轮录音上传作业栏目',['末轮录音']))
 
 
-class SameHomeworkFlowTests(unittest.TestCase):
-    """select -> save -> refresh -> manual task -> repeat, with the fictional store test_agent already builds."""
-    import test_agent as _t
-    setUp=_t.AgentTests.setUp
-    tearDown=getattr(_t.AgentTests,'tearDown',unittest.TestCase.tearDown)
-    payload=_t.AgentTests.payload
+import test_agent
+
+
+class SameHomeworkFlowTests(test_agent.AgentTests):
+    """select -> save -> refresh -> manual task -> repeat, on the fictional store test_agent already builds (only this test runs here)."""
 
     def test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen(self):
         from test_agent import school_proposal
@@ -96,6 +95,13 @@ class SameHomeworkFlowTests(unittest.TestCase):
             actions=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
         self.assertEqual(len(actions),1)
         for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,actions[0])
+
+
+def load_tests(loader,tests,pattern):
+    suite=unittest.TestSuite()
+    for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
+    suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
+    return suite
 
 
 if __name__=='__main__':

@@ -1056,7 +1056,7 @@ def bound_change_selection_tier_contract():
         body=json.loads(send(bound,'family_light_connection_test',responses=responses)[0])
         assert (body['model'],effort(body),tokens(body))==('fictional-light','none',3000)
         body=json.loads(send(bound,'family_school_task',responses=responses)[0])
-        assert (body['model'],effort(body),tokens(body))==('fictional-light','low',6000)
+        assert (body['model'],effort(body),tokens(body))==('fictional-light','none',6000)  # school drafting's own light tier
         for task in ('family_learning_draft','family_connection_test'):
             body=json.loads(send(bound,task,responses=responses)[0])
             assert (body['model'],effort(body))==('fictional-main','low')
