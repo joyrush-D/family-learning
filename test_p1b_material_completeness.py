@@ -412,6 +412,19 @@ class ScopedDoubtImageChainTests(_ScopeBase):
                 self._later((2,3))
                 self.assertEqual((self.reads.call_count,self._receipt_row()[0]),(1,old))  # no re-read; the old receipt stays
 
+    def test_a_decision_while_the_supplement_reads_keeps_the_old_receipt(self):
+        found=self._scoped(None);self._as_saved_before_scopes();old,job=self._receipt_row()
+        receipt=scope.swap(self._receipt(copy.deepcopy(scope.FIX),self.SCOPES)['call_1'],self.upload)
+        def read(*args,**kwargs):  # the parent dismisses one item while the model reads
+            with self.store._db() as c:c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(found[R_DICT]['id'],))
+            return copy.deepcopy(receipt)
+        self.reads.side_effect=read
+        self._later((2,))
+        new,job2=self._receipt_row()
+        self.assertEqual((self.reads.call_count,new),(2,old))  # read once; nothing of it is saved
+        self.assertEqual(job2['attempts'],job['attempts']+1)  # the spent attempt stays on the job's own budget
+        self._later((3,4));self.assertEqual((self.reads.call_count,self._receipt_row()[0]),(2,old))  # decided: never again
+
     def test_a_false_resource_or_unverifiable_pointer_never_frees_a_line(self):
         found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='resource')])
         self.assertEqual([found[k]['state'] for k in (ROLE_OLD,R_DICT,R_SHEET)],['accepted','accepted','pending'])
@@ -554,7 +567,8 @@ def load_tests(loader,tests,pattern):
     for name in ('test_each_doubt_holds_only_the_requirement_it_names','test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide',
                  'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide',
                  'test_one_line_with_a_reading_and_a_resource_doubt_stays_review_in_its_own_words',
-                 'test_an_old_undecided_receipt_is_read_once_more_for_its_scopes','test_a_decided_item_or_an_exhausted_job_keeps_the_old_receipt'):
+                 'test_an_old_undecided_receipt_is_read_once_more_for_its_scopes','test_a_decided_item_or_an_exhausted_job_keeps_the_old_receipt',
+                 'test_a_decision_while_the_supplement_reads_keeps_the_old_receipt'):
         suite.addTest(ScopedDoubtImageChainTests(name))
     for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
         suite.addTest(ScopedDoubtPdfTests(name))
