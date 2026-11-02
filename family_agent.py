@@ -7570,6 +7570,7 @@ def _school_resource_time_free(text):
     kept=[]
     for part in re.split(r'(?<=[，,。；;\n])',text or ''):
         if (re.search(_SCHOOL_RESOURCE_TIME,part) and not _school_clause_roles(part)&{'handback','check','finish'}
+                and not re.search(r'交回|交给|交到|上交|提交|签字|签名|填好|填写|完成|检查',part)  # its own step keeps the day
                 and re.search(r'\d|[今明后]天|周[一二三四五六日天]|星期',part)):continue
         kept.append(part)
     return ''.join(kept)
