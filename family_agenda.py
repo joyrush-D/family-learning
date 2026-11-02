@@ -112,7 +112,7 @@ def _action_deadlines(text,published):
     # (把校内参观活动回执签字交回) is one object however long, so only that noun counts toward the window below; a
     # state, another day or a clause word inside the name (把已取消的活动回执), or a day that is itself written inside a
     # 《》 title (资料标题为《明天把…回执交回指南》), leaves the text as it was.
-    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|家长|孩子|学生|请)[ \t]*){0,2}把)'
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
                 r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z0-9])*?'
                 r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+m[2],text or '')
     action=r'(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
@@ -122,7 +122,7 @@ def _action_deadlines(text,published):
     # else before the action leaves the text as it was.
     locator=r'(?:[、和]?的?第?[0-9一二三四五六七八九十百]+(?:[-–~～至到]第?[0-9一二三四五六七八九十百]+)?(?:页|题|课|单元|章|节))'
     plain=r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z])'
-    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|家长|孩子|学生|请)[ \t]*){0,2}把)'
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
                 r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》(?:'+plain+r'*?'+locator+r'+)?'
                 r'|'+plain+r'+?'+locator+r'+)'
                 r'(?='+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)

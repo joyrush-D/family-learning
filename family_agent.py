@@ -7539,13 +7539,16 @@ _SCHOOL_BRACKET_DAY=(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)
                      r'\s*(早上|早晨|上午|中午|下午|傍晚|晚上)?\s*[）)]')
 
 
+_SCHOOL_BRACKET_WEEKDAY=(r'((?:下|本|这)?(?:周|星期|礼拜)([一二三四五六日天]))\s*[（(]\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]\s*[）)]')
+
+
 def _school_bracket_restated(text,published,keep=False):
     """The text with each relative day's own bracketed calendar day (今晚（2026年11月8日）、明早（11月9日早上）) read once, as the
     relative word alone, when both name the same day of the sending day; None when any bracket names another day or another
     part of the day (明天（11月10日）交 sent on 11月8日), or the sending day is unknown, so the existing date protections keep it."""
     import datetime as _dt
     pattern=_SCHOOL_BRACKET_DAY  # with keep, a bracket naming another day stays in the words and the rest is still read once
-    if not re.search(pattern,text):return text
+    if not re.search(pattern,text) and not re.search(_SCHOOL_BRACKET_WEEKDAY,text):return text
     try:sent=_dt.date.fromisoformat(published or '')
     except ValueError:return text if keep else None
     conflict=[]
@@ -7558,7 +7561,20 @@ def _school_bracket_restated(text,published,keep=False):
         if day not in named or m[1].endswith('早') and part not in ('','早上','早晨','上午') or m[1].endswith('晚') and part not in ('','晚上','傍晚'):
             conflict.append(m[0]);return m[0]
         return m[1]
-    restated=re.sub(pattern,one,text)
+    def week(m):
+        # 周三（11月11日）、下周一（11月9日）: the bracket restates the weekday only as that weekday counted from the sending day
+        # (bare: the next one within six days; 本/这周: the sending day's own Monday week from that day; 下周: the next Monday
+        # week), and is then read as the bracketed day alone. Any other day, or no single such day, is a conflict.
+        want={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6}[m[2]];monday=sent-_dt.timedelta(days=sent.weekday())
+        lo,hi=((monday+_dt.timedelta(days=7),monday+_dt.timedelta(days=13)) if m[1].startswith('下') else
+               (sent,monday+_dt.timedelta(days=6)) if m[1][0] in '本这' else (sent,sent+_dt.timedelta(days=6)))
+        named=[]
+        for year in ([int(m[3])] if m[3] else [sent.year,sent.year+1]):
+            try:named.append(_dt.date(year,int(m[4]),int(m[5])))
+            except ValueError:pass
+        if len([d for d in named if d.weekday()==want and lo<=d<=hi])!=1:conflict.append(m[0]);return m[0]
+        return (m[3]+'年' if m[3] else '')+str(int(m[4]))+'月'+str(int(m[5]))+'日'
+    restated=re.sub(_SCHOOL_BRACKET_WEEKDAY,week,re.sub(pattern,one,text))
     return restated if keep or not conflict else None
 
 
