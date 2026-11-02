@@ -459,12 +459,16 @@ function calendarOpen(event=null,preset={}){
 // A family review edits only its own date, time and status in this same calendar form. Owner, title, kind, place, note and repeat
 // rows are hidden, not disabled: their original values still go out unchanged, so the id/version/link and same-request retry hold.
 // The review's child, original wrong record, topic and task are shown read-only. Any other event gets the whole form back.
+let calendarReviewRows=null;
 function calendarReviewMode(e){
- const f=$('#calendarForm'),rows=['title','category','location','note','repeat'].map(n=>f.elements[n]?.closest('label'))
-  .concat([f.querySelector('.calendar-children-field'),$('#calendarUntil'),$('#calendarWeekdays'),$('#calendarMonthdays'),$('#calendarExtraTimes'),$('#calendarRepeatNote')]).filter(Boolean);
- document.getElementById?.('calendarReviewContext')?.remove();f.classList.toggle('calendar-review-form',!!e);
- for(const row of rows)row.hidden=!!e;
+ const f=$('#calendarForm');
+ // Undo only what review mode itself set (an ordinary event on a form never put in review mode is left exactly as before).
+ if(calendarReviewRows){for(const row of calendarReviewRows)row.style.display='';calendarReviewRows=null;document.getElementById?.('calendarReviewContext')?.remove();f.classList.toggle('calendar-review-form',false)}
  if(!e)return;
+ calendarReviewRows=['title','category','location','note','repeat'].map(n=>f.elements[n]?.closest('label'))
+  .concat([f.querySelector('.calendar-children-field'),$('#calendarUntil'),$('#calendarWeekdays'),$('#calendarMonthdays'),$('#calendarExtraTimes'),$('#calendarRepeatNote')]).filter(Boolean);
+ for(const row of calendarReviewRows)row.style.display='none';  // inline: the rows' own display rules would override [hidden]
+ f.classList.toggle('calendar-review-form',true);
  const r=e.review,task=r.task_id&&data.tasks.find(t=>t.id===r.task_id),topic=/^知识点：(.+)$/m.exec(e.note||'')?.[1];
  const p=document.createElement('p');p.id='calendarReviewContext';p.className='small calendar-review-context';
  p.innerHTML=`<b>家庭复习</b> · ${esc(calendarNames(e.child_ids))} · 原错题：${esc(r.record_title||'标题读不到')} · 知识点：${esc(topic||'未确认')} · ${task?'原作业：'+esc(task.title):'独立错题，没有原作业'}。这里只改这次复习的日期、时间和状态；孩子与原错题关联不变，完成只记这条复习，不改老师作业。`;
