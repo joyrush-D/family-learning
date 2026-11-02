@@ -615,7 +615,8 @@ def day_schedule(cal,child_id,day,rows):
         entry=dict(id=e['id'],title=e['title'],start_time=e['start_time'],end_time=e['end_time'],location=e['location'],note=str(e['note'])[:600],
                    status=e['status'],source=e['source'],repeat=e['repeat']!='none' or bool(e.get('occurrence')),shared=len(e['child_ids'])>1,task_id=e.get('task_id') or '')
         # A family review stays its own plan: its original task is provenance in review, never this task_id join.
-        if e.get('review'): entry['review']=e['review']
+        # Its version too, so a card edits exactly the snapshot it showed (an ordinary plan's entry is unchanged).
+        if e.get('review'): entry.update(review=e['review'],version=e['version'])
         row=listed.get(entry['task_id'])
         if row is not None:
             row.setdefault('times',[]).append(dict(id=e['id'],title=e['title'],start_time=e['start_time'],end_time=e['end_time']));continue

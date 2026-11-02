@@ -435,6 +435,8 @@ class FamilyReviewLinkTests(unittest.TestCase):
         self.assertEqual(self.save(ev)[1]['version'],1)  # the same request after a lost reply reads back the saved row
         moved={k:v for k,v in ev.items() if k!='review'}|dict(version=1,day='2026-10-31')  # an editor that does not send the link
         self.assertEqual(self.save(moved)[1]['review'],first['review']); self.assertEqual(self.save(moved)[1]['version'],2)
+        cal,_=app.schedule_read('2026-10-31','2026-10-31')  # the day entry carries the version a card shows and must save against
+        self.assertEqual([(p['id'],p.get('version'),p['review']['record_id']) for p in app.day_schedule(cal,'child-1','2026-10-31',[])['plans']],[('a'*32,2,w)])
         self.assertEqual(self.save(dict(moved,version=2,review=dict(ev['review'],topic_id='x'))),(409,'calendar_review_conflict'))
         self.assertEqual(self.save(dict(moved,version=2,child_ids=['child-1','child-2'])),(409,'calendar_review_owner'))
         self.assertEqual(self.save(dict(moved,version=2,status='completed'))[1]['status'],'completed')
@@ -443,6 +445,9 @@ class FamilyReviewLinkTests(unittest.TestCase):
         self.assertEqual([(r[0],r[1],r[2]=='{}') for r in self.rows()],[('a'*32,3,False),('e'*32,1,True)])
         self.assertEqual([r[3] for r in self.rows() if r[0]=='e'*32],[digest])  # a request without a review hashes exactly as before
         self.assertEqual(self.save(plain)[1]['version'],1)
+        cal,_=app.schedule_read('2026-10-30','2026-10-30')  # an ordinary plan's day entry is unchanged: no version or review key
+        self.assertEqual([sorted(p) for p in app.day_schedule(cal,'child-1','2026-10-30',[])['plans'] if p['id']=='e'*32],
+                         [sorted(['id','title','start_time','end_time','location','note','status','source','repeat','shared','task_id'])])
         self.assertEqual([e['review']['basis_state'] for e in app.calendar_snapshot('2026-10-31','2026-10-31')['events'] if e.get('review')],['current'])
 
 
