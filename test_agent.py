@@ -457,7 +457,9 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
                                 school_goals=[],as_of=self.now.date().isoformat())
-        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
+        # Proven the reading's own submission step: ready to join it once accepted, never a second task or a pending card.
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'])
+        self.assertEqual(items[1]['plan']['school_task']['submission_of']['title'],items[0]['title'])
         self.assertEqual(items[0]['body'],goal)
         self.assertEqual(items[0]['plan']['school_task']['submission'],'录音上传班级作业区')
         self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
@@ -471,7 +473,8 @@ class AgentTests(unittest.TestCase):
         with self.app.connect() as c:
             task,=c.execute('SELECT child,title,action,due,original_status FROM manual_tasks').fetchall()
             self.assertEqual(tuple(task),('示例甲','英语：朗读第5课',goal,due,'待跟进'))
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(DISTINCT task_id) FROM agent_items WHERE state="accepted"').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
 
@@ -536,8 +539,10 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
                                 school_goals=[],as_of=self.now.date().isoformat())
-        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
-        self.assertIn('避免重复',items[1]['plan']['school_task']['reason'])
+        # Proven the reading's own submission step: ready to join it once accepted, never a second task or a pending card.
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'])
+        self.assertIn('已含这一提交步骤',items[1]['plan']['school_task']['reason'])
+        self.assertEqual(items[1]['plan']['school_task']['submission_of']['title'],items[0]['title'])
         self.assertEqual((items[1]['title'],items[1]['body']),('录音提交',admin_goal))
         self.assertEqual(items[0]['plan']['school_task']['submission'],submission)
         self.assertTrue(all(item['evidence']==[dict(ref=ref,text=text)] for item in items))
@@ -552,8 +557,11 @@ class AgentTests(unittest.TestCase):
             task,=c.execute('SELECT child,title,action,due,original_status,source FROM manual_tasks').fetchall()
             self.assertEqual(tuple(task)[:5],('示例甲','英语：朗读第5课',goal,due,'待跟进'))
             self.assertIn(ref,task['source'])
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],1)
-            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],1)
+            # Both rows accepted on the one task: the step points at the reading (its own evidence kept); nothing pending.
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="accepted"').fetchone()[0],2)
+            self.assertEqual(c.execute('SELECT COUNT(DISTINCT task_id) FROM agent_items WHERE state="accepted"').fetchone()[0],1)
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM agent_items WHERE plan LIKE '%school_duplicate_of%'").fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT COUNT(*) FROM agent_items WHERE state="pending"').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM records').fetchone()[0],0)
             self.assertEqual(c.execute('SELECT COUNT(*) FROM task_updates').fetchone()[0],0)
 

@@ -123,6 +123,39 @@ class SameHomeworkFlowTests(test_agent.AgentTests):
         self.assertEqual((step['task_id'],json.loads(step['plan']).get('school_duplicate_of')),(reading['task_id'],reading['id']))
         self.assertEqual(json.loads(step['evidence']),json.loads(reading['evidence']))
 
+    def test_a_differently_worded_step_summary_still_joins_its_reading(self):
+        from test_agent import school_proposal
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        text='明天完成英语朗读第6课，每轮先听示范再朗读三轮，末轮录音上传作业栏目。'
+        goal='英语朗读第6课，每轮先听示范再朗读三轮，末轮录音上传作业栏目。'
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读第6课',due=due,evidence=[dict(ref=ref)],task_title='英语：朗读第6课',task_goal=goal,
+                                   task_state='ready',task_reason='明确朗读及其提交。',task_purpose='learning',task_submission='末轮录音上传作业栏目'),
+                   school_proposal(title_quote='末轮录音上传作业栏目',due=due,evidence=[dict(ref=ref)],task_title='上传朗读',
+                                   task_goal='把最后一轮朗读的录音传到作业栏目里。',task_state='ready',task_reason='朗读的提交。',task_purpose='admin')]
+        self.assertFalse(agent._school_submission_step(dict(title='上传朗读',goal='把最后一轮朗读的录音传到作业栏目里。'),
+                                                       dict(title='英语：朗读第6课',goal=goal,submission='末轮录音上传作业栏目')))  # summaries differ
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
+                                school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'])
+        self.assertEqual(items[1]['plan']['school_task']['submission_of']['title'],items[0]['title'])
+        key='synthetic-p1b-reworded-step';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved items need no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(1,0))
+        with self.store._db() as c:
+            rows=[dict(r) for r in c.execute('SELECT * FROM agent_items WHERE job_id=?',(key,))]
+            actions=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
+        self.assertEqual(len(actions),1)
+        for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,actions[0])
+        reading=next(r for r in rows if r['title']==items[0]['title']);step=next(r for r in rows if r is not reading)
+        self.assertEqual(sorted(r['state'] for r in rows),['accepted','accepted'])
+        self.assertEqual((step['task_id'],json.loads(step['plan']).get('school_duplicate_of')),(reading['task_id'],reading['id']))
+
     def test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen(self):
         from test_agent import school_proposal
         ref='message:'+self.source['id']+':11';due='2026-02-11'
@@ -663,6 +696,7 @@ def load_tests(loader,tests,pattern):
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
     suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
     suite.addTest(SameHomeworkFlowTests('test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen'))
+    suite.addTest(SameHomeworkFlowTests('test_a_differently_worded_step_summary_still_joins_its_reading'))
     suite.addTest(PdfOriginalRoleTests('test_pdf_requirement_roles_reach_the_day_view_and_stay_on_reopen'))
     suite.addTest(PdfOriginalRoleTests('test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected'))
     suite.addTests(loader.loadTestsFromTestCase(ResourceTimeTests))
