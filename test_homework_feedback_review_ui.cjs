@@ -390,7 +390,7 @@ async function splitPdfFlow(p,host,width){
   assert.equal(await p.locator('#pendingUploads img').count(),1);
   await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'photo feedback saved');
   assert.ok(await (await groveEntry(p,id)).locator('[data-grove-record]').count()>0,'today confirms saved feedback in the same task');
-  assert(await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').isVisible(),'separate question/reference printing is directly visible');
+  {const d=await groveEntry(p,id);for(const intent of ['original','reference'])assert(await d.locator('[data-homework-print="'+id+'"][data-print-intent="'+intent+'"]').isVisible(),'separate question/reference printing is directly visible');}
   const preparation={id:'b'.repeat(32),pdf_sha256:'c'.repeat(64),page_count:1,preview_url:'/api/print/preview/'+'b'.repeat(32)},keysPrint=[];
   await p.route('**/api/print/prepare',r=>r.fulfill({json:{preparation}}));
   await p.route('**/api/print/enqueue',r=>{keysPrint.push(r.request().postDataJSON().idempotency_key);return keysPrint.length===1?r.fulfill({status:503,json:{error:'虚构打印回执丢失'}}):r.fulfill({json:{job:{id:'d'.repeat(32),status:'queued'}}})});
@@ -411,7 +411,7 @@ async function splitPdfFlow(p,host,width){
    await post('api/task/feedback',{task_id:t.id,child:owner,day:state.today,attachments:[upload.id],request_key:'synthetic-print-other-'+width+'-'+otherTasks.length});
    otherTasks.push({task:t,upload});
   }
-  await p.keyboard.press('Escape');await p.reload();await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();
+  await p.keyboard.press('Escape');await p.reload();await (await groveEntry(p,id)).locator('[data-homework-print="'+id+'"][data-print-intent="original"]').click();
   const printForm=p.locator('#homeworkPrintForm');await p.locator('#homeworkPrintDialog[open]').waitFor();
   const options=await printForm.locator('[name=question_source] option').allTextContents();
   assert(options.includes('synthetic-answer.png'),'the original saved answer remains selectable');
@@ -422,13 +422,13 @@ async function splitPdfFlow(p,host,width){
   const originalPrintKey=await printForm.evaluate(f=>f.dataset.requestKey);
   await p.locator('#homeworkPrintDialog [data-close]').click();
   let reads=0;await p.route('**/api/print/homework/materials?*',r=>++reads===1?r.fulfill({status:503,json:{error:'虚构资料读取失败'}}):r.continue());
-  await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await eventually(async()=>/虚构资料读取失败/.test(await p.locator('#toast').innerText()),'read failure stays retryable');
+  await (await groveEntry(p,id)).locator('[data-homework-print="'+id+'"][data-print-intent="original"]').click();await eventually(async()=>/虚构资料读取失败/.test(await p.locator('#toast').innerText()),'read failure stays retryable');
   assert.equal(await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),false,'failed scoped read never falls back to global files');
-  await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();await p.unroute('**/api/print/homework/materials?*');
+  await (await groveEntry(p,id)).locator('[data-homework-print="'+id+'"][data-print-intent="original"]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();await p.unroute('**/api/print/homework/materials?*');
   assert.equal(await printForm.locator('[name=guide_text]').inputValue(),'虚构家长参考：题目和答案分别打印。');assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),originalPrintKey,'read failure preserves the draft and request number');
   await p.locator('#homeworkPrintDialog [data-close]').click();
   await p.evaluate(({task,other})=>{const key='family-homework-print:v1:'+new URL('.',location.href).pathname+':'+task,saved=JSON.parse(sessionStorage.getItem(key));saved.question_source=JSON.stringify({type:'upload',id:other});sessionStorage.setItem(key,JSON.stringify(saved))},{task:id,other:otherTasks[1].upload.id});
-  await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+  await (await groveEntry(p,id)).locator('[data-homework-print="'+id+'"][data-print-intent="original"]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
   assert.match(await p.locator('#homeworkPrintError').innerText(),/原选择有资料现在无法核对/);assert.equal(await printForm.locator('[name=guide_text]').inputValue(),'虚构家长参考：题目和答案分别打印。');
   let paired=0,generated=0;const pairBodies=[];
   await p.route('**/api/print/homework/draft',r=>{generated++;return r.fulfill({status:503,json:{error:'不应调用'}})});
@@ -441,7 +441,7 @@ async function splitPdfFlow(p,host,width){
   assert.equal(await p.locator('#homeworkPrintError').innerText(),'','explicitly reselecting an owned source clears the stale unavailable-source warning');
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'scoped-print-'+width+'.png')})}
   await printForm.locator('[type=submit]').click();await eventually(async()=>/虚构配对回执丢失/.test(await p.locator('#homeworkPrintError').innerText()),'pair failure retained');
-  await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+  await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await (await groveEntry(p,id)).locator('[data-homework-print="'+id+'"][data-print-intent="original"]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
   assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),originalPrintKey,'unknown print receipt survives reopening');
   await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'pair retry saved');assert.deepEqual(pairBodies[1],pairBodies[0]);assert.equal(pairBodies[0].task_id,id);
   await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await openFromGrove(p,id);await p.locator('#taskDialog[open]').waitFor();
@@ -455,7 +455,7 @@ async function splitPdfFlow(p,host,width){
    const originalA=await recoveryUpload('synthetic-recovery-original-A-'+width+'.png'),originalB=await recoveryUpload('synthetic-recovery-original-B-'+width+'.png'),reference=await recoveryUpload('synthetic-recovery-reference-'+width+'.png');
    const recordBody={child,day:state.today,category:'学习进展',title:'虚构待打印原件',source:'事项:'+recoveryTask.id,note:'原件由家长核对',attachments:[originalA.id,reference.id]};
    const ordinary=(await post('api/record',recordBody)).record_id;
-   await p.keyboard.press('Escape');await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+   await p.keyboard.press('Escape');await p.reload();await (await groveEntry(p,recoveryTask.id)).locator('[data-homework-print="'+recoveryTask.id+'"][data-print-intent="original"]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
    await printForm.locator('[name=question_source]').selectOption(JSON.stringify({type:'upload',id:originalA.id}));await printForm.locator('[name=guide_source]').selectOption(JSON.stringify({type:'upload',id:reference.id}));await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
    const recoveryKey=await printForm.evaluate(f=>f.dataset.requestKey),recoveryBodies=[],recoveryStatuses=[];
    let loseQueueReceipt=false;
@@ -463,12 +463,12 @@ async function splitPdfFlow(p,host,width){
    await printForm.locator('[type=submit]').click();await eventually(async()=>/归属|原作业|核对|关联/.test(await p.locator('#homeworkPrintError').innerText())&&await printForm.locator('[type=submit]').isEnabled(),'ownership rejected after preparation');
    assert.deepEqual(recoveryStatuses,[403],'the real current-source guard rejected printing');assert.deepEqual((await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort(),priorPrintIds,'prepared A never entered the print queue');
    await post('api/record',{...recordBody,id:ordinary,note:'家长换成新原件B',attachments:[originalB.id,reference.id]});
-   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await (await groveEntry(p,recoveryTask.id)).locator('[data-homework-print="'+recoveryTask.id+'"][data-print-intent="original"]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
    assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey,'failed prepared-only request survives reopening');
    assert.match(await p.locator('#homeworkPrintError').innerText(),/原选择有资料现在无法核对/);await printForm.locator('[name=question_source]').selectOption(JSON.stringify({type:'upload',id:originalB.id}));await printForm.locator('[name=guide_source]').selectOption(JSON.stringify({type:'upload',id:reference.id}));await printForm.locator('[name=question_confirmed]').check();await printForm.locator('[name=guide_confirmed]').check();
    loseQueueReceipt=true;await printForm.locator('[type=submit]').click();await eventually(async()=>/虚构真实入队后的回执丢失/.test(await p.locator('#homeworkPrintError').innerText()),'new original B prepared and queued by the real backend');
    assert.deepEqual(recoveryStatuses,[403,200]);const realQueued=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.equal(realQueued.filter(j=>!priorPrintIds.includes(j.id)).length,2,'B and reference are separate jobs');
-   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
+   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await (await groveEntry(p,recoveryTask.id)).locator('[data-homework-print="'+recoveryTask.id+'"][data-print-intent="original"]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
    assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey);await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'original queue keys recover a lost receipt');
    const retriedJobs=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.deepEqual(retriedJobs.map(j=>j.id).sort(),realQueued.map(j=>j.id).sort(),'retry never duplicates a submitted part');assert.deepEqual(recoveryBodies[2],recoveryBodies[1]);assert.equal(recoveryBodies[0].request_key,recoveryBodies[1].request_key);
    await p.unroute('**/api/print/homework');await p.locator('nav [data-page=home]').click();await openFromGrove(p,id);await p.locator('#taskDialog[open]').waitFor();
