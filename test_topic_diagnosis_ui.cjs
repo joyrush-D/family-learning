@@ -72,4 +72,33 @@ const q4 = E.questionById(full, 'cnm_010_q4');
 ok(T.ANSWER_MAX === 500 && ['0'.repeat(500) + '1', '0'.repeat(500) + '2', '0'.repeat(499) + '1'].every(t => E.judgeQuestion(q4, t).verdict === 'wrong'), 'real judgeQuestion: q4 501-char A/B and the 500-char boundary answer are all wrong');
 const panelCode = read(HERE + '/topic-diagnosis.js').split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
 ok(!/上游判题|DeepTutor判定|两个判题器|上游：|DeepTutor：/.test(panelCode) && panelCode.includes("field(p,k,'写答案',ANSWER_MAX)") && panelCode.includes(' maxlength="${max}"'), 'panel says 题库核对/复核结果/两项检查; answer inputs carry maxlength=500');
+// 数值待核的固定原引擎回归（真实cn-math-taxonomy包，不用假引擎）。待核字段与服务端state的只读覆盖同名（replay_result/stored_verdict/evidence_note）。
+// p125旧轮：q3原答4.3角真实判对，引擎按这个对续出q4并被跳过——这样的旧轮不能再安全重放；标准写法4.3元照常；只有一道待核题时按未答对重放并继续出题。
+{
+  const P = 'cnm_p125', pIds = new Set(), pStack = [P];
+  while (pStack.length) { const t = pStack.pop(); if (pIds.has(t)) continue; pIds.add(t); (pre[t] || []).forEach(x => pStack.push(x)); }
+  const pg = E.buildGraph(topics.filter(t => pIds.has(t.id)), deps.filter(d => pIds.has(d.topicId) && pIds.has(d.prerequisiteId)), questions.filter(q => pIds.has(q.topicId)));
+  const q3 = E.questionById(pg, 'cnm_p125_q3');
+  ok(q3 && q3.type === 'numeric' && String(q3.answer) === '4.3', 'fixed pack: cnm_p125_q3 is the numeric money question with standard 4.3');
+  let popts = null;
+  for (let k = 0; k < 400 && !popts; k++) {
+    const o = { limit: 8, seed: 'p125-legacy-' + k }, it = E.nextItem(pg, E.createSession(pg, [P], o));
+    if (it && it.question.id === q3.id) { const n = E.nextItem(pg, E.applyAnswer(pg, E.createSession(pg, [P], o), P, 'correct', { text: '4.3角' })); if (n && n.question.id === 'cnm_p125_q4') popts = o; }
+  }
+  ok(!!popts, 'real engine: a seed asks cnm_p125_q3 first and, under a raw 对, cnm_p125_q4 next (' + (popts && popts.seed) + ')');
+  const j1 = T.judge(E, q3, 'answer', '4.3角');
+  ok(j1.verdict === 'correct' && j1.engine === 'correct', 'real judgeQuestion says 对 for 4.3角 (the raw verdict the server keeps and holds)');
+  const it2 = E.nextItem(pg, E.applyAnswer(pg, E.createSession(pg, [P], popts), P, j1.engine, { text: '4.3角' }));
+  const held = { seq: 1, topic_id: P, qid: q3.id, kind: 'answer', answer: '4.3角', verdict: 'manual', stored_verdict: 'correct', engine_result: 'correct', replay_result: 'skip', evidence_note: '待家长核对', help: '' };
+  const skipped = { seq: 2, topic_id: it2.topicId, qid: it2.question.id, kind: 'skip', answer: '', verdict: 'skip', engine_result: 'skip', help: '' };
+  const legacy = { topic_id: P, opts: popts, items: [held, skipped] };
+  ok(T.restore(E, pg, legacy) === null, 'legacy round (held q3, then q4 chosen under its raw 对 and skipped) is not replayed: restore returns null');
+  const rawOnly = T.restore(E, pg, { ...legacy, items: legacy.items.map(({ replay_result, ...i }) => i) });
+  ok(rawOnly && rawOnly.answers.length === 2 && rawOnly.answers[0].result === 'correct', 'without the held mark the same items replay on the raw 对 (the path restore must not fall back to)');
+  const j2 = T.judge(E, q3, 'answer', '4.3元'), canon = { topic_id: P, opts: popts, items: [{ seq: 1, topic_id: P, qid: q3.id, kind: 'answer', answer: '4.3元', verdict: j2.verdict, engine_result: j2.engine, help: '' }] };
+  const sc = T.restore(E, pg, canon);
+  ok(j2.verdict === 'correct' && sc && sc.answers[0].result === 'correct' && !!E.nextItem(pg, sc), 'canonical 4.3元: 对, replays on 对 and the round continues');
+  const ss = T.restore(E, pg, { topic_id: P, opts: popts, items: [held] });
+  ok(ss && ss.answers.length === 1 && ss.answers[0].result === 'skip' && !!E.nextItem(pg, ss), 'one held item: replays as 未答对 (skip) and the round continues');
+}
 say(passed + ' passed');
