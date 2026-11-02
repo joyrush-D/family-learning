@@ -1265,7 +1265,40 @@ def _explicit_replacements(said,old):
     return pairs
 
 
-def _unchanged_lost(old_lines,shown,said):
+def _clause_negated(clause):
+    """Whether one clause's own predicate is negated (不用抄写、无需录音): a negation inside a title or negated again is none."""
+    text=_titles_read_as_objects(clause or '')
+    m=re.search(_NEGATED_LEAD+r'[\u4e00-\u9fff]',text)
+    return bool(m) and not _negation_negated(text[:m.start()])
+
+
+def _polar_chars(text):
+    """(words of text's positive clauses, words of its negated clauses), each clause read by its own polarity."""
+    pos,neg=set(),set()
+    for clause in re.split(r'[，,；;。！!？?\n]+',text or ''):
+        if clause.strip():(neg if _clause_negated(clause) else pos).update(_unit_chars(clause))
+    return pos,neg
+
+
+def _lifted_exemptions(old,notice):
+    """(clause, words) of each exemption the notice's own words lift: a positive clause of the notice requiring words the
+    original writes only in its negated clauses (不用抄写 → …只需跟读两遍，抄写). Same characters are no proof of the same
+    requirement: the polarity of each clause decides, as an exemption named again without its negation is a changed unit
+    for a date move. A notice that omits the exemption, or restates it negated (仍然不用抄写), lifts nothing."""
+    pos,neg=_polar_chars(old);found=[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',notice or ''):
+        if clause.strip() and not _clause_negated(clause) and (words:=(_unit_chars(clause)-pos)&neg):found.append((clause.strip(),words))
+    return found
+
+
+def _exemption_unmet(old,notice,shown):
+    """The notice's lifted exemptions (_lifted_exemptions) that the latest words do not require positively, or still exempt;
+    '' when none. Such latest words are never the whole latest requirement, on the page or saved."""
+    pos,neg=_polar_chars(shown)
+    return '、'.join(clause for clause,words in _lifted_exemptions(old,notice) if not words<=pos or words&neg)
+
+
+def _unchanged_lost(old_lines,shown,said,lifted=()):
     """Original clauses the latest shown words no longer carry beyond the notice's own changes; [] when every one is kept.
     An object the notice explicitly changes (透明塑料杯改为两个玻璃杯) is carried only by its changed words written as one
     phrase in the latest (透明玻璃杯); otherwise its old words stay required."""
@@ -1277,7 +1310,10 @@ def _unchanged_lost(old_lines,shown,said):
     replaced=_count_token(units) if units else None
     label=lambda clause:re.sub(r'\s+','',replaced.sub(lambda t:'' if family_agent._school_counts(t[0])-told else t[0],clause)) if replaced else clause
     changed=[(a,b) for a,b in _explicit_replacements(said,'\n'.join(old_lines)) if b in written]
+    lifted=set().union(*(words for _,words in lifted)) if lifted else set()
     for clause in re.split(r'[，,；;。！!？?\n]+','\n'.join(old_lines)):
+        # An exemption the notice itself lifts (不用抄写 → 抄写) is a changed unit, never an unchanged one the latest must keep.
+        if lifted and _clause_negated(clause) and _unit_chars(clause)&lifted:continue
         core=clause.lower()
         for a,b in changed:core=core.replace(a,b)
         if units:core=_count_token(units).sub(' ',core)
@@ -1348,7 +1384,11 @@ def _notice_count_latest(old_lines,old_title,notice,moved):
     written=next((t[0] for t in _count_token({unit}).finditer(notice) if counts(t[0])=={(new,unit)}),'')
     if len(tokens)!=1 or not written:return None
     rest=re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token({unit}).sub(' ',_MOVE_NARRATION.sub(' ',notice.lower())))
-    if not _unit_chars(rest)<=_unit_chars(old_title+'\n'+old):return None
+    # Each clause keeps its own polarity: a positive clause only restates the original's positive words, a negated one only its
+    # exemptions. Old words turned positive (不用抄写 → 抄写) or newly negated (不用听音频) are a changed unit, never count-only.
+    pos,neg=_polar_chars(old_title+'\n'+old)
+    for clause in re.split(r'[，,；;。！!？?\n]+',rest):
+        if clause.strip() and not _unit_chars(clause)<=(neg|_unit_chars('不用不必无需无须免别勿没未') if _clause_negated(clause) else pos):return None
     i,t=tokens[0];lines=list(old_lines);lines[i]=lines[i][:t.start()]+written+lines[i][t.end():]
     return lines
 
@@ -1512,6 +1552,10 @@ def _one_affair_versions(c,items,store):
         if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
         # The latest is a whole requirement: every unchanged original unit kept, or only a proven count change put in.
         old_lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()];lines=list(rel['lines']);composed=False
+        own_words=_notice_own_words(_saved_quote(c,item_id=x['id']),said) or said
+        lifted=_lifted_exemptions('\n'.join(old_lines),own_words) if rel['change']=='update' else []
+        if lifted and (unmet:=_exemption_unmet('\n'.join(old_lines),own_words,shown)):
+            why.append('通知要求“'+unmet[:30]+'”，原要求写明不用；新要求的归纳未写入这项')
         # A notice moves the item only by tying a date role to a day the original does not hold in that same role: 今晚只需
         # 跟读两遍 restates the original's own 今晚 (its work day), whichever role the summary filed it under, and moves nothing;
         # 改为今晚交给数学老师 moves the handback from 明早 onto 今晚, although 今晚 already was the original's work day.
@@ -1519,12 +1563,12 @@ def _one_affair_versions(c,items,store):
         new_roles=_role_days(m,_saved_quote(c,item_id=x['id']),sent_day(str(m.get('published_at') or '')))
         shifts=[(role,old_roles[role],new_roles[role]-old_roles[role]) for role in _DATE_ROLES if new_roles[role]-old_roles[role]]
         moved=bool(shifts)
-        lost=_unchanged_lost(old_lines,shown,said) if rel['change']=='update' and not why else []
+        lost=_unchanged_lost(old_lines,shown,said,lifted) if rel['change']=='update' and not why else []
         if lost:
             fixed=_count_only_latest(old_lines,task['title'],shown,said,moved)
             if fixed is None:
                 # The model's summary may paraphrase or drop an unchanged unit; the teacher's own words still prove the change.
-                fixed=_notice_count_latest(old_lines,task['title'],_notice_own_words(_saved_quote(c,item_id=x['id']),said),moved)
+                fixed=_notice_count_latest(old_lines,task['title'],_notice_own_words(_saved_quote(c,item_id=x['id']),said),moved) if not lifted else None
             if fixed is None and moved:
                 fixed=_day_moved_latest(old_lines,task['title'],original,said,a.get('due_on',''),m.get('due_on',''),
                                         sent_day(str(a.get('published_at') or '')),sent_day(str(m.get('published_at') or '')))
