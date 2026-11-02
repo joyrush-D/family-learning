@@ -670,13 +670,18 @@ def record_topic_basis(c,r,child_id,tables):
     or history, with the answers it holds and the new attempts saved on a current one. The one rule the task card
     (task_progress) and the learning view both read, so a record gives the same numbers in both. No table, no write."""
     if 'topic_diagnoses' not in tables: return []
+    import family_taxonomy
     now,out=record_basis_hash(r,child_id),[]
-    for d in c.execute('SELECT id,record_hash,topic_id,created_at FROM topic_diagnoses WHERE child_id=? AND record_id=? ORDER BY id',(child_id,str(r['id']))).fetchall():
+    try: pack=family_taxonomy.load_pack()
+    except (family_taxonomy.TaxonomyError,OSError,ValueError): pack=None
+    for d in c.execute('SELECT id,record_hash,topic_id,created_at,pack_sha FROM topic_diagnoses WHERE child_id=? AND record_id=? ORDER BY id',(child_id,str(r['id']))).fetchall():
         voided='topic_basis_voids' in tables and c.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?',(d['id'],)).fetchone() is not None
         current=d['record_hash']==now and not voided
         answered,helped=c.execute("SELECT COUNT(*),COALESCE(SUM(help!=''),0) FROM topic_diagnosis_items WHERE diagnosis_id=? AND kind='answer'",(d['id'],)).fetchone() if 'topic_diagnosis_items' in tables else (0,0)
-        retries=[dict(x) for x in c.execute('SELECT outcome,answer,created_at FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? ORDER BY id',
+        retries=[dict(x) for x in c.execute('SELECT outcome,answer,created_at,qid,topic_id,taxonomy_verdict,deeptutor FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? ORDER BY id',
                                              (d['id'],child_id,str(r['id']),now))] if current and 'topic_retries' in tables else []
+        for x in retries:  # a pass whose written unit is in doubt counts as parent_check here; the saved row is unchanged
+            x['outcome']=family_taxonomy.evidence_view(x,pack if d['pack_sha']==family_taxonomy.TAXONOMY_SHA else None)[0]
         out.append(dict(topic_id=d['topic_id'],record_hash=d['record_hash'],current=current,created_at=d['created_at'],answered=answered,helped=helped,retries=retries))
     return out
 
