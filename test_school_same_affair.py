@@ -4,6 +4,7 @@ All children, teachers, groups and messages are fictional; model replies are con
 A reminder in other words, another channel or by another publisher links to the one saved task as provenance only:
 its requirements, date, arrangement, status and feedback stay; different ranges, children or new rounds stay separate.
 """
+import datetime as dt
 import json
 import unittest
 from unittest.mock import patch
@@ -506,6 +507,130 @@ class SchoolSameAffairTests(unittest.TestCase):
         self.assertEqual((kept['state'], kept['task_id'], brief['state'], brief['change']), ('pending', '', 'review', 'same'))
         self.assertIn('由谁做哪一步', brief['reason']); self.assertEqual(json.loads(kept['evidence'])[0]['ref'], 'message:synthetic-group:12')
 
+
+    # One notice holding two items of one publisher: it corrects one affair and restates another. The restated affair is the
+    # one accepted task (both originals, its date, its own unknown scope); the correction stays its own item for the parent.
+    def _notice(self, index, text, proposals, source='synthetic-qq', publisher='synthetic-teacher-e', subject='英语'):
+        config = json.loads((self.data / 'agent.json').read_text())
+        if not any(s['id'] == source for s in config['sources']):
+            config['sources'].append(dict(self.source, id=source, platform='qq', child_id='child-1', name='虚构' + source))
+            (self.data / 'agent.json').write_text(json.dumps(config))
+        with self.app.connect() as c:
+            previous = c.execute('SELECT cursor FROM agent_sources WHERE id=?', (source,)).fetchone()
+        message = dict(id=str(index), time=self.now.isoformat(), sender='虚构显示名', text=text, unread=False, kind='text', sender_id=publisher)
+        self.store.ingest(dict(source_id=source, expected_cursor=previous['cursor'] if previous else '10', cursor=str(index),
+                               checked_at=self.now.isoformat(), last_message_time=self.now.isoformat(), error='', messages=[message]))
+        ref = 'message:' + source + ':' + str(index)
+        evidence = [dict(message, ref=ref, publisher=agent._publisher(source, message), content_incomplete=False)]
+        targets = agent.school_targets(self.app, self.store, 'child-1', evidence=[text])
+        raw = dict(proposals=[school_proposal(focus='school', evidence=[dict(ref=ref)], learning_subject=subject, task_state='ready',
+                                              task_reason='虚构原文明确。', task_purpose='learning', **p) for p in proposals])
+        with patch.object(agent.family_llm, '_chat_json', return_value=raw):
+            items = agent._select('school', evidence, school_goals=[], school_tasks=targets, as_of=self.now.date().isoformat())
+        for item in items:
+            item.update(child_id='child-1', kind='school')
+            if item['plan'].get('school_learning'): item['plan']['school_messages'] = [dict(source_id=source, message_id=str(index))]
+        job = 'synthetic-notice:' + source + ':' + str(index)
+        self.store._save(job, 'synthetic-fixed', items, self.now)
+        with self.app.connect() as c:
+            return [dict(r) for r in c.execute('SELECT * FROM agent_items WHERE job_id=? ORDER BY rowid', (job,))]
+
+    def _day(self, weekday):
+        return (self.now.date() + dt.timedelta(days=(weekday - self.now.weekday()) % 7)).isoformat()
+
+    def _two_items(self, index, text, first, second, due):
+        rows = self._notice(index, text, [dict(first, due='', task_change='new'), dict(second, due=due, task_change='new')])
+        self.assertEqual(len(rows), 2)
+        return [self.store.act(dict(id=r['id'], action='accept'))['task_id'] for r in rows]
+
+    def _corrected(self, index, text, home, scope, home_target, scope_target, due, subject='英语'):
+        rows = self._notice(index, text, [dict(home, due='', task_change='update', task_target_id=home_target),
+                                          dict(scope, due=due, task_change='same', task_target_id=scope_target)], subject=subject)
+        by = {json.loads(r['plan'])['school_task'].get('target_id'): r for r in rows}
+        self.assertEqual(set(by), {home_target, scope_target})
+        return by[home_target], by[scope_target]
+
+    CLASSROOM = '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。'
+    HOME = dict(title_quote='今晚听音频跟读Unit 9第1到6个单词，每词三遍', task_title='英语：跟读Unit 9第1—6个单词',
+                task_goal='今晚听音频跟读Unit 9第1到6个单词，每词三遍。\n只做口头跟读，不用抄写。')
+    DICTATION = dict(title_quote='周五课堂听写，范围由老师明天再说', task_title='英语：周五课堂听写', task_goal='周五课堂听写。\n听写范围由老师明天再说。')
+    HOME_TWICE = dict(title_quote='Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写', task_title='英语：跟读Unit 9第1—6个单词两遍',
+                      task_goal='今晚听音频跟读Unit 9第1到6个单词，每个单词跟读两遍。\n只做口头跟读，不用抄写。')
+
+    def test_multi_affair_notice_restating_an_accepted_classroom_affair_keeps_one_task_with_both_originals(self):
+        friday = self._day(4)
+        home_id, dictation_id = self._two_items(31, self.CLASSROOM, self.HOME, self.DICTATION, friday)
+        with self.app.connect() as c:
+            before = {t['id']: t for t in self._child_tasks(c)}
+        self.assertEqual(before[dictation_id]['agenda']['due_on'], friday)
+        text = '更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定，等明天另行通知。'
+        home, reminder = self._corrected(37, text, self.HOME_TWICE,
+                                         dict(title_quote='周五课堂听写的范围还没定，等明天另行通知', task_title='英语：周五课堂听写',
+                                              task_goal='周五课堂听写。\n听写范围尚未确定，等老师明天另行通知。'), home_id, dictation_id, friday)
+        brief = json.loads(reminder['plan'])['school_task']
+        self.assertEqual((brief['state'], brief['change'], brief['target_id']), ('ready', 'same', dictation_id))
+        self.assertEqual(brief['sibling_quotes'], ['更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写'])
+        self._refresh()
+        with self.app.connect() as c:
+            tasks = {t['id']: t for t in self._child_tasks(c)}
+            self.assertEqual([t for t in tasks if '听写' in tasks[t]['title']], [dictation_id])
+            task = tasks[dictation_id]
+            self.assertEqual((task['action'], task['agenda']['due_on']), (before[dictation_id]['action'], friday))
+            self.assertIn('范围由老师明天再说', task['action'])
+            self.assertIn('message:synthetic-qq:31', task['source']); self.assertIn('message:synthetic-qq:37', task['source'])
+            linked = dict(c.execute('SELECT * FROM agent_items WHERE id=?', (reminder['id'],)).fetchone())
+            self.assertEqual((linked['state'], linked['task_id']), ('accepted', dictation_id))
+            # The home count change is its own item for its own task, never folded into the classroom affair.
+            kept = dict(c.execute('SELECT * FROM agent_items WHERE id=?', (home['id'],)).fetchone())
+            self.assertEqual([json.loads(kept['plan'])['school_task'][k] for k in ('change', 'target_id')], ['update', home_id])
+            self.assertIn('两遍', kept['body']); self.assertNotIn('两遍', tasks[dictation_id]['action'])
+            snapshot = (self._rows(c, 'manual_tasks'), self._rows(c, 'agent_items'))
+        replay = agent.apply_school_same(self.app, self.store, reminder['id'], reminder['updated'])
+        self.assertEqual((replay['task_id'], replay['replayed']), (dictation_id, True))
+        self._refresh()
+        with self.app.connect() as c:
+            self.assertEqual((self._rows(c, 'manual_tasks'), self._rows(c, 'agent_items')), snapshot)
+
+    def test_multi_affair_notice_in_other_words_restates_its_own_affair_only(self):
+        thursday = self._day(3)
+        original = '语文：今晚朗读《荷塘》第2段三遍，不用录音；周四课上默写词语，默写范围另行通知。'
+        home_id, quiz_id = self._two_items(41, original, dict(title_quote='今晚朗读《荷塘》第2段三遍，不用录音', task_title='语文：朗读《荷塘》第2段',
+                                                              task_goal='今晚朗读《荷塘》第2段三遍。\n不用录音。'),
+                                           dict(title_quote='周四课上默写词语，默写范围另行通知', task_title='语文：周四课上默写词语',
+                                                task_goal='周四课上默写词语。\n默写范围另行通知。'), thursday)
+        text = '更正刚才的朗读：《荷塘》第2段只读两遍，仍不用录音；周四默写词语的范围还没定，之后另行通知。'
+        _, reminder = self._corrected(47, text, dict(title_quote='《荷塘》第2段只读两遍，仍不用录音', task_title='语文：朗读《荷塘》第2段两遍',
+                                                    task_goal='今晚朗读《荷塘》第2段两遍。\n不用录音。'),
+                                      dict(title_quote='周四默写词语的范围还没定，之后另行通知', task_title='语文：周四课上默写词语',
+                                           task_goal='周四课上默写词语。\n默写范围还没定。'), home_id, quiz_id, thursday, subject='语文')
+        brief = json.loads(reminder['plan'])['school_task']
+        self.assertEqual((brief['state'], brief['change'], brief['sibling_quotes']), ('ready', 'same', ['更正刚才的朗读：《荷塘》第2段只读两遍，仍不用录音']))
+
+    def test_multi_affair_notice_changing_or_adding_to_the_restated_affair_is_never_silently_same(self):
+        friday = self._day(4)
+        home_id, dictation_id = self._two_items(31, self.CLASSROOM, self.HOME, self.DICTATION, friday)
+        head = '更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；'
+        variants = {
+            'own correction': (head + '周五课堂听写改为只听写第1到3个单词。', '周五课堂听写改为只听写第1到3个单词'),
+            'cancellation': (head + '周五课堂听写取消，范围也不用等了。', '周五课堂听写取消，范围也不用等了'),
+            'extra requirement': (head + '周五课堂听写的范围还没定，另外要带听写本。', '周五课堂听写的范围还没定，另外要带听写本'),
+            'another event': (head + '周五课堂另有一次口语测验，范围还没定。', '周五课堂另有一次口语测验，范围还没定'),
+            # A label naming no quoted action (更正以下两项) corrects every item it leads, the restated one too.
+            'shared label': ('更正以下两项：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定。', '周五课堂听写的范围还没定'),
+            # The other item's quote running on into this affair's own words is not that item's own part.
+            'quote touching this affair': ('Unit 9第1到6个单词今晚只需跟读两遍，周五课堂听写也取消。', '周五课堂听写也取消'),
+        }
+        for index, (name, (text, quote)) in enumerate(variants.items(), start=51):
+            with self.subTest(name):
+                sibling = dict(self.HOME_TWICE, title_quote='Unit 9第1到6个单词今晚只需跟读两遍' if name == 'quote touching this affair' else self.HOME_TWICE['title_quote'])
+                _, reminder = self._corrected(index, text, sibling, dict(title_quote=quote, task_title='英语：周五课堂听写',
+                                                                         task_goal='周五课堂听写。\n听写范围尚未确定。'), home_id, dictation_id, friday)
+                brief = json.loads(reminder['plan'])['school_task']
+                self.assertEqual(brief['state'], 'review', brief.get('reason')); self.assertNotIn('target_basis', brief)
+        self._refresh()
+        with self.app.connect() as c:
+            task = next(t for t in self._child_tasks(c) if t['id'] == dictation_id)
+            self.assertEqual([i for i in range(51, 57) if 'message:synthetic-qq:%d\n' % i in task['source'] + '\n'], [])
 
 if __name__ == '__main__':
     unittest.main()

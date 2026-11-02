@@ -2952,7 +2952,7 @@ def _school_same_own(text, others, own):
     One notice may correct one affair and restate another (更正刚才的跟读：…只需两遍；周五听写的范围还没定): the other item's
     correction is not this affair's change. A quote is that item's own part only where the original proves it: found once, both
     ends on clause boundaries, and no two-character word of it (nor of the label leading its sentence, taken only when it names
-    the quoted action) is a word of this task's own title and goal. Anything else, an unclaimed clause or a quote touching this
+    the quoted action by a shared word, named object or step) is a word of this task's own title and goal. Anything else, an unclaimed clause or a quote touching this
     task's words, stays and keeps every guard. Returns the remaining words and the parts set aside verbatim.
     """
     def pairs(value):
@@ -2964,7 +2964,8 @@ def _school_same_own(text, others, own):
         start=text.index(quote);end=start+len(quote)
         if start and text[start-1] not in '，,。；;！!？?\n：:' or end<len(text) and text[end] not in '，,。；;！!？?\n':continue
         head=re.search(r'(?:^|(?<=[。；;！!？?\n]))[^，,。；;！!？?\n：:]{1,20}[：:]\s*$',text[:start])
-        if head and pairs(head[0])&pairs(quote):start=head.start()
+        if head and (pairs(head[0])&pairs(quote) or _school_named_objects(head[0])&_school_named_objects(quote)
+                     or any(re.search(group,head[0]) and re.search(group,quote) for group in _SCHOOL_SAME_STEPS)):start=head.start()
         if pairs(text[start:end])&mine or any(max(start,a)<min(end,b) for a,b in spans):continue
         spans.append((start,end))
     rest=text
