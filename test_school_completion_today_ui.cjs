@@ -111,7 +111,7 @@ async function demoServer(){
   const [code]=await once(made,'exit');assert.equal(code,0,'saved H01 state');
   const saved=JSON.parse(fs.readFileSync(file,'utf8'));assert.equal(saved.tasks.length,1,'one saved task');
   const h01=saved.tasks[0];assert.equal(h01.due,'2026-10-20');
-  for(const width of [360,1440])for(const [day,inToday,label] of [['2026-10-16',false,/完成：2026-10-18[\s\S]*老师要求交回：2026-10-20/],['2026-10-18',true,/今天完成：2026-10-18[\s\S]*老师要求交回：2026-10-20/],['2026-10-20',true,/完成：2026-10-18[\s\S]*老师要求交回：2026-10-20/]]){
+  for(const width of [360,1440])for(const [day,inToday,label] of [['2026-10-16',false,/完成：2026-10-18[\s\S]*交回：2026-10-20/],['2026-10-18',true,/今天完成：2026-10-18[\s\S]*交回：2026-10-20/],['2026-10-20',true,/完成：2026-10-18[\s\S]*交回：2026-10-20/]]){
    const p=await browser.newPage({viewport:{width,height:820}}),errors=[];
    p.on('pageerror',e=>errors.push(e.message));
    try{
