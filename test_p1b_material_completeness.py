@@ -120,7 +120,16 @@ class OriginalRoleChainTests(_ScopeBase):
     with a fictional requirement holding its own completion and handback days beside a same-page dictation of its own day."""
 
     def test_completion_and_handback_roles_reach_the_day_view_and_reopen(self):
-        fix=json.loads(json.dumps(scope.FIX,ensure_ascii=False).replace(ROLE_OLD,ROLE_NEW))
+        self._roles(ROLE_NEW)
+
+    def test_matching_brackets_give_the_same_roles(self):
+        self._roles('今晚（2026年11月4日）听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，明早（11月5日早上）交。')
+
+    def test_a_conflicting_bracket_is_never_a_due_or_role(self):
+        self._roles('今晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，明早（11月6日早上）交。',conflict=True)
+
+    def _roles(self,text,conflict=False):
+        fix=json.loads(json.dumps(scope.FIX,ensure_ascii=False).replace(ROLE_OLD,text))
         real=agent._school_original_actions
         def cite(store,row,result,parts,*args,**kwargs):
             # The controlled model stub cites each read part by the id this run's reader gave it (ids follow the read text).
@@ -130,6 +139,12 @@ class OriginalRoleChainTests(_ScopeBase):
             return real(store,row,result,parts,*args,**kwargs)
         with patch.object(scope,'FIX',fix),patch.object(agent,'_school_original_actions',cite):self._chain()
         follow=self._follow(self._db()[0])
+        if conflict:
+            # 明早 and its bracket name two days: no due is taken from either and no role is projected; the read words stay.
+            self.assertNotEqual(follow['due'],'2026-11-06');self.assertIn('11月6日',json.loads(follow['plan'])['school_original_action']['requirements'][0]['text'])
+            if follow['state']=='accepted':self.assertEqual(json.loads(follow['plan'])['school_task']['state'],'ready')
+            else:self.assertEqual(json.loads(follow['plan'])['school_task']['state'],'review')
+            return
         self.assertEqual((follow['state'],follow['due'],json.loads(follow['plan'])['school_task']['state']),('accepted','2026-11-05','ready'))
         def agenda():
             mine,_=whole.WholeDayTests._list(self)
@@ -148,7 +163,8 @@ def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
     suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
-    suite.addTest(OriginalRoleChainTests('test_completion_and_handback_roles_reach_the_day_view_and_reopen'))
+    for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
+        suite.addTest(OriginalRoleChainTests(name))
     return suite
 
 
