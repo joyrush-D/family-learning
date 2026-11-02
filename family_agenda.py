@@ -1001,13 +1001,15 @@ def enrich(app,c,tasks):
         refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
         focus=task.get('focus') or {}
         purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None;originals=();reminders=()
-        subject_title=task.get('original_title',task['title']);own_quote='';saved_subject='';confirmed=[]
+        subject_title=task.get('original_title',task['title']);own_quote='';saved_subject='';confirmed=[];needs=[]
         if task.get('school_origin'):
             origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
             proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
                                (origin,task['id'],owners.get(task['child'],''))).fetchone()
             if proposal:
                 plan=json.loads(proposal['plan'])
+                # A complete original line's missing execution resource, in its reader's words (never a reading gap).
+                needs=[n for n in plan.get('school_task',{}).get('resource_needed') or [] if isinstance(n,str) and n.strip()]
                 purpose=plan.get('school_task',{}).get('purpose');goal=str(plan.get('school_task',{}).get('goal') or '')
                 store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
                 publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
@@ -1042,6 +1044,7 @@ def enrich(app,c,tasks):
             if not task['agenda'].get('due_on') or str(event.get('due') or '')!=task['agenda']['due_on']:break
             if event.get('due_kind') in DUE_LABELS:task['agenda']['due_kind']=event['due_kind'];break
         if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
+        if needs:task['agenda']['resource_needed']=needs
         if teacher.get('complete_on'):
             task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
         task['agenda'].update(subject_fields(subject_title,own_quote,saved=saved_subject,corrected=(task.get('focus') or {}).get('subject','')))

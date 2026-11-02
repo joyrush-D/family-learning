@@ -275,7 +275,7 @@ class ScopedDoubtImageChainTests(_ScopeBase):
 
     def _day(self):
         mine,_=whole.WholeDayTests._list(self)
-        return sorted((i['title']+i['body'],i['kind'],i['status'],bool(i.get('task_id'))) for i in mine
+        return sorted((i['title']+i['body'],i['kind'],i['status'],bool(i.get('task_id')),i['agenda'].get('resource_needed',[])) for i in mine
                       if [p['ref'] for p in i['agenda'].get('publications',[])]==[self.ref])
 
     def test_each_doubt_holds_only_the_requirement_it_names(self):
@@ -290,7 +290,7 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         day=self._day();shown={text:rest for text,*rest in day}
         # The two freed lines are the day's tasks; the line with its own reading gap is still a card to check, not a task.
         self.assertEqual([shown[next(t for t in shown if w in t)] for w in ('跟读','听写','练习纸')],
-                         [['task','待跟进',True],['task','待跟进',True],['school','待核对',False]])
+                         [['task','待跟进',True,[U_RES]],['task','待跟进',True,[]],['school','待核对',False,[]]])
         made=self._db();agent.run_once(self.app,self.now+dt.timedelta(minutes=2))  # reopen: no call, write or duplicate
         self.assertEqual(self._db(),made);self.assertEqual(self._day(),day)
 
@@ -410,6 +410,8 @@ class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
         self.assertEqual(brief('英语')['state'],'review');self.assertIn(U_READ,brief('英语')['reason']);self.assertNotIn(U_READ,brief('数学')['reason'])
         first=self.tasks()
         self.assertEqual(len(first),2,first);self.assertFalse([t for t in first if t.startswith('英语')],first)
+        needs={t['title'][:2]:t['agenda'].get('resource_needed') for t in self.app.tasks() if t['title'][:2] in ('数学','语文')}
+        self.assertEqual(needs,{'数学':None,'语文':[self.RES]})  # the day view shows the freed line's own needed material
         self.assertEqual(self.tasks(),first)  # reopening reads the same tasks
 
     def test_old_pdf_receipts_without_scopes_hold_every_line(self):
