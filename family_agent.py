@@ -3856,6 +3856,14 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
     if len(homes)!=1 or homes[0]['text'].count(quote)!=1:return None
     text=homes[0]['text'];published=sent_day(homes[0].get('time',''))
     if not published:return None
+    # A relative day's own matching bracketed calendar day (今晚（2026年11月8日）、明早（11月9日早上）) is read once, as its relative
+    # word, by this one reader for ordinary messages, read originals and the agenda alike; a bracket naming another day stays
+    # in the words, and within this item's own range it leaves its roles unproven (below).
+    restated=_school_bracket_restated(text,published,keep=True)
+    if restated!=text:
+        quote=_school_bracket_restated(quote,published,keep=True)
+        if restated.count(quote)!=1:return None
+        text=restated;others=[_school_bracket_restated(o,published,keep=True) for o in others]
     # A weekday (孩子周五交给班主任) is a role day as much as 明天 is; _school_clause_day grounds it on the sending day.
     day=r'(?:今天|今日|今晚|明天|明日|明早|明晚|后天|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|(?:本|这|下)?(?:周|星期|礼拜)[一二三四五六日天])'
     def restating(e):
@@ -3903,6 +3911,7 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
     # (勾选参加或不参加, 交给班主任或课代表) is kept in its words for the family and names no day.
     if span is None or re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|'+_SCHOOL_DAY_OR
                                  +r'|或许|也许|如果|若|可能|大概|左右|[？?]',span):return None
+    if re.search(_SCHOOL_BRACKET_DAY,text[head:end]):return None  # its relative word and its bracket name two days
     for other in others:  # Another proposal quoting any of this range makes it shared, not this item's own.
         at=0
         while other and (at:=text.find(other,at))!=-1:
@@ -7373,16 +7382,19 @@ def _school_native_bind(proposal,actions,assigned,entries=None,spans=None,*,noti
 _SCHOOL_RELATIVE_OFFSET={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}
 
 
-def _school_bracket_restated(text,published):
+_SCHOOL_BRACKET_DAY=(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)\s*[（(]\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]'
+                     r'\s*(早上|早晨|上午|中午|下午|傍晚|晚上)?\s*[）)]')
+
+
+def _school_bracket_restated(text,published,keep=False):
     """The text with each relative day's own bracketed calendar day (今晚（2026年11月8日）、明早（11月9日早上）) read once, as the
     relative word alone, when both name the same day of the sending day; None when any bracket names another day or another
     part of the day (明天（11月10日）交 sent on 11月8日), or the sending day is unknown, so the existing date protections keep it."""
     import datetime as _dt
-    pattern=(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)\s*[（(]\s*(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]'
-             r'\s*(早上|早晨|上午|中午|下午|傍晚|晚上)?\s*[）)]')
+    pattern=_SCHOOL_BRACKET_DAY  # with keep, a bracket naming another day stays in the words and the rest is still read once
     if not re.search(pattern,text):return text
     try:sent=_dt.date.fromisoformat(published or '')
-    except ValueError:return None
+    except ValueError:return text if keep else None
     conflict=[]
     def one(m):
         day=sent+_dt.timedelta(days=_SCHOOL_RELATIVE_OFFSET[m[1]]);named=set()
@@ -7391,10 +7403,10 @@ def _school_bracket_restated(text,published):
             except ValueError:pass
         part=m[5] or ''
         if day not in named or m[1].endswith('早') and part not in ('','早上','早晨','上午') or m[1].endswith('晚') and part not in ('','晚上','傍晚'):
-            conflict.append(m[0])
+            conflict.append(m[0]);return m[0]
         return m[1]
     restated=re.sub(pattern,one,text)
-    return None if conflict else restated
+    return restated if keep or not conflict else None
 
 
 def _school_original_roles(anchors,cited,others):
