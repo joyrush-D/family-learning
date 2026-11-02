@@ -66,6 +66,25 @@ class OriginalDateRoleTests(unittest.TestCase):
         import family_agenda
         self.assertEqual(family_agenda.deadlines(j('2026年11月8日晚先听示范音频，再朗读《春》第2段两遍，末遍录音上传平台。'),'2026-11-08'),{'2026-11-08'})
 
+    def test_a_subject_or_list_label_keeps_the_items_own_day(self):
+        import family_agenda
+        j=agent._school_date_head_joined
+        self.assertEqual(j('语文：2026年11月4日晚先听示范音频，再朗读《春》第2段两遍，末轮录音上传平台。'),
+                         '语文：2026年11月4日晚先听示范音频再朗读《春》第2段两遍，末轮录音上传平台。')
+        self.assertEqual(family_agenda.deadlines(j('语文：2026年11月4日晚先听示范音频，再朗读《春》第2段两遍，末轮录音上传平台。'),'2026-11-04'),{'2026-11-04'})
+        self.assertEqual((j('家长事务：周五，请孩子把回执交给老师。'),j('2. 周四，请孩子带一个容器。')),('家长事务：周五请孩子把回执交给老师。','2. 周四请孩子带一个容器。'))
+        for text in ('语文：2026年11月4日晚先听音频，再视情况朗读。','语文：周五，不用交回执。','老师说：2026年11月4日晚先听音频，再朗读第2段。'):
+            with self.subTest(text=text):self.assertEqual(j(text),text)  # condition, negation or an unknown prefix: as written
+
+    def test_a_long_paper_name_with_its_sign_chain_dates_the_hand_in(self):
+        import family_agenda
+        for text in ('明天请孩子把《秋季研学活动安全告知书家长签字回执》签字交回。','明天由孩子把《秋季研学活动安全告知书家长签字回执》签字后交回。',
+                     '明天由家长把《秋季研学活动安全告知书家长签字回执》签字并盖章后交回班主任。'):
+            with self.subTest(text=text):self.assertEqual(family_agenda.deadlines(text,'2026-11-08'),{'2026-11-09'})
+        for text in ('明天请孩子把《已取消的研学活动回执》签字交回。','资料标题为《明天把回执签字交回指南》。','明天请孩子把《秋季研学活动安全告知书家长签字回执》签字。'):
+            with self.subTest(text=text):self.assertEqual(family_agenda.deadlines(text,'2026-11-08'),set())  # state/day in a title, no hand-in
+        self.assertEqual(family_agenda.deadlines('明天请孩子把《研学回执》签字，后天交回。','2026-11-08'),{'2026-11-10'})  # its own hand-in day
+
     def test_by_the_child_leads_an_action_as_by_the_parent_or_please_does(self):
         import family_agenda
         for lead in ('由孩子','由学生','请孩子','由家长'):
@@ -248,6 +267,9 @@ class OriginalRoleChainTests(_ScopeBase):
 
     def test_a_comma_day_head_of_the_handback_keeps_both_roles(self):
         self._roles('2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写。2026年11月5日早上，请孩子交给英语老师。')
+
+    def test_a_subject_label_and_an_ordered_work_keep_both_roles(self):
+        self._roles('英语：2026年11月4日晚先听音频，再跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，2026年11月5日早上交。')
 
     def test_a_conflicting_bracket_is_never_a_due_or_role(self):
         self._roles('今晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，明早（11月6日早上）交。',conflict=True)
@@ -840,7 +862,8 @@ def load_tests(loader,tests,pattern):
     suite.addTest(PdfOriginalRoleTests('test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected'))
     suite.addTests(loader.loadTestsFromTestCase(ResourceTimeTests))
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role',
-                 'test_a_material_issue_day_in_the_same_line_is_no_role_or_due','test_a_comma_day_head_of_the_handback_keeps_both_roles'):
+                 'test_a_material_issue_day_in_the_same_line_is_no_role_or_due','test_a_comma_day_head_of_the_handback_keeps_both_roles',
+                 'test_a_subject_label_and_an_ordered_work_keep_both_roles'):
         suite.addTest(OriginalRoleChainTests(name))
     suite.addTests(loader.loadTestsFromTestCase(UncertaintyScopeValidatorTests))
     suite.addTests(loader.loadTestsFromTestCase(DoubtViewTests))
