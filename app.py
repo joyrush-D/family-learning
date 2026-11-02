@@ -620,8 +620,10 @@ def learning_view(c,child,ts):
                 lines.append(['历史诊断',name+' · '+when+' · 原错题之后已更正，只作历史，不算当前进展']);continue
             lines.append(['知识点诊断',name+' · '+when+' · 答了'+str(b['answered'])+'题'+('，其中'+str(b['helped'])+'题看过说明' if b['helped'] else '')])
             for a in b['retries']:
-                lines.append(['新题再试',_epoch_day(a['created_at'])+' · '+RETRY_WORDS.get(a['outcome'],'结果未写明')+(' · 孩子原答 '+str(a['answer'])[:80] if a['answer'] else '')])
+                lines.append(['新题再试',_epoch_day(a['created_at'])+' · '+RETRY_WORDS.get(a.get('stored_outcome') or a['outcome'],'结果未写明')+(' · 孩子原答 '+str(a['answer'])[:80] if a['answer'] else '')
+                              +(' · '+a['evidence_note'] if a.get('stored_outcome') else '')])  # the saved grade stays readable as 当时结果, now pending
                 if a['outcome'] in ('independent_correct','independent_wrong'): last=a['outcome']
+                elif a.get('stored_outcome'): last='pending'
         # A topic the parent linked and has not diagnosed: its saved name and date, linked/pending, never a clue or mastery.
         for l in record_topic_links(c,r,child['id'],tables,diagnosed):
             name,known=topic_name(l['topic_id']) if l['pack_sha']==family_taxonomy.TAXONOMY_SHA else (l['topic_id'],False);when=_epoch_day(l['created_at'])
@@ -631,6 +633,7 @@ def learning_view(c,child,ts):
         linked=any(t['basis']=='current' and t['state']=='linked' for t in topics)
         nxt=('一次答对还不等于掌握；之后再独立做一道没见过的同类题。' if last=='independent_correct' else
              '这题还没独立做对；回原错题看说明，再另试一道新题。' if last=='independent_wrong' else
+             '这次新题再试当时记为对，现在待核；一次答对也不等于掌握，核对后再定下一步。' if last=='pending' else
              '已有知识点线索，还没有独立再试。' if current else
              '已关联知识点，待诊断；关联不等于掌握。' if linked else
              '原错题已更正；需要时按更正后的错题重新诊断。' if topics else
@@ -680,8 +683,9 @@ def record_topic_basis(c,r,child_id,tables):
         answered,helped=c.execute("SELECT COUNT(*),COALESCE(SUM(help!=''),0) FROM topic_diagnosis_items WHERE diagnosis_id=? AND kind='answer'",(d['id'],)).fetchone() if 'topic_diagnosis_items' in tables else (0,0)
         retries=[dict(x) for x in c.execute('SELECT outcome,answer,created_at,qid,topic_id,taxonomy_verdict,deeptutor FROM topic_retries WHERE diagnosis_id=? AND child_id=? AND record_id=? AND record_hash=? ORDER BY id',
                                              (d['id'],child_id,str(r['id']),now))] if current and 'topic_retries' in tables else []
-        for x in retries:  # a pass whose written unit is in doubt counts as parent_check here; the saved row is unchanged
-            x['outcome']=family_taxonomy.evidence_view(x,pack if d['pack_sha']==family_taxonomy.TAXONOMY_SHA else None)[0]
+        for x in retries:  # the one read-only evidence rule of the panel and list (family_taxonomy.evidence_view); the saved row is unchanged
+            shown,note=family_taxonomy.evidence_view(x,pack if d['pack_sha']==family_taxonomy.TAXONOMY_SHA else None)
+            if shown!=x['outcome']: x.update(stored_outcome=x['outcome'],outcome=shown,evidence_note=note)
         out.append(dict(topic_id=d['topic_id'],record_hash=d['record_hash'],current=current,created_at=d['created_at'],answered=answered,helped=helped,retries=retries))
     return out
 
@@ -1959,7 +1963,7 @@ def task_progress(c,task,names,profile_ids):
             if not b['current']: out['history']+=1;continue
             out['clues']+=1
             # Only an independent new attempt counts; not_new, parent_check and not_independent are saved but are not one.
-            out['retries']+=sum(a['outcome'] in ('independent_correct','independent_wrong') for a in b['retries'])
+            out['retries']+=sum((a.get('stored_outcome') or a['outcome']) in ('independent_correct','independent_wrong') for a in b['retries'])  # an overlaid saved attempt, result now pending, is still one attempt
     return out
 
 def link_record_task(obj, connection=None):

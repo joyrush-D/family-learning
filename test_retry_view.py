@@ -78,6 +78,7 @@ with tempfile.TemporaryDirectory(prefix='synthetic-retry-view-') as folder:
         with patch.object(tx,'load_pack',missing):
             v=view(fid);assert v['state']=='unclear' and v['show_note'] and '依据不明' in v['status'] and '题目' not in dict(v['lines']) and dict(v['lines'])['孩子原答']=='2',v
             assert '本次结果' in dict(v['lines']),v
+            assert '不算当前进展' in v['next'] and '不等于掌握' not in v['next'],v  # missing pack: the saved pass is pending, not current
         # An unreadable original proves no correction: say so, keep the saved text and result; only a recorded void makes it history.
         with patch.multiple(tx,load_pack=lambda root=None:pack,question=lambda p,qid:questions.get(qid)):
             with app.connect() as c: c.execute('DELETE FROM records WHERE id=?',(wid,))
