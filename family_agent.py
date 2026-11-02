@@ -2068,6 +2068,27 @@ class Store:
             return dict(ok=True, state=existing['state'], task_id=existing['task_id'], deduplicated=True)
         return None
 
+    def _reuse_school_submission(self, c, row):
+        """A step the selection proved to be one activity's own submission step joins that activity's accepted task.
+
+        Only the one owner of the same job, child and original that is accepted with its own Agent task qualifies; the
+        step row stays with its evidence and history and points at it (school_duplicate_of), as _reuse_school does. Any
+        other case leaves the step for the parent (school_submission_owner) rather than creating a second task."""
+        plan = json.loads(row['plan']); of = plan['school_task']['submission_of']
+        owners = c.execute("SELECT * FROM agent_items WHERE child_id=? AND kind='school' AND job_id=? AND id<>? AND trim(title)=? AND trim(body)=? AND due=?",
+                           (row['child_id'], row['job_id'], row['id'], str(of.get('title') or '').strip(), str(of.get('body') or '').strip(), str(of.get('due') or ''))).fetchall()
+        owner = owners[0] if len(owners) == 1 and owners[0]['state'] == 'accepted' and owners[0]['task_id'] else None
+        task = c.execute('SELECT * FROM manual_tasks WHERE id=?', (owner['task_id'],)).fetchone() if owner else None
+        if (owner is None or task is None or json.loads(owner['plan']).get('school_duplicate_of')
+                or not task['source'].startswith('Agent建议:' + owner['id'] + '\n')
+                or task['child'] != next((p['name'] for p in self.profiles(c) if p['id'] == row['child_id']), None)
+                or {e['ref'] for e in json.loads(row['evidence'])} - {e['ref'] for e in json.loads(owner['evidence'])}):
+            raise AgentError('同一作业的主项尚未加入或已变化，这一提交步骤保留待核，避免重复。', 409, 'school_submission_owner')
+        plan['school_duplicate_of'] = owner['id']
+        for key in ('school_learning', 'school_goal_id'): plan.pop(key, None)
+        c.execute('UPDATE agent_items SET state=?,task_id=?,plan=?,updated=? WHERE id=?', ('accepted', owner['task_id'], _json(plan), _now().isoformat(), row['id']))
+        return dict(ok=True, state='accepted', task_id=owner['task_id'], deduplicated=True)
+
     def act(self, obj, *, school_auto=False):
         if not isinstance(obj, dict) or set(obj) - {'id', 'action', 'title', 'due', 'body', 'action_text',
                                                      'review_on', 'estimated_minutes', 'expected_updated','advice','school_new'}:
@@ -2163,6 +2184,8 @@ class Store:
                 if row['kind'] == 'school':
                     history_reused=_history_reuse(self,c,row,allow_uncertain=not school_auto)
                     if history_reused is not None: return history_reused
+                    if school_auto and (json.loads(row['plan']).get('school_task') or {}).get('submission_of'):
+                        return self._reuse_school_submission(c, row)
                     reused = self._reuse_school(c, row)
                     if reused is not None: return reused
                 task_id = 'AGENT-' + _hash(ident)[:24]
@@ -7601,6 +7624,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     title_quotes=[p['title_quote'].strip() if isinstance(p,dict) and isinstance(p.get('title_quote'),str) else '' for p in result['proposals']]
     title_refs=[{q.get('ref') for q in p['evidence'] if isinstance(q,dict)} if isinstance(p,dict) and isinstance(p.get('evidence'),list) else set()
                 for p in result['proposals']]
+    own_steps={};quote_of={}  # per selected item: the other quotes proven its own submission step, its own quote
     for index,proposal in enumerate(result['proposals']):
         native_action=None
         action_anchor={};history_uncertain=False;revision=None
@@ -7877,6 +7901,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
                 # Another action quoted from this same original lends no requirement or range to this item's title or summary.
                 steps=_school_own_steps(dated_quote,[cited_evidence[0]['text']],title_quotes[:index]+title_quotes[index+1:])
+                own_steps[id(item)]=steps
                 siblings=[q for i,q in enumerate(title_quotes) if i!=index and q not in steps and not _school_own_submission_sibling(brief,result['proposals'][i])]
                 brief['goal']=_school_sibling_free_goal(dated_quote,cited_evidence[0]['text'],brief['goal'],siblings)
                 brief['title']=_school_sibling_free_title(dated_quote,cited_evidence[0]['text'],brief['title'],siblings)
@@ -7918,6 +7943,7 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                         previous_goal=base['goal'],task_id=base['task_id'],ref=revision[1],quote=revision[2]))
 
         if item not in output: output.append(item)
+        quote_of.setdefault(id(item),title_quotes[index])
     if routing:
         if native_assigned!={a['id'] for a in native_actions}:
             raise AgentError('学校独立要求有遗漏，整批保留未处理，待原后台重试',code='school_action_coverage')
@@ -7943,7 +7969,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             owner=next((o for o in activities if o['plan']['school_task'].get('submission')
                 and cited&{e['ref'] for e in o['evidence']}
                 and _school_submission_step(brief,o['plan']['school_task'])),None)
-            if owner:
+            if owner and quote_of.get(id(item)) in own_steps.get(id(owner),()):
+                # The step lies in the owner's own sentence and submits its own work (_school_own_steps): once the owner is
+                # accepted, its task holds this step as the existing duplicate path does (Store._reuse_school_submission).
+                brief.update(state='ready',submission_of=dict(title=owner['title'],body=owner['body'],due=owner.get('due') or ''),
+                             reason='同一通知的“'+owner['title'][:40]+'”已含这一提交步骤，随该项加入；原文保留。')
+            elif owner:
                 brief.update(state='review',reason='同一通知的“'+owner['title'][:40]+'”已含提交要求；若是同一件事请忽略，另有要求再加入，避免重复。')
     return output+original_pointers
 
@@ -9041,6 +9072,10 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
                 expected=_json(plan);brief.update(state='review',reason=str(error));plan['school_task']=brief
                 with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected))
                 return created,failed
+            if isinstance(error,AgentError) and error.code=='school_submission_owner':
+                expected=_json(plan);brief.pop('submission_of',None);brief.update(state='review',reason=str(error));plan['school_task']=brief
+                with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected))
+                return created,failed
             if isinstance(error,AgentError) and error.status==409 and (brief.get('change') not in ('append','same') or error.code=='school_source_paused'): return created,failed
             expected=_json(plan);brief.update(state='review',reason=str(error) if brief.get('change') in ('append','same') else '自动收集未成功，请核对事项后再加入。');plan['school_task']=brief
             with store._db() as c:
@@ -9058,6 +9093,7 @@ def _refresh_school(app, store, now, budget):
     used=failed=created=paged=0
     with store._db() as c:
         pending=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id")]
+    pending.sort(key=lambda r:bool((json.loads(r['plan']).get('school_task') or {}).get('submission_of')))  # a step after its owner
     for row in pending:
         with store._db() as c:
             current_row=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()

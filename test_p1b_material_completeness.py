@@ -1,5 +1,6 @@
 """P1b: an original's requirements keep their own date roles and the same homework's submission (fictional development examples only)."""
 import datetime as dt
+import json
 import unittest
 from unittest.mock import patch
 
@@ -99,7 +100,9 @@ class SameHomeworkFlowTests(test_agent.AgentTests):
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
                                 school_goals=[],as_of=self.now.date().isoformat())
-        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
+        # The step is proven this reading's own submission: it is not another pending card but joins the reading once accepted.
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','ready'])
+        self.assertEqual(items[1]['plan']['school_task']['submission_of'],dict(title=items[0]['title'],body=items[0]['body'],due=due))
         for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,items[0]['body'])
         key='synthetic-p1b-recording-step';fp=self.store._job(key,dict(text=text),self.now)
         self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
@@ -112,6 +115,13 @@ class SameHomeworkFlowTests(test_agent.AgentTests):
             actions=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
         self.assertEqual(len(actions),1)
         for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,actions[0])
+        with self.store._db() as c:
+            rows=[dict(r) for r in c.execute('SELECT * FROM agent_items WHERE job_id=? ORDER BY title',(key,))]
+        reading=next(r for r in rows if r['title']==items[0]['title']);step=next(r for r in rows if r is not reading)
+        # No pending card stays on any day or after reopen; the step row keeps its own evidence and points at the reading.
+        self.assertEqual(sorted(r['state'] for r in rows),['accepted','accepted'])
+        self.assertEqual((step['task_id'],json.loads(step['plan']).get('school_duplicate_of')),(reading['task_id'],reading['id']))
+        self.assertEqual(json.loads(step['evidence']),json.loads(reading['evidence']))
 
     def test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen(self):
         from test_agent import school_proposal
@@ -138,6 +148,9 @@ class SameHomeworkFlowTests(test_agent.AgentTests):
         with self.app.connect() as c:
             bodies=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
         self.assertFalse([b for b in bodies if 'Unit 5' in b and 'Unit 4' in b],bodies)  # the reading never carries the other upload
+        with self.store._db() as c:
+            plans=[json.loads(r['plan']) for r in c.execute('SELECT plan FROM agent_items WHERE job_id=?',(key,))]
+        self.assertFalse([p for p in plans if p.get('school_duplicate_of') or p['school_task'].get('submission_of')])  # another object
 
 
 import json
