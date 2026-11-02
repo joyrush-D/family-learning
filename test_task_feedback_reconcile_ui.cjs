@@ -12,7 +12,7 @@ async function demo(){
  return {url,stop:async()=>{if(proc.exitCode!==null)return;const done=once(proc,'exit');proc.kill('SIGINT');await Promise.race([done,delay(2000)]);if(proc.exitCode===null){proc.kill('SIGKILL');await done}}};
 }
 (async()=>{let server,browser;try{
- server=await demo();browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
+ server=await demo();browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL===''?{}:{channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'})});
  for(const width of [360,1440]){
   const state=await(await fetch(server.url+'api/state')).json(),child=state.children[0].name;
   const made=await fetch(server.url+'api/task/new',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({request_key:randomUUID(),child,title:`虚构重试作业 ${width}`,category:'homework',box:'inbox',due:state.today,action:'核对作答'})});

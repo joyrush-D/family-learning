@@ -348,7 +348,7 @@ async function splitPdfFlow(p,host,width){
  await p.locator('#taskDialog [data-close="taskDialog"]').click();
 }
 (async()=>{let host,browser,lastPage;try{
- host=await server();browser=await chromium.launch({headless:true,channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'});
+ host=await server();browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL===''?{}:{channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'})});
  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWF8AAAAASUVORK5CYII=','base64');
  for(const width of [360,1440]){
   let state=await(await fetch(host.url+'api/state')).json();const child=state.children[0].name,title='虚构作业核对 '+width;

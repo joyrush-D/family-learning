@@ -14,7 +14,7 @@ let proc,browser,last,report={source:'committed-candidate-acceptance',product_mo
  let logs='';proc.stdout.on('data',b=>logs+=b);proc.stderr.on('data',b=>logs+=b);
  const base=`http://127.0.0.1:${port}/`,read=async()=>{const r=await fetch(base+'api/state');assert(r.ok);return r.json()};
  await until(async()=>{try{return(await fetch(base)).ok}catch{return false}},'synthetic demo listening');
- browser=await chromium.launch({channel:process.env.PLAYWRIGHT_CHANNEL||'chrome',headless:true});
+ browser=await chromium.launch({...(process.env.PLAYWRIGHT_CHANNEL===''?{}:{channel:process.env.PLAYWRIGHT_CHANNEL||'chrome'}),headless:true});
  for(const width of [360,1440]){
   let state=await read(),child=state.children[0].name;
   const post=async(p,body)=>{const r=await fetch(base+p,{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify(body)});const v=await r.json();assert.equal(r.status,200,JSON.stringify(v));return v};
