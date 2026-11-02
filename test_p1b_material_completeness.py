@@ -242,6 +242,20 @@ class UncertaintyScopeValidatorTests(unittest.TestCase):
         self.assertEqual(agent._school_doubt_kind(U_RES,'reading'),'reading')
 
 
+class DoubtViewTests(unittest.TestCase):
+    def test_only_its_own_lines_and_unscoped_doubts_reach_an_action(self):
+        a=dict(ref='message:s:1',upload_ids=['u1'],text='甲',requirement=True);b=dict(a,text='乙');other=dict(a,upload_ids=['u2'])
+        gap='本原件后续第4页仍待整理：处理范围'  # a deferred page group is never a scoped doubt
+        value=dict(uncertainties=['甲的朗读音频未附',U_READ,gap],doubt_scopes=[
+            dict(ref='message:s:1',upload_id='u1',pages=[1],uncertainty='甲的朗读音频未附',requirements=['甲'],kind='resource'),
+            dict(ref='message:s:1',upload_id='u1',pages=[1],uncertainty=U_READ,requirements=['乙'],kind='reading')])
+        view=agent._school_doubt_view
+        self.assertEqual((view(value,[a])['uncertainties'],view(value,[a])['resource_uncertainties']),([gap],['甲的朗读音频未附']))
+        self.assertEqual(view(value,[b])['uncertainties'],[U_READ,gap])
+        self.assertEqual(view(value,[other])['uncertainties'],[gap])  # the same words in another upload are not its line
+        self.assertEqual(view(value,[])['uncertainties'],[gap])
+        old=dict(uncertainties=['甲的朗读音频未附']);self.assertIs(view(old,[a]),old)  # an old receipt is unchanged
+
 class ScopedDoubtImageChainTests(_ScopeBase):
     """C on the real image-original chain (save_upload -> attach -> reader receipt -> saved draft -> original actions ->
     Store -> day list -> reopen): one original, three requirement lines, two doubts (fictional; controlled model stubs)."""
@@ -429,6 +443,7 @@ def load_tests(loader,tests,pattern):
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
         suite.addTest(OriginalRoleChainTests(name))
     suite.addTests(loader.loadTestsFromTestCase(UncertaintyScopeValidatorTests))
+    suite.addTests(loader.loadTestsFromTestCase(DoubtViewTests))
     for name in ('test_each_doubt_holds_only_the_requirement_it_names','test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide',
                  'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide'):
         suite.addTest(ScopedDoubtImageChainTests(name))
