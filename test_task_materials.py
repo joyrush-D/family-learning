@@ -1,10 +1,15 @@
 """Synthetic read-only material listing for any same-child task and the PDF page-group card; no model, render or service."""
+from http.client import HTTPConnection
+import json
+import socket
+import threading
 from types import SimpleNamespace
+from urllib.parse import quote
 import unittest
 from unittest.mock import patch
 
 import app
-from test_print_http import PRINTER
+from test_print_http import PNG, PRINTER
 import test_homework_print_scope as scope  # module import: its own tests are not collected twice here
 
 HomeworkPrintScopeTests=scope.HomeworkPrintScopeTests
@@ -100,6 +105,75 @@ class PdfMaterialCardTests(unittest.TestCase):
              patch('family_pdf_material.view',side_effect=RuntimeError):
             states=app.homework_material_states(None,context)
         self.assertEqual({k:v['label'] for k,v in states.items()},{'u-pdf':'原件已保存','u-img':'原件已保存'})
+
+
+class UploadReceiptTests(unittest.TestCase):
+    """The upload request key: a retry after a lost receipt reads the stored original back; never matched by name or hash alone."""
+    setUp=HomeworkPrintScopeTests.setUp
+    tearDown=HomeworkPrintScopeTests.tearDown
+    new_task=HomeworkPrintScopeTests.new_task
+    upload=HomeworkPrintScopeTests.upload
+    feedback=HomeworkPrintScopeTests.feedback
+
+    def post(self,body,name='synthetic-photo.png',key=None,declared=None):
+        conn=HTTPConnection('127.0.0.1',self.server.server_port,timeout=10)
+        try:
+            conn.putrequest('POST','/api/upload')
+            headers={'X-Family-Token':app.TOKEN,'X-File-Name':quote(name),'Content-Type':'application/octet-stream',
+                     'Content-Length':str(len(body) if declared is None else declared),**({'X-Request-Key':key} if key is not None else {})}
+            for header,value in headers.items(): conn.putheader(header,value)
+            conn.endheaders();conn.send(body)
+            if declared is not None: conn.sock.shutdown(socket.SHUT_WR)  # the body ends before its declared length
+            response=conn.getresponse();return response.status,json.loads(response.read() or b'{}')
+        finally: conn.close()
+
+    def uploads(self):
+        with app.connect_read_only() as c: return [dict(r) for r in c.execute('SELECT id,name,size,mime,request_key FROM uploads ORDER BY id')]
+
+    def stored(self): return sorted(p.name for p in (app.DATA/'uploads').iterdir() if not p.name.startswith('.'))
+
+    def test_a_lost_receipt_reads_the_stored_original_back_and_another_selection_is_another_original(self):
+        before=len(self.uploads());key='synthetic-upload-key-0001'
+        status,first=self.post(PNG,key=key)
+        self.assertEqual((status,first['attachment']['replayed']),(200,False),first)
+        rows,files=self.uploads(),self.stored()
+        status,again=self.post(PNG,key=key)  # the client never saw the first receipt
+        self.assertEqual((status,again['attachment']['id'],again['attachment']['replayed']),(200,first['attachment']['id'],True))
+        self.assertEqual((self.uploads(),self.stored(),len(rows)),(rows,files,before+1))
+        row=next(r for r in rows if r['id']==first['attachment']['id'])
+        self.assertEqual((row['name'],row['size'],row['mime'],row['request_key']),('synthetic-photo.png',len(PNG),'image/png',key))
+        self.assertEqual((app.DATA/'uploads'/row['id']).read_bytes(),PNG)
+        ids={first['attachment']['id']}|{self.post(PNG,key='synthetic-upload-key-0002')[1]['attachment']['id']}|{self.post(PNG)[1]['attachment']['id'] for _ in range(2)}
+        self.assertEqual((len(ids),len(self.uploads())),(4,before+4))  # same name and bytes: other key or no key is another original
+        self.assertEqual(sum(r['request_key'] is None for r in self.uploads()),before+2)
+
+    def test_the_same_key_with_other_bytes_or_name_or_a_bad_key_writes_nothing(self):
+        key='synthetic-upload-key-0003';_,first=self.post(PNG,key=key);rows,files=self.uploads(),self.stored()
+        for body,name in [(PNG+b'synthetic-other-bytes','synthetic-photo.png'),(PNG,'synthetic-renamed.png')]:
+            status,value=self.post(body,name=name,key=key)
+            self.assertEqual((status,value.get('code')),(409,'upload_key_conflict'),value)
+        status,_=self.post(PNG,key='not a key!')
+        self.assertEqual((status,self.uploads(),self.stored()),(400,rows,files))
+        self.assertEqual((app.DATA/'uploads'/first['attachment']['id']).read_bytes(),PNG)
+
+    def test_a_failure_before_storing_then_the_same_key_stores_exactly_one_original(self):
+        key='synthetic-upload-key-0004';rows,files=self.uploads(),self.stored()
+        status,_=self.post(PNG[:12],key=key,declared=len(PNG))
+        self.assertEqual((status,self.uploads(),self.stored()),(400,rows,files))
+        status,value=self.post(PNG,key=key)
+        self.assertEqual((status,value['attachment']['replayed'],len(self.uploads())),(200,False,len(rows)+1))
+
+    def test_concurrent_requests_with_one_key_store_at_most_one_original(self):
+        before=len(self.uploads());same=[];mixed=[]
+        def run(target,body,key): target.append(self.post(body,key=key))
+        threads=[threading.Thread(target=run,args=(same,PNG,'synthetic-upload-key-0005')) for _ in range(6)]
+        threads+=[threading.Thread(target=run,args=(mixed,body,'synthetic-upload-key-0006')) for body in (PNG,PNG+b'synthetic-x')*3]
+        for t in threads: t.start()
+        for t in threads: t.join()
+        self.assertEqual(({s for s,_ in same},len({v['attachment']['id'] for _,v in same})),({200},1))
+        won={v['attachment']['id'] for s,v in mixed if s==200}
+        self.assertEqual((len(won),{s for s,_ in mixed}<={200,409}),(1,True),mixed)
+        self.assertEqual(len(self.uploads()),before+2)
 
 
 del HomeworkPrintScopeTests  # reused methods only; the scope suite runs in its own module
