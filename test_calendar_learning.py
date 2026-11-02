@@ -249,7 +249,7 @@ class CalendarLearningTests(unittest.TestCase):
 
     def test_z_a_broken_calendar_row_keeps_the_list(self):
         with sqlite3.connect(app.DB) as c:
-            c.execute("INSERT INTO calendar_events SELECT 'f'||substr(id,2),version,child_ids,title,category,'2026-10-27',start_time,end_time,location,note,status,'none','',last_request_hash,created,updated,'[]','[]',"
+            c.execute("INSERT INTO calendar_events(id,version,child_ids,title,category,day,start_time,end_time,location,note,status,repeat,until,last_request_hash,created,updated,repeat_days,extra_times,occurrence) SELECT 'f'||substr(id,2),version,child_ids,title,category,'2026-10-27',start_time,end_time,location,note,status,'none','',last_request_hash,created,updated,'[]','[]',"
                       "json_object('series_id','" + 'e' * 32 + "','day','2026-10-27','slot_id','','original',json_object(),'history',json_array()) FROM calendar_events WHERE id=?", (HAIRCUT,))
         try:
             view = app.day_view('child-1', '2026-10-28')

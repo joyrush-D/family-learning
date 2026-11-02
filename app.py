@@ -573,7 +573,8 @@ def record_review_context(c,record):
     row=dict(c.execute('SELECT * FROM records WHERE id=?',(record['id'],)).fetchone())
     task=None
     if row.get('linked_task_id'):
-        t=next((t for t in load_tasks() if t.get('id')==row['linked_task_id']),None) if 'load_tasks' in globals() else None
+        try: t=next((t for t in tasks(c) if t.get('id')==row['linked_task_id']),None)
+        except (OSError,ValueError,KeyError,sqlite3.Error): t=None  # the link stays; only its title is unread
         task=dict(id=row['linked_task_id'],title=(t or {}).get('title') or '原作业')
     reviews=[]
     if 'review' in {r[1] for r in c.execute('PRAGMA table_info(calendar_events)')}:
