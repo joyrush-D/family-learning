@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 import app
+from test_print_http import PRINTER
 import test_homework_print_scope as scope  # module import: its own tests are not collected twice here
 
 HomeworkPrintScopeTests=scope.HomeworkPrintScopeTests
@@ -38,7 +39,7 @@ class TaskMaterialListingTests(unittest.TestCase):
         self.assertEqual((status,[f['source']['id'] for f in value['files']],value['task']['child']),(200,[foreign],'示例乙'))
         # Printing and the parent reference keep the homework-only gate: a notice is never made homework.
         status,value=self.request('POST','/api/print/homework',dict(task_id=notice['id'],request_key='synthetic-notice-print',
-                                  question_sources=[self.source(form)],question_confirmed=True,printer='synthetic',confirmed_basis={}))
+                                  question_sources=[self.source(form)],question_confirmed=True,printer=PRINTER['name'],confirmed_basis={}))
         self.assertEqual((status,value.get('code')),(403,'review_source_not_allowed'),value)
         with app.connect_read_only() as c:
             with self.assertRaises(app.family_print.PrintError) as refused: app.homework_material_context(c,notice['id'])
@@ -46,7 +47,7 @@ class TaskMaterialListingTests(unittest.TestCase):
         self.assertEqual(self.dump(),before)  # listing writes nothing
 
     def test_an_oral_item_without_attachment_shows_no_invented_original(self):
-        oral=self.todo('示例甲','synthetic-oral')
+        oral=self.todo('示例甲','synthetic-oral-item')
         status,value=self.materials(oral)
         self.assertEqual((status,value['files'],value['school_error']),(200,[],''))
         status,value=self.request('GET','/api/print/homework/materials?task_id=missing-task')
@@ -99,6 +100,9 @@ class PdfMaterialCardTests(unittest.TestCase):
              patch('family_pdf_material.view',side_effect=RuntimeError):
             states=app.homework_material_states(None,context)
         self.assertEqual({k:v['label'] for k,v in states.items()},{'u-pdf':'原件已保存','u-img':'原件已保存'})
+
+
+del HomeworkPrintScopeTests  # reused methods only; the scope suite runs in its own module
 
 
 if __name__ == '__main__':
