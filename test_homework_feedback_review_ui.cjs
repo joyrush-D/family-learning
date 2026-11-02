@@ -477,7 +477,9 @@ async function splitPdfFlow(p,host,width){
    }
    const printIdsBeforeChecks=(await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort();
 
-  const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form]').first();await wrong.locator(':scope > summary').click();
+  // The old form belongs to this case's saved original answer; the direct (no-feedback) panel is a different form and never its stand-in.
+  const answerId=(await (await fetch(host.url+'api/state')).json()).records.find(r=>r.source==='事项:'+id&&!r.followup_kind&&!r.related_record_id)?.id;assert(answerId,'the saved original answer is the wrong item basis');
+  const wrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+answerId+'"]');await wrong.locator(':scope > summary').click();
   await wrong.locator('[data-wrong-field="label"]').fill('第2题');await wrong.locator('[data-wrong-field="answer"]').fill('C');await wrong.locator('[data-wrong-field="correction"]').fill('B');
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'unsaved wrong answer stays with homework');

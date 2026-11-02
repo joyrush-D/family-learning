@@ -9,7 +9,8 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 async function groveShow(p,id){const d=p.locator('#groveDetail'),action=d.locator(`[data-task="${id}"]`).first();if(await action.isVisible().catch(()=>false))return d;const row=p.locator(`article.grove-row[data-query-target="task:${id}"]`).first();if(!await row.isVisible().catch(()=>false)){const back=p.locator('[data-grove-back]:visible').first();if(await back.count()){await back.click();await row.waitFor({state:'visible'})}}await row.locator('[data-grove-open]').click();await action.waitFor();return d}
 // The same task's current Grove detail without pressing its action.
 async function groveEntry(p,id){return groveShow(p,id)}
-async function openFromGrove(p,id){const d=await groveShow(p,id);await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
+// Off the home list (e.g. the calendar) the page's own visible task action is the real entry; the home list goes through its Grove row/detail.
+async function openFromGrove(p,id){const page=await p.locator('body').getAttribute('data-page'),entry=p.locator(`[data-task="${id}"]:visible`).first();if(page!=='home'&&await entry.count())await entry.click();else{const d=await groveShow(p,id);await d.locator(`[data-task="${id}"]`).first().click()}await p.locator('#taskDialog[open]').waitFor()}
 async function eventually(check,label,timeout=12000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
 async function demoServer(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
