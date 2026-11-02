@@ -4805,12 +4805,24 @@ def school_original_requirements(store,c,row):
         plan=json.loads(row['plan']);brief=plan.get('school_task') or {};action=plan.get('school_original_action') or {}
         requirements=tuple(r for r in action.get('requirements') or () if isinstance(r,dict) and isinstance(r.get('text'),str) and r['text'].strip())
         recorded=(brief.get('material_evidence') or {}).get('fingerprint','')
-        if not requirements or not recorded or action.get('condition_changes') or not _school_active(store,c,row):return ()
+        recorded_pdf=(brief.get('pdf_evidence') or {}).get('fingerprint','')
+        if not requirements or not (recorded or recorded_pdf) or action.get('condition_changes') or not _school_active(store,c,row):return ()
         evidence,_=_school_material(store,c,row)
         if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return ()
         if not {r.get('ref') for r in requirements}<={e['ref'] for e in evidence}:return ()
-        material=_school_drafts(store,c,row)
-        if not material or material.get('fingerprint')!=recorded:return ()
+        if recorded:
+            material=_school_drafts(store,c,row)
+            if not material or material.get('fingerprint')!=recorded:return ()
+        if recorded_pdf:
+            # A read PDF/layout-Word original stands by the same current proof both acceptance paths recheck (_check_school_page):
+            # the same binding, bytes, linkage and validated page groups, no reading progress mixed into its requirements, and
+            # every saved requirement still one of that current original's own requirement lines.
+            documents=_school_pdf(store,c,row);current=_pdf_evidence(documents) or {}
+            if (current.get('fingerprint')!=recorded_pdf or current.get('reading_progress_in_requirements')
+                    or current.get('reading_progress_in_uncertainties')):return ()
+            lines={(d['upload_id'],t.strip()) for d in documents for b in d['batches'] for o in b['draft'].get('originals',[])
+                   for t in o.get('requirements',[]) if isinstance(t,str)}
+            if not all(any((u,r['text'].strip()) in lines for u in r.get('upload_ids') or ()) for r in requirements):return ()
     except (AgentError,ValueError,KeyError,TypeError,AttributeError):return ()
     return requirements
 
