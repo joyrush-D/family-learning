@@ -562,6 +562,27 @@ class WrongReviewHTTPTest(unittest.TestCase):
         status, out = self.request('/api/wrong/save', body)
         self.assertEqual((status, out.get('count')), (200, 2), out)
 
+    def test_direct_wrong_with_keyed_photo_upload_survives_lost_receipts(self):
+        """网页直接分支的原样请求：照片带 P2 X-Request-Key，回执丢失后同 key 重传仍是同一原件；同 key 错题重放只存一条。"""
+        task = app.new_task(dict(child='示例甲', title='虚构整页错题作业', category='homework'))
+        headers = {'X-Family-Token': app.TOKEN, 'X-File-Name': quote('虚构整页.png'), 'X-Request-Key': uuid.uuid4().hex,
+                   'Content-Type': 'application/octet-stream'}
+        ids = []
+        for _ in range(2):
+            status, out = self.request('/api/upload', raw={'body': PNG, 'headers': headers})
+            self.assertEqual(status, 200, out)
+            ids.append(out['attachment']['id'])
+        self.assertEqual(ids[0], ids[1], 'a retried keyed upload returns the one saved original')
+        body = dict(child='示例甲', day='2026-11-02', subject='', task_id=task['id'], request_key=uuid.uuid4().hex,
+                    items=[dict(attachment=ids[0], label='第5题', text='', answer='', correction='', note='')])
+        for existing in (False, True):
+            status, saved = self.request('/api/wrong/save', body)
+            self.assertEqual((status, saved['saved'][0]['existing']), (200, existing), saved)
+        state = self.request('/api/state')[1]
+        self.assertEqual([(r['linked_task_id'], r['related_record_id'], r['attachments']) for r in state['records']],
+                         [(task['id'], None, [ids[0]])])
+        self.assertEqual(len([u for u in state['uploads'] if u['name'] == '虚构整页.png']), 1)
+
     def test_requires_parent_token(self):
         status, _ = self.request('/api/wrong/annotate',
                                  dict(child='示例甲', attachments=[]),
