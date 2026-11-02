@@ -1213,7 +1213,7 @@ def _short_change(old_text,new_text,shifts=()):
 
 
 def _role_days(agenda,quote,sent):
-    """Each date role's days for one item: its saved due by its meaning (老师要求交回、老师检查; any other due is the work's
+    """Each date role's days for one item: its saved due by its meaning (交回、检查; any other due is the work's
     own day), its saved completion or earlier submission, and every day its own quoted clauses tie to a predicate of that
     role (明早交给数学老师 is the handback's, 今晚完成 the work's). A clause dates only the role its own predicate names: one whose
     predicate is none of them (改到下周一、明早仍交… where no predicate is read) or is negated (今晚不用填写) dates nothing, and
@@ -1733,7 +1733,8 @@ def _one_affair_versions(c,items,store):
 # order and subject filing the home list used, now computed here instead of in each client. Read only: it never collects,
 # calls a model or writes, and every date, subject and role it shows is the enriched metadata above, never re-read from words.
 SUBJECT_GENERAL, SUBJECT_UNKNOWN = '综合事务', '科目待定'
-DUE_LABELS = {'event': '活动日期', 'handback': '老师要求交回', 'inspection': '老师检查', 'arranged': '安排日'}
+# A role names only its own action: who hands in or checks stays in the original words, never added by the label.
+DUE_LABELS = {'event': '活动日期', 'handback': '交回', 'inspection': '检查', 'arranged': '安排日'}
 CORRECTION_KINDS = ('订正', '复测', '独立复测')
 # How a row relates to the viewed day, from its saved dates only: 今天 (done/planned/due that day), 已过期限, 以后 (a later
 # date), 之前安排 (an earlier plan still open) and 日期未写明 (no exact date; never guessed, never counted as today).
