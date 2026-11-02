@@ -385,6 +385,8 @@ def state(app, obj, root=None):
     settle_basis(app, record)
     with app.connect() as c:
         now = record_hash(record); ev = _evidence(c, record['child_id'])
+        try: pack = load_pack(root)
+        except (TaxonomyError, OSError, ValueError): pack = None
         voids = {r[0]: {'state': r[1], 'question_ids': json.loads(r[2])} for r in c.execute(
             'SELECT diagnosis_id,state,question_ids FROM topic_basis_voids WHERE child_id=? AND record_id=?', (record['child_id'], str(record['id'])))}
         diags = []
@@ -392,6 +394,9 @@ def state(app, obj, root=None):
             items = [dict(r) for r in c.execute('SELECT seq,topic_id,qid,kind,answer,verdict,engine_result,help FROM topic_diagnosis_items WHERE diagnosis_id=? ORDER BY seq', (d['id'],))]
             retries = [dict(r, deeptutor=json.loads(r['deeptutor'])) for r in c.execute(
                 'SELECT id,topic_id,qid,answer,taxonomy_verdict,deeptutor,outcome,followup_record_id,created_at FROM topic_retries WHERE diagnosis_id=? ORDER BY id', (d['id'],))]
+            for r in retries:  # read-only overlay; the saved outcome stays in stored_outcome and in the row
+                shown, note = evidence_view(r, pack if d['pack_sha'] == TAXONOMY_SHA else None)
+                if note: r.update(stored_outcome=r['outcome'], outcome=shown, evidence_note=note)
             shown, offers = [], []
             for qid, mode in c.execute('SELECT qid,mode FROM topic_exposures WHERE diagnosis_id=? ORDER BY id', (d['id'],)):
                 (offers if mode == 'retry' else shown).append(qid)
@@ -544,6 +549,37 @@ def _dt_question(q):
         'question_id': q['id'], 'prompt': q.get('prompt', ''), 'question_type': kind, 'expected_answer': str(q['answer'])}
 
 
+def unit_doubt(q, answer):
+    """Why the unit a child wrote leaves a numeric pass unproven, or ''. The upstream judge and DeepTutor both compare the
+    number and let a unit the standard lacks pass, so two agreeing booleans never checked it. family_llm's exact reading
+    (_ref_values/_ref_compare: whole plain decimals, metric shifts, no rounding) decides: a written unit stands where it equals
+    the standard's after conversion, or where the standard is bare and the question itself asks for that very unit (「多少元」
+    for 4.3元). Anything else is for a parent to check, never judged wrong here; an answer or standard this cannot read, or an
+    answer written without a unit, keeps the components' own result."""
+    import family_llm
+    mine, theirs = family_llm._ref_values(answer), family_llm._ref_values(str((q or {}).get('answer') or ''))
+    if not mine or not theirs or not any(v[3] for v in mine) or family_llm._ref_compare(mine, theirs) == 'same': return ''
+    prompt = str(q.get('prompt') or '')
+    asked = lambda unit: re.search('(?:多少|几)' + re.escape(unit) + r'(?![^\W\d_])', prompt) is not None
+    if len(mine) == len(theirs) and all(not t[3] and m[:3] == t[:3] and (not m[3] or asked(m[3])) for m, t in zip(mine, theirs)): return ''
+    return '孩子原答写的单位“%s”和标准答案、题目所问都对不上；两项自动核对只比了数字，这次结果待家长核对，不算独立答对。' % '、'.join(dict.fromkeys(v[3] for v in mine if v[3]))
+
+
+def evidence_view(row, pack):
+    """Read only: (outcome, note) one saved new-question attempt counts as now, the same for the panel, list and progress.
+    A pass both components agreed on whose written unit is in doubt (unit_doubt) counts as parent_check with the reason; the
+    stored row, raw answer, both component verdicts and any record it wrote stay as saved. No pack or another question: as saved."""
+    outcome = row.get('outcome')
+    if outcome not in ('independent_correct', 'parent_check') or row.get('taxonomy_verdict') != 'correct' or not pack: return outcome, ''
+    dt = row.get('deeptutor')
+    try: dt = json.loads(dt or '{}') if isinstance(dt, str) else dt or {}
+    except ValueError: return outcome, ''
+    q = question(pack, row.get('qid'))
+    if not isinstance(dt, dict) or dt.get('is_correct') is not True or q is None or q.get('topicId') != row.get('topic_id'): return outcome, ''
+    doubt = unit_doubt(q, row.get('answer'))
+    return ('parent_check', doubt) if doubt else (outcome, '')
+
+
 def _same_retry(prev, mine, record):
     """提交编号绑定 原错题/诊断/题号/原答/上游判定 与当时的原错题版本。"""
     if (prev['record_id'], prev['diagnosis_id'], prev['qid'], prev['answer'], prev['taxonomy_verdict']) != mine:
@@ -587,24 +623,27 @@ def retry_views(conn, records, profile_ids, root=None):
         known = bool(q and topic and d and d['pack_sha'] == TAXONOMY_SHA and wrong is not None and q.get('topicId') == a['topic_id']
                      and a['taxonomy_verdict'] in ('correct', 'wrong') and isinstance(dt.get('is_correct'), bool))
         same = known and (rec.get('note') or '').strip() == _retry_note(q, topic, a['answer'], a['taxonomy_verdict'], dt['is_correct']).strip()
+        doubt = evidence_view(dict(a), pack)[1] if known and d['pack_sha'] == TAXONOMY_SHA else ''
         # Only a changed original or a recorded void proves a correction; an unreadable original proves neither.
         voided = 'topic_basis_voids' in tables and conn.execute('SELECT 1 FROM topic_basis_voids WHERE diagnosis_id=?', (a['diagnosis_id'],)).fetchone() is not None
         stale = voided or (wrong is not None and a['record_hash'] != record_hash({k: wrong[k] for k in wrong.keys()} | dict(child_id=child_id)))
         missing = wrong is None and not stale
         lines = ([['题目', f"{q.get('prompt', '')}（{REVIEW_STATUS}）"]] if known else []) + [['孩子原答', a['answer']],
-                 ['当时结果' if stale or wrong is None else '本次结果', ('对' if correct else '错') + ' · ' + (rec.get('assistance') or '独立作答') + ' · 题库核对与复核一致']]
+                 ['当时结果' if stale or wrong is None or doubt else '本次结果', ('对' if correct else '错') + ' · ' + (rec.get('assistance') or '独立作答') + ' · 题库核对与复核一致']]
         lines += ([['知识点', topic.get('name', '')]] if known else []) + ([['原错题', wrong['title'] or '未写标题']] if wrong is not None else [])
         status = (['原错题当前读不到，不能确认这次结果是否仍对应它；下面保留这条记录原文和当时保存的结果。'] if missing else
                   ['原错题当前读不到；下面保留这条记录的原文。'] if wrong is None else [] if known else ['知识包当前读不到或版本不同，题目依据不明；下面保留这条记录的原文。'])
         if known and not same: status.append('这条记录保存后改过文字；下面保留当前原文。')
         if stale: status.append('原错题之后已更正，这次结果只作历史，不算当前进展。')
+        elif doubt: status.append(doubt)
         verdicts = {'correct': '对', 'wrong': '错'}
         trace = ' · '.join(x for x in [f"题号{a['qid']}", a['topic_id'], f"知识包{(d['pack_sha'] if d else '')[:7] or '未知'}",
                                        f"判定组件{str(dt.get('deeptutor_sha') or '')[:7]}" if dt.get('deeptutor_sha') else '',
                                        f"题库核对{verdicts.get(a['taxonomy_verdict'], '未知')}、复核{'对' if dt.get('is_correct') is True else '错' if dt.get('is_correct') is False else '未知'}"] if x)
-        out[rid] = dict(state='history' if stale else 'current' if same else 'unclear' if not known else 'edited', lines=lines,
+        out[rid] = dict(state='history' if stale or doubt else 'current' if same else 'unclear' if not known else 'edited', lines=lines, review=bool(doubt and not stale),
                         status=' '.join(status), show_note=not same, wrong_id=a['record_id'] if wrong is not None else None, trace=trace,
                         next='需要时按更正后的错题在原错题卡重新诊断。' if stale else
+                        '请家长对照题目和孩子原答核对单位；核对前这次结果只作待核历史，不算当前进展。' if doubt else
                         '原错题恢复可读前，这次结果只按当时保存的原文看待，不算当前进展。' if missing else
                         '一次答对还不等于掌握；之后再独立做一道没见过的同类题。' if correct else '这题还没做对；回原错题卡看说明，再继续诊断或另试一道新题。')
     return out
@@ -649,6 +688,7 @@ def retry(app, obj, root=None):
         agreed = isinstance(dt['is_correct'], bool) and (obj['verdict'] == 'correct') == dt['is_correct']
         outcome = ('not_independent' if dt['independent'] is not True else
                    'parent_check' if not agreed else 'independent_correct' if dt['is_correct'] else 'independent_wrong')
+        if outcome == 'independent_correct' and unit_doubt(q, text): outcome = 'parent_check'  # both raw verdicts are still saved
     with app.connect() as c:
         c.execute('BEGIN IMMEDIATE')
         record = wrong_record(app, c, obj['child_id'], obj['record_id'])
