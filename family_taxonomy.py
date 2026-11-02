@@ -833,7 +833,8 @@ def retry(app, obj, root=None):
         prev = c.execute('SELECT * FROM topic_retries WHERE child_id=? AND request_id=?', (record['child_id'], obj['request_id'])).fetchone()
         if prev is None:
             d = _diagnosis(c, record['child_id'], record, obj['diagnosis_id']); _current(d, record)
-            ev = _evidence(c, record['child_id']); seen = _seen(app, c, record, [q]); version, snapshot = d['version'], d['deeptutor_snapshot']
+            ev = _evidence(c, record['child_id']); version, snapshot = d['version'], d['deeptutor_snapshot']
+            seen = _seen(app, c, record, [x for x in [question(pack, obj['qid'])] if x])  # + the original record that already showed it
     if prev is not None:
         _same_retry(prev, mine, record)
         return dict(state(app, _base(obj), root), replayed=True)

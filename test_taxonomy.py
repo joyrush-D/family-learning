@@ -285,6 +285,14 @@ class OriginalQuestionSeenTest(unittest.TestCase):
         for _ in range(2): ft.mark(A, dict(base, diagnosis_id=did, action='shown', mode='retry', qid=unseen))
         self.assertEqual(self.count('SELECT count(*) FROM topic_exposures'), shown + 1)
         self.assertEqual(ft.state(A, base)['diagnoses'][0]['retry_offer'], {'qid': unseen, 'fresh': True})
+        # Root's stored pre-fix state: q3 was already registered as a retry offer. Saving it is never independent new evidence:
+        # not_new, no DeepTutor grading, and the same request replays without a second row.
+        with A.connect() as c:
+            c.execute("INSERT INTO topic_exposures(child_id,record_id,diagnosis_id,pack_sha,qid,mode,created_at) VALUES('child-1','1',?,?,'cnm_p125_q3','retry',1)", (did, ft.TAXONOMY_SHA))
+        with mock.patch.object(ft.family_deeptutor, 'call', side_effect=AssertionError('an already seen original is never graded as new')):
+            for _ in range(2): ft.retry(A, dict(base, diagnosis_id=did, qid='cnm_p125_q3', answer='4.3', verdict='correct', request_id='p4origretry0000001'))
+        self.assertEqual(self.count("SELECT count(*) FROM topic_retries WHERE qid='cnm_p125_q3' AND outcome='not_new'"), 1)
+        self.assertEqual(self.count('SELECT count(*) FROM topic_retries'), 1)
         with A.connect() as c:
             self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')], raw)  # raw original/correction untouched
             q3 = ft.question(ft.load_pack(), 'cnm_p125_q3')
