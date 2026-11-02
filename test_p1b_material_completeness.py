@@ -72,6 +72,13 @@ class OwnSubmissionStepSpanTests(unittest.TestCase):
         self.assertFalse(agent._school_own_step_quote(quote,'英语：每轮先听示范再朗读第6课三轮，录音不用上传作业栏目。','录音不用上传作业栏目'))
         self.assertFalse(agent._school_own_step_quote(quote,self.text,'末轮录音上传作业栏目',['末轮录音']))
 
+    def test_a_recording_of_another_lesson_or_an_earlier_recording_is_another_object(self):
+        text='英语：朗读Unit 5课文三遍，并把Unit 4的朗读录音上传作业栏目。'
+        self.assertFalse(agent._school_own_step_quote('朗读Unit 5课文三遍',text,'把Unit 4的朗读录音上传作业栏目'))
+        self.assertFalse(agent._school_own_step_quote('朗读第6课三遍','语文：朗读第6课三遍，把昨天录好的朗读音频上传作业栏目。','把昨天录好的朗读音频上传作业栏目'))
+        self.assertFalse(agent._school_own_step_quote('朗读《春》三遍','语文：朗读《春》三遍，《夏》的朗读录音上传作业栏目。','《夏》的朗读录音上传作业栏目'))
+        self.assertTrue(agent._school_own_step_quote('朗读Unit 5课文三遍','英语：朗读Unit 5课文三遍，Unit 5录音上传作业栏目。','Unit 5录音上传作业栏目'))
+
 
 import test_agent
 
@@ -105,6 +112,32 @@ class SameHomeworkFlowTests(test_agent.AgentTests):
             actions=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
         self.assertEqual(len(actions),1)
         for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,actions[0])
+
+    def test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen(self):
+        from test_agent import school_proposal
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        text='明天完成英语朗读Unit 5课文三遍，并把Unit 4的朗读录音上传作业栏目。'
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读Unit 5课文三遍',due=due,evidence=[dict(ref=ref)],task_title='英语：朗读Unit 5课文',
+                                   task_goal='英语朗读Unit 5课文三遍，并把Unit 4的朗读录音上传作业栏目。',task_state='ready',task_reason='明确朗读。',
+                                   task_purpose='learning',task_submission='把Unit 4的朗读录音上传作业栏目'),
+                   school_proposal(title_quote='把Unit 4的朗读录音上传作业栏目',due=due,evidence=[dict(ref=ref)],task_title='英语：上传Unit 4朗读录音',
+                                   task_goal='把Unit 4的朗读录音上传作业栏目。',task_state='ready',task_reason='另一份材料的上传。',task_purpose='admin')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
+                                school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual(len(items),2,[i['body'] for i in items])
+        reading,upload=items
+        self.assertIn('Unit 5',reading['body']);self.assertIn('三遍',reading['body']);self.assertNotIn('Unit 4',reading['body'])
+        self.assertIn('Unit 4',upload['body']);self.assertIn('上传作业栏目',upload['body'])
+        key='synthetic-p1b-other-lesson-upload';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved items need no model')):
+            agent._refresh_school(self.app,self.store,self.now,0);agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        with self.app.connect() as c:
+            bodies=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
+        self.assertFalse([b for b in bodies if 'Unit 5' in b and 'Unit 4' in b],bodies)  # the reading never carries the other upload
 
 
 import json
@@ -163,6 +196,7 @@ def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
     suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
+    suite.addTest(SameHomeworkFlowTests('test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen'))
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
         suite.addTest(OriginalRoleChainTests(name))
     return suite

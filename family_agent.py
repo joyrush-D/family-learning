@@ -4334,6 +4334,7 @@ def _school_sibling_free_goal(quote,text,goal,others):
 
 
 _SCHOOL_STEP_SUBMIT=r'上传|提交|交到|交至|交给|发到|发至|发送到|打卡'
+_SCHOOL_STEP_OBJECT=r'(?:Unit|Lesson|Module)\s*\d+|第\s*[一二三四五六七八九十百0-9]+\s*(?:课|页|单元|题|篇|章|节)|《[^》]{1,30}》'
 
 
 def _school_own_step_quote(quote,text,other,others=()):
@@ -4356,6 +4357,11 @@ def _school_own_step_quote(quote,text,other,others=()):
         return False
     label=re.match(r'\s*([^：:，,。；;\n]{1,6})[：:]',sentence)
     if set(re.findall(_SCHOOL_NATIVE_SUBJECTS,other))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,quote+(label[1] if label else ''))):return False
+    # The recording must be of this homework: a step naming another lesson, page, unit or material than this item's own words
+    # (并把Unit 4的朗读录音上传… beside 朗读Unit 5课文三遍) or an earlier/other recording (昨天录好的、另一段) is another object.
+    named={re.sub(r'\s+','',x) for x in re.findall(_SCHOOL_STEP_OBJECT,other)}
+    if named-{re.sub(r'\s+','',x) for x in re.findall(_SCHOOL_STEP_OBJECT,quote)}:return False
+    if re.search(r'昨天|前天|上周|上次|之前|以前|已经?录(?:好|制)|录好的|已录|另一|另外一',other):return False
     thing=re.sub(r'^(?:然后|再|并|最后一?[轮次遍]?|末[轮次遍]|将|把|请)+','',re.split(_SCHOOL_STEP_SUBMIT,other)[0]).strip('，, ')
     recording=re.search(r'录音|音频|视频|录像',other) and re.search(r'朗读|跟读|背诵|读',quote)
     return bool(recording or not thing or thing in quote)
