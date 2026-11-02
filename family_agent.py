@@ -8334,6 +8334,17 @@ def _discard_job(c, key, fp):
 SCHOOL_ORIGINAL_REVISION=2
 
 
+def _school_scope_supplemented(store,row):
+    """Whether a message this saved action cites now holds a receipt read once more for its doubts' scopes (D)."""
+    with store._db() as c:
+        for quote in json.loads(row['evidence']):
+            if not str(quote.get('ref','')).startswith('message:'):continue
+            source_id,message_id=quote['ref'][8:].rsplit(':',1)
+            draft=c.execute('SELECT payload FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source_id,message_id)).fetchone()
+            if draft and 'previous_scope_receipt' in json.loads(draft['payload']):return True
+    return False
+
+
 def _school_original_parts(evidence, pdf, material):
     """Only text actually sent this round can anchor an action; original notes remain reference summaries."""
     parts=[]
@@ -9355,9 +9366,14 @@ def _refresh_school(app, store, now, budget):
                         plan['school_task']=waiting
                         with store._db() as c:c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
                     continue
-            original_parts=_school_original_parts(reading_evidence,pdf_evidence,material) if (pdf_evidence or material or plan.get('school_first_batch_correction') or legacy_correction) and (not plan.get('school_original_action') or reflow or mapped_reflow) else []
+            # A saved image original action whose receipt was read once more for its doubts' scopes (D) is mapped again as a
+            # whole original while it is an undecided pending item; decided rows keep their actions in that mapping too.
+            supplemented=bool(plan.get('school_original_action') and material and not pdf_evidence and row['state']=='pending' and not row['task_id']
+                              and (plan.get('school_task') or {}).get('material_evidence',{}).get('fingerprint')!=material.get('fingerprint')
+                              and _school_scope_supplemented(store,row))
+            original_parts=_school_original_parts(reading_evidence,pdf_evidence,material) if (pdf_evidence or material or plan.get('school_first_batch_correction') or legacy_correction) and (not plan.get('school_original_action') or reflow or mapped_reflow or supplemented) else []
             compiled_requirements=None
-            if plan.get('school_original_action',{}).get('requirements') and not mapped_reflow:
+            if plan.get('school_original_action',{}).get('requirements') and not mapped_reflow and not supplemented:
                 try:
                     compiled_requirements=_school_saved_requirements(row,_school_original_parts(evidence,pdf_evidence,material))
                     context['complete_action_requirements']=compiled_requirements
