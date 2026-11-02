@@ -25,6 +25,19 @@ class OriginalDateRoleTests(unittest.TestCase):
         self.assertIn('check',agent._school_clause_roles('明天早读查'))
         self.assertNotIn('check',agent._school_clause_roles('今晚查资料'))
 
+    def test_a_date_role_label_names_only_its_action_never_an_unnamed_checker(self):
+        import family_agenda
+        self.assertEqual({k:family_agenda.DUE_LABELS[k] for k in ('handback','inspection')},{'handback':'交回','inspection':'检查'})
+        for text in ('今晚朗读第8课三遍，明天早读查。','今晚朗读第8课三遍，明天老师检查。'):  # unnamed checker / the teacher named
+            with self.subTest(text=text):
+                self.assertEqual(roles(text),({'2026-11-08'},'2026-11-09'))  # the same roles and days whoever is named
+                facts=family_agenda.day_facts(dict(due_on='2026-11-09',due_kind='inspection',complete_on='2026-11-08',published_on='2026-11-08'),
+                                              '2026-11-08','2026-11-08',True)
+                due=[f for f in facts if f.get('role')=='due']
+                self.assertEqual([(f['kind'],f['label'],f['value']) for f in due],[('inspection','检查','2026-11-09')])
+                self.assertFalse([f for f in facts if '老师' in str(f.get('label',''))])  # no label adds a checker
+        self.assertIn('老师检查','今晚朗读第8课三遍，明天老师检查。')  # a named teacher stays in the original words
+
     def test_future_auxiliary_jiang_keeps_its_own_predicate(self):
         import family_agenda
         for clause in ('明天将完成社会调查','将完成调查报告','明天将完成调查'):

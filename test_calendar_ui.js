@@ -34,9 +34,9 @@ test('new notices do not hide older or undated pending administrative requiremen
 test('a teacher check day reads as the check; deadline, handback and event keep their own labels',()=>{
  const h=harness(),m={published_at:'2026-10-21T16:10:00+08:00',published_on:'2026-10-21',complete_on:'2026-10-21',due_on:'2026-10-22',due_kind:'inspection'};
  const html=h.ctx.agendaDateHTML(m,'2026-10-21');
- assert.match(html,/今天完成：2026-10-21/);assert.match(html,/老师检查：2026-10-22/);assert.doesNotMatch(html,/(?:截止|交回)：2026-10-22/);assert.match(html,/发布：2026-10-21 16:10/);
+ assert.match(html,/今天完成：2026-10-21/);assert.match(html,/检查：2026-10-22/);assert.doesNotMatch(html,/(?:截止|交回)：2026-10-22/);assert.match(html,/发布：2026-10-21 16:10/);
  assert.match(h.ctx.agendaDateHTML({...m,due_kind:'deadline'},'2026-10-21'),/截止：2026-10-22/);
- assert.match(h.ctx.agendaDateHTML({...m,due_kind:'handback'},'2026-10-21'),/老师要求交回：2026-10-22/);
+ assert.match(h.ctx.agendaDateHTML({...m,due_kind:'handback'},'2026-10-21'),/交回：2026-10-22/);
  assert.match(h.ctx.agendaDateHTML({...m,due_kind:'event'},'2026-10-21'),/活动日期：2026-10-22/);
 });
 test('a saved "none given" teacher day asks nothing to check; any other missing day still does, and known days keep their labels',()=>{
@@ -44,8 +44,8 @@ test('a saved "none given" teacher day asks nothing to check; any other missing 
  assert.doesNotMatch(none,/截止/,'the teacher gave no day: no deadline and nothing to check');assert.match(none,/发布：2026-10-21/);assert.match(none,/计划：2026-10-23/,'a family plan stays a plan');
  assert.match(h.ctx.agendaDateHTML({published_on:'2026-10-21',due_on:'',scheduled_on:'2026-10-23'},'2026-10-22'),/截止待核对/,'an unread, ambiguous or old-cache missing day stays to check');
  const kept={published_on:'2026-10-15',complete_on:'2026-10-24',due_on:'2026-10-27',due_kind:'handback'};
- assert.match(h.ctx.agendaDateHTML(kept,'2026-10-22',false,true),/完成：2026-10-24[\s\S]*老师要求交回：2026-10-27/,'a known day is never hidden');
- assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-20',due_kind:'inspection'},'2026-10-22',false,true),/已过 · 老师检查：2026-10-20/);
+ assert.match(h.ctx.agendaDateHTML(kept,'2026-10-22',false,true),/完成：2026-10-24[\s\S]*交回：2026-10-27/,'a known day is never hidden');
+ assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-20',due_kind:'inspection'},'2026-10-22',false,true),/已过 · 检查：2026-10-20/);
  assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-20',due_kind:'deadline'},'2026-10-22',false,true),/逾期 · 截止：2026-10-20/);
  assert.match(h.ctx.agendaDateHTML({...kept,complete_on:'',due_on:'2026-10-25',due_kind:'event'},'2026-10-22',false,true),/活动日期：2026-10-25/);
 });
@@ -55,11 +55,11 @@ test('the child and after-school cards read the same teacher check day as the pa
  const line=study.slice(study.indexOf('const taskDays='));vm.runInContext(line.slice(0,line.indexOf('\n')),ctx);
  const c01={source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22',source_task_handback_on:'',source_task_inspection_on:'2026-10-22'};
  for(const days of [vm.runInContext('studyDays',ctx),vm.runInContext('taskDays',ctx)]){
-  assert.equal(days(c01),'老师要求完成：2026-10-21 · 老师检查：2026-10-22');
+  assert.equal(days(c01),'完成：2026-10-21 · 检查：2026-10-22');
   // An older payload without the field, a plain deadline, a handback and a parent's own date keep their own labels.
-  assert.equal(days({...c01,source_task_inspection_on:undefined}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
-  assert.equal(days({...c01,source_task_inspection_on:''}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
-  assert.equal(days({...c01,source_task_inspection_on:'',source_task_handback_on:'2026-10-22'}),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22');
+  assert.equal(days({...c01,source_task_inspection_on:undefined}),'完成：2026-10-21 · 原截止：2026-10-22');
+  assert.equal(days({...c01,source_task_inspection_on:''}),'完成：2026-10-21 · 原截止：2026-10-22');
+  assert.equal(days({...c01,source_task_inspection_on:'',source_task_handback_on:'2026-10-22'}),'完成：2026-10-21 · 交回：2026-10-22');
   assert.equal(days({source_task_complete_on:'',source_task_due:'2026-10-23',source_task_handback_on:'',source_task_inspection_on:''}),'原截止：2026-10-23');
  }
 });
@@ -69,10 +69,10 @@ test('a teacher handback day equal to the saved due reads once on the child and 
  const line=study.slice(study.indexOf('const taskDays='));vm.runInContext(line.slice(0,line.indexOf('\n')),ctx);
  const receipt={source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22',source_task_handback_on:'2026-10-22',source_task_inspection_on:''};
  for(const days of [vm.runInContext('studyDays',ctx),vm.runInContext('taskDays',ctx)]){
-  assert.equal(days(receipt),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22');
+  assert.equal(days(receipt),'完成：2026-10-21 · 交回：2026-10-22');
   // A different saved due still shows; an older payload without the role keeps its old fallback.
-  assert.equal(days({...receipt,source_task_due:'2026-10-23'}),'老师要求完成：2026-10-21 · 老师要求交回：2026-10-22 · 原截止：2026-10-23');
-  assert.equal(days({source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22'}),'老师要求完成：2026-10-21 · 原截止：2026-10-22');
+  assert.equal(days({...receipt,source_task_due:'2026-10-23'}),'完成：2026-10-21 · 交回：2026-10-22 · 原截止：2026-10-23');
+  assert.equal(days({source_task_complete_on:'2026-10-21',source_task_due:'2026-10-22'}),'完成：2026-10-21 · 原截止：2026-10-22');
  }
 });
 test('the parent after-school card reads the same requirement lines as Today and the child card',()=>{

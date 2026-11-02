@@ -579,10 +579,10 @@ class P1aRequirementUnitTests(unittest.TestCase):
         for _ in range(2):
             view = self.view(); check, card = self.by_title(view, '手工草图'), self.by_title(view, '活动卡')
             self.assertEqual([(f['role'], f['label'], f['value']) for f in check['facts'] if f['role'] != 'published'],
-                             [('check', '先检查', '2026-11-03'), ('due', '老师要求交回', '2026-11-05')])
+                             [('check', '先检查', '2026-11-03'), ('due', '交回', '2026-11-05')])
             self.assertIn('检查', self.fact(check, 'check')['words']); self.assertEqual(check['when'], 'today')
             self.assertEqual([(f['role'], f['label'], f['value']) for f in card['facts'] if f['role'] != 'published'],
-                             [('submit', '先提交', '2026-11-03'), ('due', '老师要求交回', '2026-11-04')])
+                             [('submit', '先提交', '2026-11-03'), ('due', '交回', '2026-11-04')])
             self.assertIn('提交', self.fact(card, 'submit')['words'])
         # The one-affair version projection carries the same role.
         agenda = dict(published_at='2026-11-03T16:51:00+08:00', due_on='2026-11-05', due_kind='handback', submit_on='2026-11-03',
