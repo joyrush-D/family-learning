@@ -1122,21 +1122,25 @@ struct PlanRow: View {
     var edit: (ReviewDraft, String) async -> Void = { _, _ in }
     var restart: () -> Void = {}
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Text(planClock(plan.start_time, plan.end_time)).font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(plan.start_time.isEmpty ? Palette.ink2 : Palette.leafInk).frame(width: 92, alignment: .leading)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(plan.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
-                let meta = [plan.review == nil ? "" : "家庭复习 · 家长安排，不是老师作业", plan.review?.basis_state == "basis_changed" ? "原错题之后更正过，请核对" : "",
-                            plan.location, plan.status == "tentative" ? "待确认" : "", plan.repeat ? "重复安排" : "", plan.shared ? "几个孩子共同" : "",
-                            plan.source.isEmpty ? "" : "学校来源"].filter { !$0.isEmpty }.joined(separator: " · ")
-                if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
-                if let text = plan.unmerged { Text(text).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
-                if let review = plan.review, let draft {
-                    ReviewEditor(plan: plan, review: review, draft: draft, save: draft.save, openReview: openReview, edit: edit, restart: restart)
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
+                Text(planClock(plan.start_time, plan.end_time)).font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(plan.start_time.isEmpty ? Palette.ink2 : Palette.leafInk).frame(width: 92, alignment: .leading)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(plan.title).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                    let meta = [plan.review == nil ? "" : "家庭复习 · 家长安排，不是老师作业", plan.review?.basis_state == "basis_changed" ? "原错题之后更正过，请核对" : "",
+                                plan.location, plan.status == "tentative" ? "待确认" : "", plan.repeat ? "重复安排" : "", plan.shared ? "几个孩子共同" : "",
+                                plan.source.isEmpty ? "" : "学校来源"].filter { !$0.isEmpty }.joined(separator: " · ")
+                    if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                    if let text = plan.unmerged { Text(text).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
                 }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            // The review editor takes the card's whole width under the title (the list column is 340pt in a 900 window), in rows
+            // that each fit that width, so the date, both times and every action stay inside the column.
+            if let review = plan.review, let draft {
+                ReviewEditor(plan: plan, review: review, draft: draft, save: draft.save, openReview: openReview, edit: edit, restart: restart)
+            }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card))
@@ -1167,7 +1171,7 @@ struct ReviewEditor: View {
     func act(_ status: String) { Task { await edit(draft, status) } }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
                 Button { openReview(review) } label: { Label("打开原错题与知识点", systemImage: "leaf") }
                     .probe("plan-review-open-" + plan.id, text: "打开原错题与知识点")
                 Button { draft.editing.toggle() } label: { Label(draft.editing ? "收起" : "改期 / 取消 / 完成", systemImage: "calendar") }
@@ -1179,11 +1183,13 @@ struct ReviewEditor: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("原错题、知识点和原作业固定不变；完成只记这条复习，不改老师作业，也不算掌握。")
                         .font(.system(size: 12)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
                         DatePicker("日期", selection: $draft.day, displayedComponents: .date).labelsHidden()
                             .probe("plan-review-day-" + plan.id, text: reviewDayFormat.string(from: draft.day))
-                        TextField("开始，如 19:00", text: $draft.start).frame(width: 104).probe("plan-review-start-" + plan.id, text: draft.start)
-                        TextField("结束", text: $draft.end).frame(width: 72).probe("plan-review-end-" + plan.id, text: draft.end)
+                        HStack(spacing: 8) {
+                            TextField("开始，如 19:00", text: $draft.start).frame(minWidth: 70, maxWidth: 130).probe("plan-review-start-" + plan.id, text: draft.start)
+                            TextField("结束，如 19:30", text: $draft.end).frame(minWidth: 70, maxWidth: 130).probe("plan-review-end-" + plan.id, text: draft.end)
+                        }
                     }
                     .disabled(draft.locked)
                     if save.unknown {
@@ -1192,10 +1198,12 @@ struct ReviewEditor: View {
                             .probe("plan-review-frozen-" + plan.id, text: frozen)
                         Button("用同一次提交重试") { act("") }.disabled(save.busy).probe("plan-review-retry-" + plan.id, text: "用同一次提交重试")
                     } else {
-                        HStack(spacing: 10) {
-                            Button("保存改期") { act(plan.status == "tentative" ? "tentative" : "confirmed") }.probe("plan-review-move-" + plan.id, text: "保存改期")
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 10) {
+                                Button("保存改期") { act(plan.status == "tentative" ? "tentative" : "confirmed") }.probe("plan-review-move-" + plan.id, text: "保存改期")
+                                Button("完成这次复习") { act("completed") }.probe("plan-review-complete-" + plan.id, text: "完成这次复习")
+                            }
                             Button("取消这次复习") { act("cancelled") }.probe("plan-review-cancel-" + plan.id, text: "取消这次复习")
-                            Button("完成这次复习") { act("completed") }.probe("plan-review-complete-" + plan.id, text: "完成这次复习")
                         }
                         .disabled(save.busy)
                     }
@@ -1204,7 +1212,7 @@ struct ReviewEditor: View {
                             .probe("plan-review-message-" + plan.id, text: save.message)
                     }
                     if save.conflict && !draft.locked {
-                        Button("按最新的安排重新开始（放弃这里的改动）") { restart() }.probe("plan-review-restart-" + plan.id, text: "按最新的安排重新开始")
+                        Button("按最新的安排重新开始") { restart() }.probe("plan-review-restart-" + plan.id, text: "按最新的安排重新开始")
                     }
                 }
                 .font(.system(size: 12.5))

@@ -101,6 +101,14 @@ ok(!/上游判题|DeepTutor判定|两个判题器|上游：|DeepTutor：/.test(p
   const ss = T.restore(E, pg, { topic_id: P, opts: popts, items: [held] });
   ok(ss && ss.answers.length === 1 && ss.answers[0].result === 'skip' && !!E.nextItem(pg, ss), 'one held item: replays as 未答对 (skip) and the round continues');
 }
+// P4 Root counterexample: with the original wrong record's cnm_p125_q3 among the seen questions (the server's seen_qids),
+// the real engine's new-question pick never returns it, and a genuinely unseen question of the same topic stays possible.
+{
+  const rawP = { topics: topics.filter(t => t.id === 'cnm_p125'), dependencies: [], questions: questions.filter(q => q.topicId === 'cnm_p125') };
+  const gP = E.buildGraph(rawP.topics, rawP.dependencies, rawP.questions), picks = new Set();
+  for (let id = 1; id <= 24; id++) { const it = T.retryItem(E, rawP, gP, { id, topic_id: 'cnm_p125' }, new Set(['cnm_p125_q3', 'cnm_p125_q4'])); picks.add(it ? it.question.id : null); }
+  ok(!picks.has('cnm_p125_q3') && !picks.has('cnm_p125_q4') && [...picks].some(q => q), 'the seen original q3 (and answered q4) are never offered as new; an unseen cnm_p125 question still is: ' + [...picks].join(','));
+}
 // P4 family review display title: an original wrong-record title at its own 200 limit still gives a calendar title within the
 // calendar's existing 200 (code points), cut on a whole character (the combining accent is not split off) with an explicit "…".
 {
