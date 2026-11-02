@@ -724,6 +724,7 @@ def _saved_draft(row, value, *, legacy=False):
         draft.pop('previous_aggregate',None)  # Retained verbatim for history; never used as action evidence.
         draft.pop('previous_notes',None)
         draft.pop('previous_scope_receipt',None)
+        draft.pop('scope_requested',None)
         ids=() if legacy and row['fingerprint']==value['legacy_fingerprint'] else value['original_ids']
         return family_llm.validate_school_material(draft,original_ids=ids,require_requirements=bool(ids) and not legacy)
     except (MediaError, family_llm.LLMDraftError,ValueError,TypeError):
@@ -745,13 +746,14 @@ _DECIDED_PLAN=('approved','school_history_job','school_history_uncertain','schoo
 def _scope_supplement(c, source, message, value, old):
     """Whether this message's saved current receipt may be read once more, bounded, for its doubts' requirement scopes.
 
-    Only a receipt read before uncertainty_scopes (an original with doubts and requirement lines but no scope field) and
-    never supplemented, whose school items citing it are all this child's undecided pending candidates (no task, no
+    Only a receipt saved before the reader was asked for uncertainty_scopes (no scope_requested mark; an original with
+    doubts and requirement lines but no scope field) and never supplemented, whose school items citing it are all this child's undecided pending candidates (no task, no
     decision, history or dependency); any accepted, dismissed, edited or executed item keeps the old receipt. Returns the
     old receipt's own hash, which the save rechecks, or None."""
     from family_agent import _hash
     draft=_saved_draft(old,value)
-    if draft is None or not value['original_ids'] or 'previous_scope_receipt' in json.loads(old['payload']):return None
+    payload=json.loads(old['payload'])
+    if draft is None or not value['original_ids'] or payload.get('scope_requested') or 'previous_scope_receipt' in payload:return None
     if not any(o.get('uncertainties') and o.get('requirements') and 'uncertainty_scopes' not in o for o in draft.get('originals') or ()):return None
     ref='message:'+source['id']+':'+message['id']
     rows=[r for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'",(source['child_id'],))
@@ -900,6 +902,7 @@ def prepare_draft(store, now):
                 if _saved_draft(old,value,legacy=True) is not None:
                     name='previous_aggregate' if old['fingerprint']==value['legacy_fingerprint'] else 'previous_notes'
                     result[name]=dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated'])
+            if value['original_ids']:result['scope_requested']=1  # read under the scope protocol: never a supplement candidate
             c.execute('INSERT OR REPLACE INTO agent_message_drafts VALUES(?,?,?,?,?)',
                       (source['id'], message['id'], value['fingerprint'], json.dumps(result, ensure_ascii=False), now.isoformat()))
             c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?", (key, fp))
