@@ -24,6 +24,16 @@ class OriginalDateRoleTests(unittest.TestCase):
         self.assertIn('check',agent._school_clause_roles('明天早读查'))
         self.assertNotIn('check',agent._school_clause_roles('今晚查资料'))
 
+    def test_future_auxiliary_jiang_keeps_its_own_predicate(self):
+        import family_agenda
+        for clause in ('明天将完成社会调查','将完成调查报告','明天将完成调查'):
+            with self.subTest(clause=clause):
+                roles=agent._school_clause_roles(clause);self.assertNotIn('check',roles);self.assertIn('finish',roles)
+        self.assertNotEqual(family_agenda.date_meaning('明天将完成社会调查','2026-11-09','2026-11-08'),'inspection')
+        self.assertIn('check',agent._school_clause_roles('明早查'))
+        self.assertIn('handback',agent._school_clause_roles('将回执交给班主任'))
+        self.assertNotIn('handback',agent._school_clause_roles('将交通安全告知书签字'))
+
     def test_conflicting_or_unknown_days_stay_for_the_existing_date_checks(self):
         self.assertIsNone(roles('今晚做练习册第7页第2–4题，每题写步骤；明天（11月10日）交。'))
         self.assertIsNone(agent._school_bracket_restated('明早（11月9日晚上）交','2026-11-08'))

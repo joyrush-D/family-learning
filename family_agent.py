@@ -5098,9 +5098,14 @@ _SCHOOL_ROLE_VERBS=(('handback',r'上交|提交|交'),('check',r'检查|查(?=\s
 # negation, doer or day written between the paper and the signature (在告知书不签名) and a choice among options written on it
 # (在《回执》勾选‘参加’或‘不参加’) still read as before.
 _SCHOOL_ROLE_PAPER=r'(?:》|书|单|表|册|本|执|卷|纸|页|栏|处|条|联|卡|格|框|面)'
+# 将 directly before a predicate (将完成社会调查、将提交) is the future auxiliary, not a ba-phrase: the object 完成社会调 must never
+# swallow that predicate and leave its noun's last character (调查's 查) as the clause's role. Bare 交 is no such predicate,
+# so 将交通安全告知书签字 still reads its ba-object as before.
+_SCHOOL_ROLE_AUX=r'(?:完成|做完|写完|读完|提交|上交|交回|交给|交到|检查|查(?=\s*(?:[。；;，,！!？?\n]|$)))'
 _SCHOOL_ROLE_LEAD=(r'\s*(?:请|让|由)?\s*(?:各位|全体)?(?:(?:家长|监护人|父母|爸爸|妈妈|爸妈)(?:[或和、](?:家长|监护人|父母|爸爸|妈妈|爸妈))?|学生|孩子|同学们?|班主任|老师)?\s*(?:准时|按时|务必|必须|须|需|要)?\s*'
+                   r'(?:将(?=\s*'+_SCHOOL_ROLE_AUX+r'))?\s*'
                    r'(?:在[^，,在]{0,12}?'+_SCHOOL_ROLE_PAPER+r'\s*(?='+_SCHOOL_SIGN+r')|在[^，,在]{1,12}?(?:上|里|中|内)\s*)?'
-                   r'(?:(?:把|将)[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
+                   r'(?:(?:把|将)(?!\s*'+_SCHOOL_ROLE_AUX+r')[^，,把将]{1,12}?(?=(?:'+'|'.join(v for _,v in _SCHOOL_ROLE_VERBS)+r')))?')
 
 
 def _school_clause_roles(clause):
