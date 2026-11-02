@@ -106,6 +106,26 @@ import Foundation
         snapshot("child_two_today")
         expect(store.day == today && store.childName == "示例乙" && ids() == ["FICTION-B1", "FICTION-B2"], "回到当天读到乙当天的内容，没有甲的事项")
         expect(wrongSummary().hasPrefix("错题 0"), "乙的错题只算乙的")
+        // 7 通知类事项（todo）读自己的原件：同一资料契约（页组范围、缺执行资源与看不清分开），不报作业权限错误。
+        if let notice = store.allItems.first(where: { $0.id == "FICTION-B2" }) {
+            await store.loadMaterials(notice)
+            let m = store.materials[notice.task_id] ?? MaterialState()
+            seen["notice_materials"] = ["category": notice.category, "loaded": m.loaded, "error": m.error,
+                                        "files": m.files.map { [$0.id, $0.state, $0.stateLabel, $0.scope, $0.missing.joined(separator: "；")] }]
+            expect(notice.category == "todo" && m.loaded && m.error.isEmpty && m.files.map(\.id) == ["u-b2-pdf"], "通知类事项读到自己的原件，不报作业权限错误")
+            expect(m.files.first?.scope == "共2页，已整理第1–2页" && m.files.first?.missing == ["虚构听力音频未随附"] && m.files.first?.unclear.isEmpty == true
+                   && m.files.first?.stateLabel == "已整理全部2页", "PDF页组范围、缺执行资源与看不清分开读到")
+        } else { failures.append("乙当天没有通知类事项") }
+        // 8 口头补录的提交内容：科目可后补；老师要求的完成日、交回日分开，未知留空；做的日子不当作老师日期。
+        let oral = WorkspaceStore.oralBody(child: "child-2", day: today, key: "synthetic-oral-key-0001", version: 3, subject: " ", what: "  读课文两遍\n家长签字  ",
+                                           completeOn: next, handbackOn: "")
+        let report = oral["report"] as? [String: Any] ?? [:]
+        seen["oral_body"] = ["title": oral["title"] as? String ?? "", "subject": oral["subject"] as? String ?? "?", "complete_on": report["complete_on"] as? String ?? "?",
+                             "handback_on": report["handback_on"] as? String ?? "?", "day": oral["day"] as? String ?? ""]
+        expect(oral["subject"] as? String == "" && oral["title"] as? String == "读课文两遍" && report["text"] as? String == "读课文两遍\n家长签字",
+               "科目留空也能补录，标题取要做什么的第一行")
+        expect(report["complete_on"] as? String == next && report["handback_on"] as? String == "" && oral["day"] as? String == today
+               && oral["request_key"] as? String == "synthetic-oral-key-0001" && oral["version"] as? Int == 3, "完成日与交回日分开，未知留空，做的日子不当老师日期")
         await settle { store.change(child: "child-1") }
         snapshot("child_one_today")
         expect(store.childName == "示例甲" && ids() == ["FICTION-A1"] && wrongSummary().hasPrefix("错题 1"), "回到原来的甲和原来那一天，内容与首次一致")

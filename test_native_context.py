@@ -22,9 +22,18 @@ CHILDREN = [{"id": "child-1", "name": "示例甲"}, {"id": "child-2", "name": "�
 ITEMS = {
     ("child-1", TODAY): [("FICTION-A1", "数学", "虚构数学作业甲")],
     ("child-1", NEXT): [("FICTION-A2", "数学", "虚构数学作业甲·后一天")],
-    ("child-2", TODAY): [("FICTION-B1", "语文", "虚构语文作业乙"), ("FICTION-B2", "英语", "虚构英语作业乙")],
+    ("child-2", TODAY): [("FICTION-B1", "语文", "虚构语文作业乙"), ("FICTION-B2", "英语", "虚构英语签字通知乙")],
     ("child-2", NEXT): [("FICTION-B3", "语文", "虚构语文作业乙·后一天")],
 }
+CATEGORY = {"FICTION-B2": "todo"}  # a notice: its own originals, never the homework print/check
+# The current /api/print/homework/materials contract per task: a todo lists its own originals read-only (print_basis None);
+# a PDF original carries its saved page scope with a missing execution resource apart from an unclear reading.
+MATERIALS = {"T-FICTION-B2": {"task": {"id": "T-FICTION-B2", "child": "示例乙"}, "category": "todo", "print_basis": None, "school_error": "",
+                              "task_title": "虚构英语签字通知乙", "files": [{
+                                  "source": {"type": "upload", "id": "u-b2-pdf"}, "name": "虚构签字通知.pdf", "origin": "school",
+                                  "role_label": "学校消息原件", "state": "ready", "label": "已整理全部2页", "summary": "虚构提要：周五交回执。",
+                                  "summary_truncated": False, "unclear": [], "missing": ["虚构听力音频未随附"], "scope": "共2页，已整理第1–2页",
+                                  "explanation": "", "updated": TODAY + "T08:00:00+08:00"}]}}
 WRONG = {"child-1": [{"id": 9001, "day": TODAY, "created": TODAY + "T19:00:00", "title": "虚构错题甲", "subject": "数学", "note": "",
                       "note_truncated": False, "attachments": [], "followup_kind": "", "state": "待订正"}], "child-2": []}
 
@@ -33,7 +42,7 @@ def day_view(child, day):
     rows, groups = ITEMS[(child, day)], {}
     for item_id, subject, title in rows:
         groups.setdefault(subject, []).append({
-            "id": item_id, "kind": "task", "task_id": "T-" + item_id, "title": title, "subject": subject, "category": "homework",
+            "id": item_id, "kind": "task", "task_id": "T-" + item_id, "title": title, "subject": subject, "category": CATEGORY.get(item_id, "homework"),
             "status": "待跟进", "closed": False, "pending_review": False, "origin": "school", "origin_label": "学校",
             "lines": ["完成" + title], "complete_words": "完成" + title, "facts": [], "today": True, "records": [], "wrong": []})
     return {"today": TODAY, "day": day, "child_id": child, "child_name": next(c["name"] for c in CHILDREN if c["id"] == child),
@@ -68,7 +77,13 @@ class Backend(BaseHTTPRequestHandler):
             if not state["fail"]:
                 return self.reply(200, day_view(query.get("child_id", "child-1"), query.get("day", TODAY)))
         elif url.path == "/api/print/homework/materials" and not state["fail"]:
-            return self.reply(200, {"files": []})
+            task = query.get("task_id", "")
+            state["material_reads"] = state.get("material_reads", 0) + 1
+            if task in MATERIALS:
+                return self.reply(200, MATERIALS[task])
+            if any("T-" + i == task for rows in ITEMS.values() for i, _, _ in rows):
+                return self.reply(200, {"task": {"id": task}, "category": "homework", "files": [], "school_error": "", "print_basis": {}})
+            return self.reply(404, {"error": "虚构事项不存在"})
         self.reply(500, {"error": "虚构后台暂时读不到"})
 
     def do_POST(self):

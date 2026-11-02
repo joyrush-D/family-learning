@@ -161,6 +161,18 @@ final class WorkspaceStore: ObservableObject {
         materials[item.task_id] = state
     }
 
+    /// 口头补录交给 /api/study/item 的内容（与网页同一契约）：要做什么必填，第一行作标题；科目可后补（空即“科目待定”）；
+    /// 老师要求的完成日、交回日分开，未知留空；做的日子（day）是家里安排的那天，不当作老师日期。重试时同一 key、同一内容。
+    static func oralBody(child: String, day: String, key: String, version: Int, subject: String, what: String,
+                         completeOn: String, handbackOn: String) -> [String: Any] {
+        let words = what.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = String(words.split(separator: "\n").first ?? Substring(words)).prefix(80).description
+        let report: [String: Any] = ["text": words, "explanation": "", "excerpt": "", "goal": "", "attachments": [String](),
+                                     "complete_on": completeOn, "handback_on": handbackOn]
+        return ["child_id": child, "day": day, "request_key": key, "version": version, "title": title,
+                "subject": subject.trimmingCharacters(in: .whitespaces), "planned_minutes": NSNull(), "report": report]
+    }
+
     func select(_ id: String?) {
         if TestTargets.enabled { workspaceTestSelectCalls.append(id ?? "nil") }
         selection = id
@@ -1694,22 +1706,28 @@ struct OralSheet: View {
     @State var subject = ""
     @State var what = ""
     @State var tomorrow = false
+    @State var complete = "unknown"
+    @State var completeDay = Date()
     @State var handback = "unknown"
     @State var handbackDay = Date()
     @State var version: Int?
 
     var body: some View {
         SheetFrame(store: store, save: save, title: "补录口头作业", context: "\(store.childName) · 来源：孩子口头转述",
-                   dirty: !subject.isEmpty || !what.isEmpty, canSave: !subject.trimmingCharacters(in: .whitespaces).isEmpty && !what.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   dirty: !subject.isEmpty || !what.isEmpty || complete != "unknown" || handback != "unknown",
+                   canSave: !what.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    saveTitle: "保存补录", onSave: submit) {
             Section {
                 // 两个都是系统文本框，点哪个就在哪个里输入；不再另设焦点绑定（它曾把“要做什么”的输入拉回科目框）。
-                TextField("科目（必填）", text: $subject).probe("oral-subject")
+                TextField("科目（可后补）", text: $subject).probe("oral-subject")
                 TextField("要做什么（必填）", text: $what, axis: .vertical).lineLimit(3...6).multilineTextAlignment(.leading)
                     .accessibilityLabel("要做什么").probe("oral-what")
                 Picker("做的日子", selection: $tomorrow) { Text("正在看的这天").tag(false); Text("后一天").tag(true) }.probe("oral-day")
+                // 做的日子是家里安排的那天；老师要求的完成日、交回日各自单独选，不知道就留空，不拿做的日子去填。
+                Picker("老师要求完成", selection: $complete) { Text("还不知道").tag("unknown"); Text("指定日期").tag("day") }.probe("oral-complete")
+                if complete == "day" { DatePicker("完成日", selection: $completeDay, displayedComponents: .date).probe("oral-complete-day") }
                 Picker("老师要求交回", selection: $handback) { Text("还不知道").tag("unknown"); Text("指定日期").tag("day") }.probe("oral-handback")
-                if handback == "day" { DatePicker("交回日", selection: $handbackDay, displayedComponents: .date) }
+                if handback == "day" { DatePicker("交回日", selection: $handbackDay, displayedComponents: .date).probe("oral-handback-day") }
             }
         }
     }
@@ -1718,18 +1736,15 @@ struct OralSheet: View {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         let base = WorkspaceStore.date(store.day) ?? Date()
         let day = WorkspaceStore.text(tomorrow ? Calendar(identifier: .gregorian).date(byAdding: .day, value: 1, to: base) ?? base : base)
-        let words = what.trimmingCharacters(in: .whitespacesAndNewlines)
-        let title = String(words.split(separator: "\n").first ?? Substring(words)).prefix(80).description
+        let completeOn = complete == "day" ? WorkspaceStore.text(completeDay) : "", handbackOn = handback == "day" ? WorkspaceStore.text(handbackDay) : ""
         Task {
             do {
                 // 重试沿用第一次读到的版本：同一提交标识、同一内容，服务端才认作同一次补录。
                 var version = self.version ?? -1
                 if version < 0 { version = try await store.client.studyVersion(child: store.childID, day: day) }
                 self.version = version
-                let report: [String: Any] = ["text": words, "explanation": "", "excerpt": "", "goal": "", "attachments": [String](),
-                                             "complete_on": "", "handback_on": handback == "day" ? WorkspaceStore.text(handbackDay) : ""]
-                let body: [String: Any] = ["child_id": store.childID, "day": day, "request_key": save.key, "version": version, "title": title,
-                                           "subject": subject.trimmingCharacters(in: .whitespaces), "planned_minutes": NSNull(), "report": report]
+                let body = WorkspaceStore.oralBody(child: store.childID, day: day, key: save.key, version: version, subject: subject, what: what,
+                                                   completeOn: completeOn, handbackOn: handbackOn)
                 await store.finish(await store.client.post("/api/study/item", body), save, done: "已补录到\(day)。")
             } catch {
                 save.busy = false; save.message = ((error as? WorkspaceError)?.text ?? "暂时读不到这一天的作息，未保存；输入已保留。")
