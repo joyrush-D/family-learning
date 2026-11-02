@@ -161,6 +161,14 @@ ROLE_OLD='2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单
 ROLE_NEW='2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，2026年11月5日早上交。'
 
 
+class ResourceTimeTests(unittest.TestCase):
+    def test_only_a_clause_giving_out_a_material_drops_its_day(self):
+        free=agent._school_resource_time_free
+        self.assertEqual(free('周三前签字并交回，配套空白表11月3日发放，'),'周三前签字并交回，')
+        for kept in ('11月6日发放后当天填好交回。','明天交给数学老师。','11月6日交回回执，11月7日交回第二份。'):
+            with self.subTest(kept=kept):self.assertEqual(free(kept),kept)
+
+
 class OriginalRoleChainTests(_ScopeBase):
     """The real image-original chain (save_upload -> message_attachment -> reader -> original actions -> Store -> list -> reopen)
     with a fictional requirement holding its own completion and handback days beside a same-page dictation of its own day."""
@@ -170,6 +178,10 @@ class OriginalRoleChainTests(_ScopeBase):
 
     def test_matching_brackets_give_the_same_roles(self):
         self._roles('今晚（2026年11月4日）听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，明早（11月5日早上）交。')
+
+    def test_a_material_issue_day_in_the_same_line_is_no_role_or_due(self):
+        # Its completion and handback days stay its roles; the day the audio was given out is information only.
+        self._roles('2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，跟读音频已于2026年11月3日下发，2026年11月5日早上交。')
 
     def test_a_conflicting_bracket_is_never_a_due_or_role(self):
         self._roles('今晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，明早（11月6日早上）交。',conflict=True)
@@ -560,7 +572,9 @@ def load_tests(loader,tests,pattern):
     suite.addTest(SameHomeworkFlowTests('test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen'))
     suite.addTest(PdfOriginalRoleTests('test_pdf_requirement_roles_reach_the_day_view_and_stay_on_reopen'))
     suite.addTest(PdfOriginalRoleTests('test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected'))
-    for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
+    suite.addTests(loader.loadTestsFromTestCase(ResourceTimeTests))
+    for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role',
+                 'test_a_material_issue_day_in_the_same_line_is_no_role_or_due'):
         suite.addTest(OriginalRoleChainTests(name))
     suite.addTests(loader.loadTestsFromTestCase(UncertaintyScopeValidatorTests))
     suite.addTests(loader.loadTestsFromTestCase(DoubtViewTests))
