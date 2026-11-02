@@ -701,7 +701,9 @@ struct ItemRow: View {
                     Text(item.lines.joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
                     if let v = item.version {
-                        Text(v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version")
+                        // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
+                        let words = v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")
+                        Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version-" + item.id, text: words)
                     }
                 } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
                 FlowRow(spacing: 6, lineSpacing: 4) {
@@ -1203,15 +1205,21 @@ struct Inspector: View {
                 if !item.actionFacts.isEmpty { facts(item) }
                 section("要做什么与完成标准", "checklist") {
                     if item.lines.isEmpty { Text("完成标准未提供，待补充").font(Palette.body).foregroundStyle(Palette.coralInk).probe("detail-no-standard") }
-                    ForEach(Array(item.lines.enumerated()), id: \.offset) { _, line in
+                    // 冒烟锚点：当前正文逐行、完成要求和待核对提示各给它自己显示的同一句话（不含历史或隐藏的正文）。
+                    ForEach(Array(item.lines.enumerated()), id: \.offset) { index, line in
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Image(systemName: "leaf.fill").font(.system(size: 11)).foregroundStyle(Palette.leaf400).accessibilityHidden(true)
                             Text(line).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                .probe("detail-line-\(item.id)-\(index)", text: line)
                         }
                     }
-                    if !item.complete_words.isEmpty { Text("完成要求：" + item.complete_words).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                    if !item.complete_words.isEmpty {
+                        let complete = "完成要求：" + item.complete_words
+                        Text(complete).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("detail-complete-" + item.id, text: complete)
+                    }
                     if item.pending_review {
-                        Text("这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。").font(Palette.small).foregroundStyle(Palette.coralInk)
+                        let hint = "这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。"
+                        Text(hint).font(Palette.small).foregroundStyle(Palette.coralInk).probe("detail-pending-" + item.id, text: hint)
                     }
                 }
                 if !item.task_id.isEmpty { materials(item) }
