@@ -112,7 +112,8 @@ MODEL_FILE_SHAPES=(LEGACY_MODEL_FILE_KEYS,MODEL_FILE_KEYS,LEGACY_MODEL_FILE_KEYS
 REASONING_EFFORTS=('none','minimal','low','medium','high','xhigh','max')
 # Plain-text message screening and its connection check take the light effort tier.
 LIGHT_EFFORT_TASKS={'family_agent_selection','family_light_connection_test'}
-# Plain-text school drafting from already-read originals also runs on the light model, but keeps reasoning_effort.
+# Plain-text school drafting from already-read originals also runs on the light model; it takes an explicitly configured
+# light_reasoning_effort (an empty one inherits reasoning_effort), as screening does.
 LIGHT_TASKS=LIGHT_EFFORT_TASKS|{'family_school_task'}
 LEDGER_TABLE='llm_usage_ledger'
 
@@ -653,7 +654,7 @@ def _chat_json(messages,schema,name,timeout=60,*,data_path=None):
         model=light;light_model_selected=True
     # The effort tier is a separate choice: only screening tasks on the light model take light_reasoning_effort;
     # a selection carrying product-bound changes keeps reasoning_effort on that same light model.
-    light_effort_tier=light_model_selected and name in LIGHT_EFFORT_TASKS and not _bound_change_selection(name,messages)
+    light_effort_tier=light_model_selected and name in LIGHT_EFFORT_TASKS|{'family_school_task'} and not _bound_change_selection(name,messages)
     # 错题图片标注每页最多30个区域并转写题面，3000输出token会截断整批草稿。
     # 学校文字整理曾把3000全部用于推理、未返回最终结果（incomplete/length），明确事项因此无法生成。
     output_tokens = 6000 if name in ('family_agent_selection', 'family_wrong_questions_annotate', 'family_homework_reference', 'family_school_task') else 3000

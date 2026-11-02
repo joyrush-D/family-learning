@@ -4324,6 +4324,40 @@ def _school_sibling_free_goal(quote,text,goal,others):
     return quote+('' if re.search(r'[。！!？?]$',quote) else '。')
 
 
+_SCHOOL_STEP_SUBMIT=r'上传|提交|交到|交至|交给|发到|发至|发送到|打卡'
+
+
+def _school_own_step_quote(quote,text,other,others=()):
+    """Whether another proposal's quote is only this item's own submission step, read in the original's own words.
+
+    每轮先听示范再朗读三轮，末轮录音上传作业栏目。 quoted as 朗读三轮 and 末轮录音上传作业栏目: the step lies in this item's own
+    sentence, states a submission that is not negated, names no subject this item's quote and label do not, and submits a
+    recording of this item's own reading or the object this item's quote names. Another sentence (；数学练习册照片也上传…),
+    another subject or object, a third proposal's quote within that sentence or a negated step stays another item.
+    """
+    if not quote or not other or quote==other or text.count(quote)!=1 or text.count(other)!=1:return False
+    marks='。；;！!？?\n';start=text.index(quote);end=start+len(quote);at=text.index(other)
+    head=max(text.rfind(m,0,min(start,at)) for m in marks)+1
+    stop=end if quote[-1] in marks else min([i for i in (text.find(m,end) for m in marks) if i!=-1] or [len(text)])
+    if at<head or at+len(other)>max(stop,end):return False
+    if any(m in text[min(end,at):max(start,at)] for m in marks):return False  # quote and step are in one sentence
+    sentence=text[head:max(stop,end)]
+    if any(o and o not in (quote,other) and o in sentence for o in others):return False
+    if not re.search(_SCHOOL_STEP_SUBMIT,other) or _school_clause_negated(other) or re.search(r'(?:不|无|免|毋)\s*(?:用|必|需|须|要)?\s*(?:'+_SCHOOL_STEP_SUBMIT+')',other):
+        return False
+    label=re.match(r'\s*([^：:，,。；;\n]{1,6})[：:]',sentence)
+    if set(re.findall(_SCHOOL_NATIVE_SUBJECTS,other))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,quote+(label[1] if label else ''))):return False
+    thing=re.sub(r'^(?:然后|再|并|最后一?[轮次遍]?|末[轮次遍]|将|把|请)+','',re.split(_SCHOOL_STEP_SUBMIT,other)[0]).strip('，, ')
+    recording=re.search(r'录音|音频|视频|录像',other) and re.search(r'朗读|跟读|背诵|读',quote)
+    return bool(recording or not thing or thing in quote)
+
+
+def _school_own_steps(quote,texts,others):
+    """The other quotes that are this item's own submission step in the one original holding both (_school_own_step_quote)."""
+    return {o for o in others if sum(1 for t in texts if quote in t and o in t)==1
+            and any(_school_own_step_quote(quote,t,o,others) for t in texts if quote in t and o in t)}
+
+
 def _school_own_submission_sibling(brief,other):
     """Whether another proposal from the same original is only this activity's own submission step (录音上传班级作业区 beside
     朗读第5课课文两遍，录音上传班级作业区): the same check that later folds it into this activity (_school_submission_step)
@@ -4389,6 +4423,7 @@ def school_saved_own_words(c,row,title,action):
         # That text, never the display one, holds this item's own quote once and is where its siblings' words are read.
         others=_school_sibling_quotes(c,row)
         if text.count(quote)!=1 or any(q and text.count(q)>1 for q in others):return title,action
+        steps=_school_own_steps(quote,[text],others);others=[q for q in others if q not in steps]  # as its selection reads them
     except (ValueError,TypeError,KeyError,AttributeError,IndexError,sqlite3.Error):return title,action
     return _school_sibling_free_title(quote,text,title,others),_school_sibling_free_goal(quote,text,action,others)
 
@@ -7699,7 +7734,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # A pending item is no saved task: its id never reaches the task-target checks, only the program's own proof above.
             brief=_school_brief({key:'' if key=='target_id' and pending_target else proposal.get('task_'+key,'review' if key=='state' else 'new' if key=='change' else '') for key in ['title','goal','advice','state','reason','change','target_id','purpose','submission']},
                                 incomplete=any(e.get('content_incomplete') or _needs_task_details(e['text']) for e in evidence if e['ref'] in {q['ref'] for q in cited}),evidence=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],school_tasks=school_tasks,separate_learning=True,
-                                others=[q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{c['ref'] for c in cited}])
+                                others=[q for i,q in enumerate(title_quotes) if i!=index and title_refs[i]&{c['ref'] for c in cited}
+                                        # This item's own submission step, proven in the original's own sentence, is no other item.
+                                        and q not in _school_own_steps(title_quotes[index],[e['text'] for e in evidence if e['ref'] in {c['ref'] for c in cited}],
+                                                                       title_quotes[:index]+title_quotes[index+1:])])
             mark=split_marks.get(index,{})
             if 'formed' in mark:
                 # No model receipt: the proposal it was taken out of, verbatim, and the original run it was formed from.
@@ -7803,7 +7841,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     break
             if brief['title'] and brief['goal'] and dated_quote and not historical and not native_action and len(cited_evidence)==1:
                 # Another action quoted from this same original lends no requirement or range to this item's title or summary.
-                siblings=[q for i,q in enumerate(title_quotes) if i!=index and not _school_own_submission_sibling(brief,result['proposals'][i])]
+                steps=_school_own_steps(dated_quote,[cited_evidence[0]['text']],title_quotes[:index]+title_quotes[index+1:])
+                siblings=[q for i,q in enumerate(title_quotes) if i!=index and q not in steps and not _school_own_submission_sibling(brief,result['proposals'][i])]
                 brief['goal']=_school_sibling_free_goal(dated_quote,cited_evidence[0]['text'],brief['goal'],siblings)
                 brief['title']=_school_sibling_free_title(dated_quote,cited_evidence[0]['text'],brief['title'],siblings)
                 brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
@@ -8848,6 +8887,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             sent={e['ref']:e.get('time','') for e in cited}
             dates={family_agenda.completion_day(r['text'],'',sent.get(r['ref'],''),'') for r in requirements}-{''}
             own_dated=len(dates)==1
+        inherited_dates=set()  # only a generated match inherits its batch's shared day; any other action has none
         if generated_match:
             inherited_dates=deadlines(batch_proof['action_text']+'\n'+batch_proof['shared_date_text'],sent_day(batch_proof['original_time']))
             if len(inherited_dates)==1 and not dates:dates=inherited_dates

@@ -1,5 +1,7 @@
 """P1b: an original's requirements keep their own date roles and the same homework's submission (fictional development examples only)."""
+import datetime as dt
 import unittest
+from unittest.mock import patch
 
 import family_agent as agent
 
@@ -45,6 +47,55 @@ class SameHomeworkSubmissionTests(unittest.TestCase):
                       dict(task_purpose='learning',task_title='朗读音频提交',task_goal='音频上传课堂平台。')):
             with self.subTest(other=other['task_title']):self.assertFalse(agent._school_own_submission_sibling(self.brief,other))
         self.assertFalse(agent._school_own_submission_sibling(dict(self.brief,submission=''),dict(task_purpose='admin',task_title='朗读音频提交',task_goal='音频上传课堂平台。')))
+
+
+class OwnSubmissionStepSpanTests(unittest.TestCase):
+    text='英语：每轮先听示范再朗读第6课三轮，末轮录音上传作业栏目。数学：练习册第9页照片上传作业栏目。'
+
+    def test_the_step_in_the_items_own_sentence_is_its_own(self):
+        self.assertTrue(agent._school_own_step_quote('每轮先听示范再朗读第6课三轮',self.text,'末轮录音上传作业栏目'))
+
+    def test_another_sentence_subject_negation_or_third_quote_stays_apart(self):
+        quote='每轮先听示范再朗读第6课三轮'
+        self.assertFalse(agent._school_own_step_quote(quote,self.text,'练习册第9页照片上传作业栏目'))
+        self.assertFalse(agent._school_own_step_quote(quote,'英语：每轮先听示范再朗读第6课三轮，数学练习册照片上传作业栏目。','数学练习册照片上传作业栏目'))
+        self.assertFalse(agent._school_own_step_quote(quote,'英语：每轮先听示范再朗读第6课三轮，录音不用上传作业栏目。','录音不用上传作业栏目'))
+        self.assertFalse(agent._school_own_step_quote(quote,self.text,'末轮录音上传作业栏目',['末轮录音']))
+
+
+class SameHomeworkFlowTests(unittest.TestCase):
+    """select -> save -> refresh -> manual task -> repeat, with the fictional store test_agent already builds."""
+    import test_agent as _t
+    setUp=_t.AgentTests.setUp
+    tearDown=getattr(_t.AgentTests,'tearDown',unittest.TestCase.tearDown)
+    payload=_t.AgentTests.payload
+
+    def test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen(self):
+        from test_agent import school_proposal
+        ref='message:'+self.source['id']+':11';due='2026-02-11'
+        text='明天完成英语朗读第6课，每轮先听示范再朗读三轮，末轮录音上传作业栏目。'
+        goal='英语朗读第6课，每轮先听示范再朗读三轮，末轮录音上传作业栏目。'
+        payload=self.payload();payload['messages'][0]['text']=text;self.store.ingest(payload)
+        proposals=[school_proposal(title_quote='朗读第6课',due=due,evidence=[dict(ref=ref)],task_title='英语：朗读第6课',task_goal=goal,
+                                   task_state='ready',task_reason='明确朗读及其提交。',task_purpose='learning',task_submission='末轮录音上传作业栏目'),
+                   school_proposal(title_quote='末轮录音上传作业栏目',due=due,evidence=[dict(ref=ref)],task_title='朗读录音上传',
+                                   task_goal='录音上传作业栏目。',task_state='ready',task_reason='同一朗读作业的提交步骤。',task_purpose='admin')]
+        with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
+            items=agent._select('school',[dict(ref=ref,text=text,time=self.now.isoformat(),content_incomplete=False)],
+                                school_goals=[],as_of=self.now.date().isoformat())
+        self.assertEqual([item['plan']['school_task']['state'] for item in items],['ready','review'])
+        for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,items[0]['body'])
+        key='synthetic-p1b-recording-step';fp=self.store._job(key,dict(text=text),self.now)
+        self.store._save(key,fp,[dict(item,child_id='child-1',kind='school') for item in items],self.now,
+                         [(self.source['id'],'11')],school_context=(self.source,payload['messages']))
+        with patch.object(agent.family_llm,'_chat_json',side_effect=AssertionError('saved items need no model')):
+            collected=agent._refresh_school(self.app,self.store,self.now,0)
+            repeated=agent._refresh_school(self.app,self.store,self.now+dt.timedelta(minutes=1),0)
+        self.assertEqual((collected['created'],repeated['created']),(1,0))
+        with self.app.connect() as c:
+            actions=[r['action'] for r in c.execute('SELECT action FROM manual_tasks')]
+        self.assertEqual(len(actions),1)
+        for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,actions[0])
 
 
 if __name__=='__main__':

@@ -948,20 +948,20 @@ def school_task_light_route_contract():
     effort=lambda body:body['reasoning']['effort'] if 'reasoning' in body else body.get('reasoning_effort')
     tokens=lambda body:body.get('max_tokens',body.get('max_output_tokens'))
     for responses in (False,True):
-        # Already-read school text: light model, the main reasoning_effort (never the light none), 45 s unchanged; the
-        # output limit is the approved school-task resource change from 3000 to 6000.
+        # Already-read school text: light model with its explicitly configured light effort (P1b: main low with 6000 output
+        # spent all on reasoning, none answered), 45 s unchanged; the output limit is the approved change from 3000 to 6000.
         body,wait=send(text,'family_school_task',responses=responses)
-        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','low',6000,45)
+        assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','none',6000,45)
         # Message screening on the light model keeps the light tier and its 6000/45 budget.
         body,wait=send(text,'family_agent_selection',responses=responses)
         assert (body['model'],effort(body),tokens(body),wait)==('fictional-light','none',6000,45)
         # An empty or none main effort is followed as configured, not replaced by a hard-coded low.
-        body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='')
+        body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='',FAMILY_LLM_LIGHT_REASONING_EFFORT='')
         assert body['model']=='fictional-light' and 'reasoning' not in body and 'reasoning_effort' not in body
         body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='none',FAMILY_LLM_LIGHT_REASONING_EFFORT='')
         assert body['model']=='fictional-light' and effort(body)=='none'
         body,_=send(text,'family_school_task',responses=responses,FAMILY_LLM_REASONING_EFFORT='medium',FAMILY_LLM_LIGHT_REASONING_EFFORT='minimal')
-        assert body['model']=='fictional-light' and effort(body)=='medium'
+        assert body['model']=='fictional-light' and effort(body)=='minimal'  # an explicit light override is respected
         # No light model: the default model with the main effort.
         body,wait=send(text,'family_school_task',responses=responses,FAMILY_LLM_LIGHT_MODEL='')
         assert (body['model'],effort(body),tokens(body),wait)==('fictional-main','low',6000,45)
