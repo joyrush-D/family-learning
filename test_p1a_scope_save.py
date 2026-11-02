@@ -1252,16 +1252,17 @@ class LiftedExemptionTests(ScopeSaveTests):
     R1, R2 = 'message:%s:831' % EN, 'message:%s:832' % EN
     ORIGINAL = '英语：今晚听音频跟读《星海短句》第1至3句，每句三遍；只做口头跟读，不用抄写。'
 
-    def original(self):
-        self.batch(EN, [msg('831', self.ORIGINAL, '16:20', **self.T)], lambda targets, pending: [proposal(
-            self.R1, self.ORIGINAL.rstrip('。'), '英语：跟读《星海短句》第1至3句', self.ORIGINAL)])
+    def original(self, text=None):
+        text = text or self.ORIGINAL
+        self.batch(EN, [msg('831', text, '16:20', **self.T)], lambda targets, pending: [proposal(
+            self.R1, text.rstrip('。'), '英语：跟读《星海短句》第1至3句', text)])
         item, = self.items_for(self.R1)
         if item['state'] == 'pending':
             self.store.act(dict(id=item['id'], action='accept')); item, = self.items_for(self.R1)
         return item['task_id']
 
-    def notice(self, text, goal='今晚跟读《星海短句》第1至3句，共两遍。\n只做口头跟读，不用抄写。'):
-        task = self.original()
+    def notice(self, text, goal='今晚跟读《星海短句》第1至3句，共两遍。\n只做口头跟读，不用抄写。', original=None):
+        task = self.original(original)
         self.batch(EN, [msg('832', text, '17:10', **self.T)], lambda targets, pending: [proposal(
             self.R2, text.rstrip('。'), '英语：跟读《星海短句》两遍', goal, state='review', change='update', target=task)])
         item, = [i for i in self.items_for(self.R2) if i['state'] == 'pending']
@@ -1324,3 +1325,33 @@ class LiftedExemptionTests(ScopeSaveTests):
         with self.assertRaises(agent.AgentError):
             agent.apply_school_change(self.app, self.store, form_request(self, item, task))
         self.assertEqual(self.task(task)['action'], before)
+
+    def test_root_implicit_case_a_complete_summary_still_stating_the_old_count_is_never_the_latest(self):
+        """Root run13 implicit-count negative: the same teacher's 只需跟读两遍, the model's complete summary still 每句三遍."""
+        task, item = self.notice('更正跟读：《星海短句》第1至3句今晚只需跟读两遍，仍然不用抄写。', self.ORIGINAL)
+        latest = ['英语：今晚听音频跟读《星海短句》第1至3句，每句两遍；只做口头跟读，不用抄写。']
+        for view in self.views(DAY):
+            version = self.card(view, task).get('version') or {}
+            self.assertFalse(version.get('state') == 'latest' and '三遍' in '\n'.join(version.get('lines', [])), version)
+            self.assertEqual(version.get('state'), 'latest', version)
+            self.assertEqual(version['lines'], latest)
+            self.assertIn('三遍', '\n'.join(version['previous']['lines']), 'the old count stays history')
+        request = form_request(self, item, task)
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['school_changed'])
+        self.assertEqual(self.task(task)['action'], '\n'.join(latest), 'the default form saves the proven count, never the old one')
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['replayed'])
+
+    def test_root_actor_case_swapped_read_and_sign_roles_are_no_count_only_latest(self):
+        """Root run13 actor-binding negative: the notice swaps who reads and who signs using only the original's characters."""
+        task, item = self.notice('更正跟读：家长今晚听音频跟读《星海短句》第1至3句，两遍；孩子签字。', '孩子今晚跟读《星海短句》第1至3句，共两遍；家长签字。',
+                                 original='英语：孩子今晚听音频跟读《星海短句》第1至3句，每句三遍；家长签字。')
+        for view in self.views(DAY):
+            row = self.card(view, task)
+            version = row.get('version') or {}
+            self.assertEqual(version.get('state'), 'review', version)
+            self.assertIn('孩子今晚听音频跟读', '\n'.join(row['lines']), 'the saved requirement stays until a whole one is confirmed')
+        before = self.task(task)['action']
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual(self.task(task)['action'], before, 'old actors are never saved as the latest')
