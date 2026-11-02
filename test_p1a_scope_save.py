@@ -1385,3 +1385,20 @@ class LiftedExemptionTests(ScopeSaveTests):
         for view in self.views(DAY):
             version = self.card(view, task).get('version') or {}
             self.assertFalse(any('执行人' in r for r in version.get('reasons', [])), version.get('reasons'))
+
+    def test_a_swapped_doer_reason_quotes_the_notices_own_learner_word(self):
+        """Root quick QA on 78203ac9: the comparison reads 学生 as the learner, the reason quotes the notice as written."""
+        task, item = self.notice('更正跟读：家长今晚听音频跟读《星海短句》第1至3句，两遍；学生签字。', '孩子今晚听音频跟读《星海短句》第1至3句，每句两遍；家长签字。',
+                                 original='英语：孩子今晚听音频跟读《星海短句》第1至3句，每句三遍；家长签字。')
+        reason = ('通知改为“家长今晚听音频跟读《星海短句》第1至3句”“学生签字”，执行人与原要求不同；'
+                  '新要求的归纳仍写“孩子今晚听音频跟读《星海短句》第1至3句”“家长签字”')
+        for view in self.views(DAY):
+            version = self.card(view, task).get('version') or {}
+            self.assertEqual(version.get('state'), 'review', version)
+            self.assertEqual(version.get('reasons'), [reason])
+        before = self.task(task)['action']
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        self.assertEqual(refused.exception.status, 409)
+        self.assertTrue(str(refused.exception).startswith(reason))
+        self.assertEqual(self.task(task)['action'], before, 'the refusal writes nothing')

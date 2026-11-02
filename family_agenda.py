@@ -1317,12 +1317,13 @@ def _polar_clauses(text):
 def _rebound_actors(old,notice):
     """Each notice clause whose doer the notice's own words change while every other word of it is one original piece's own,
     of the same polarity (家长今晚听音频跟读… after 孩子今晚听音频跟读…；孩子签字 after 家长签字): the notice's clause words."""
-    old,notice=_learner_read(old),_learner_read(notice)
-    actors=_unit_chars(''.join(re.findall(_ACTOR_WORDS,old+'\n'+notice)))
+    # The learner's generic words are compared as one doer; the notice's own clause words are what is quoted back.
+    old=_learner_read(old)
+    actors=_unit_chars(''.join(re.findall(_ACTOR_WORDS,old+'\n'+_learner_read(notice))))
     if not actors:return []
     olds=_polar_clauses(old);units=set(family_agent._SCHOOL_COUNT_UNITS.split('|'));found=[]
     for raw,negated,_ in _polar_clauses(notice):
-        norm=re.sub(_subject_patterns()[2].pattern,' ',re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token(units).sub(' ',_MOVE_NARRATION.sub(' ',raw.lower()))))
+        norm=re.sub(_subject_patterns()[2].pattern,' ',re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token(units).sub(' ',_MOVE_NARRATION.sub(' ',_learner_read(raw).lower()))))
         for piece in _requirement_pieces(norm,False):
             same=[u for _,n,pieces in olds if n==negated for u in pieces]
             if any(piece<=u for u in same):continue
