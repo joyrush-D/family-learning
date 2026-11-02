@@ -470,6 +470,34 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         made=self._db();self._later((4,5))  # later rounds: no read, call, write or duplicate
         self.assertEqual((self.reads.call_count,self._db()),(2,made))
 
+    def test_a_failed_first_image_mapping_keeps_its_own_budget_after_the_supplement(self):
+        day=24*60;broken=agent.AgentError('原件行动依据不在本轮已读原件范围')
+        for case in ('remaining','cooling','exhausted'):
+            with self.subTest(case=case):
+                if case!='remaining':self.setUp()
+                with patch.object(scope,'FIX',self._receipt(copy.deepcopy(scope.FIX),None)),patch.object(agent,'_school_original_actions',side_effect=broken):
+                    self._chain()  # the normal reader saves the receipt; the first mapping is refused by its program check
+                    if case=='exhausted':
+                        for n in (1,2):agent.run_once(self.app,self.now+dt.timedelta(minutes=n*day))
+                rows=self._db()[0].values()
+                candidate,=[r for r in rows if any(q['ref']==self.ref for q in json.loads(r['evidence'])) and not json.loads(r['plan']).get('school_original_action')]
+                task_key='school-task:'+candidate['id']
+                with self.store._db() as c:failed=dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(task_key,)).fetchone())
+                self.assertTrue(failed['error'])
+                self._as_saved_before_scopes()
+                self.reads.side_effect=[scope.swap(self._receipt(copy.deepcopy(scope.FIX),self.SCOPES)['call_1'],self.upload)]
+                mapped=self.calls.count('family_school_task');at=2 if case=='cooling' else 3*day
+                self._later((at,at+1))
+                with self.store._db() as c:after=dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(task_key,)).fetchone())
+                self.assertEqual(self.reads.call_count,2)  # the supplement read itself happens
+                if case=='remaining':
+                    self.assertEqual(after['attempts'],failed['attempts']+1)  # its remaining count, never restarted
+                    found={(json.loads(r['plan']).get('school_original_action') or {}).get('requirements',[{}])[0].get('text'):r for r in self._db()[0].values()}
+                    self.assertEqual(found[ROLE_OLD]['id'],candidate['id'])
+                    self.assertEqual([found[k]['state'] for k in (ROLE_OLD,R_DICT,R_SHEET)],['accepted','accepted','pending'])
+                else:
+                    self.assertEqual((self.calls.count('family_school_task'),after['attempts'],after['error']),(mapped,failed['attempts'],failed['error']))
+
     def test_a_decided_item_or_an_exhausted_job_keeps_the_old_receipt(self):
         for case in ('decided','exhausted'):
             with self.subTest(case=case):
@@ -795,7 +823,7 @@ def load_tests(loader,tests,pattern):
                  'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide',
                  'test_one_line_with_a_reading_and_a_resource_doubt_stays_review_in_its_own_words',
                  'test_an_old_undecided_receipt_is_read_once_more_for_its_scopes','test_a_decided_item_or_an_exhausted_job_keeps_the_old_receipt',
-                 'test_a_decision_while_the_supplement_reads_keeps_the_old_receipt'):
+                 'test_a_decision_while_the_supplement_reads_keeps_the_old_receipt','test_a_failed_first_image_mapping_keeps_its_own_budget_after_the_supplement'):
         suite.addTest(ScopedDoubtImageChainTests(name))
     for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
         suite.addTest(ScopedDoubtPdfTests(name))
