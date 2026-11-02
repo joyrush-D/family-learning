@@ -2344,7 +2344,7 @@ class Store:
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
 
-    def _job_supplement(self, key, value, now):
+    def _job_supplement(self, key, value, now, *, claim=True):
         """One bounded re-read of a finished job's own input for missing evidence (a receipt's doubt scopes).
 
         The same key keeps its attempts, backoff and error history under the new request: claiming adds one attempt to
@@ -2357,9 +2357,11 @@ class Store:
             if row is None or row['attempts'] >= MAX_ATTEMPTS or row['next_try'] > now.isoformat(): return None
             if row['fingerprint'] == fingerprint:
                 if row['done']: return None
+                if not claim: return fingerprint
                 c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
                 return fingerprint
             if not row['done']: return None  # another unfinished request owns this key
+            if not claim: return fingerprint
             c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+1,done=0 WHERE id=?', (fingerprint, key))
             return fingerprint
 
@@ -8358,6 +8360,8 @@ def _school_scope_supplemented(store,row):
             source_id,message_id=quote['ref'][8:].rsplit(':',1)
             draft=c.execute('SELECT payload FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source_id,message_id)).fetchone()
             if draft and 'previous_scope_receipt' in json.loads(draft['payload']):return True
+            for group in c.execute('SELECT payload FROM agent_pdf_material WHERE source_id=? AND message_id=?',(source_id,message_id)):
+                if (json.loads(group['payload']).get('previous_group') or {}).get('scope_supplement'):return True
     return False
 
 
@@ -9386,8 +9390,9 @@ def _refresh_school(app, store, now, budget):
                     continue
             # A saved image original action whose receipt was read once more for its doubts' scopes (D) is mapped again as a
             # whole original while it is an undecided pending item; decided rows keep their actions in that mapping too.
-            supplemented=bool(plan.get('school_original_action') and material and not pdf_evidence and row['state']=='pending' and not row['task_id']
-                              and (plan.get('school_task') or {}).get('material_evidence',{}).get('fingerprint')!=material.get('fingerprint')
+            supplemented=bool(plan.get('school_original_action') and (pdf_evidence or material) and row['state']=='pending' and not row['task_id']
+                              and ((plan.get('school_task') or {}).get('pdf_evidence' if pdf_evidence else 'material_evidence') or {}).get('fingerprint')
+                                  !=(pdf_evidence or material).get('fingerprint')
                               and _school_scope_supplemented(store,row))
             original_parts=_school_original_parts(reading_evidence,pdf_evidence,material) if (pdf_evidence or material or plan.get('school_first_batch_correction') or legacy_correction) and (not plan.get('school_original_action') or reflow or mapped_reflow or supplemented) else []
             compiled_requirements=None
@@ -9422,13 +9427,16 @@ def _refresh_school(app, store, now, budget):
                     for doc in pdf_evidence['model']]
             key='school-task:'+row['id']
             # The claim's own decision without taking it; a lookup failure below still precedes the claim and spends no attempt.
-            if not store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread),claim=False): continue
+            # After a scope supplement the mapping keeps its own job's attempts, backoff and history (never a new budget).
+            if not (store._job_supplement(key,value,now,claim=False) if supplemented else
+                    store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread),claim=False)): continue
             targets=school_targets(app,store,row['child_id'])
             from family_goals import Store as Goals
             school_goals=Goals(app,store).school_candidates(row['child_id'])
             context.update(school_tasks=[{k:v for k,v in t.items() if k not in ('facts','same_basis','same_complete','same_as')} for t in targets],learning_goals=school_goals)
             if saved_reread:_school_recovery_inherit(store,key,row['job_id'],row['child_id'])
-            fp=store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread))
+            fp=(store._job_supplement(key,value,now) if supplemented else
+                store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread)))
             if not fp: continue
             paged+=bool(page_changed or pdf_changed or material_changed or original_changed or saved_reread)
             try:

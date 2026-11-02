@@ -210,6 +210,7 @@ def _batches(rows, upload_id):
             require(type(count) is int and 1 <= pages[0] and pages[-1] <= count <= family_pdf.MAX_DOCUMENT_PAGES, 'pdf_row_invalid')
             require(isinstance(draft, dict) and draft.pop('kind', None) == SCHOOL_MATERIAL, 'draft_kind_mismatch')
             draft.pop('previous_group',None)  # Old payload and timestamp remain history, never current action evidence.
+            draft.pop('scope_requested',None)
             draft = family_llm.validate_school_material(draft,original_ids=[upload_id] if 'originals' in draft else (),
                                                        require_requirements='originals' in draft,allow_page_scope=True,
                                                        allow_legacy_reading_progress=True)
@@ -341,12 +342,36 @@ def _claim_intact(store, c, source, message, value, key, fp):
     if current is None or current['fingerprint']!=value['fingerprint'] or job is None or job['fingerprint']!=fp:return False
     scope,undecided,mapped=_decision_scope(store,c,source,message,current)
     return (scope==value['decision_scope'] and (not value.get('upgrade_pages') or undecided)
-            and ('previous_requirements' not in value or mapped))
+            and (not value.get('scope_pages') or undecided and not mapped)  # a supplement: every known item an undecided pending original
+            and ('previous_requirements' not in value or mapped or bool(value.get('scope_pages'))))
 
 
-def _void(c, key, fp):
-    """Withdraw this claim rather than complete it: a restored or re-linked original continues from its saved page groups."""
-    c.execute('DELETE FROM agent_jobs WHERE id=? AND fingerprint=?', (key, fp))
+def _void(c, key, fp, value=None):
+    """Withdraw this claim rather than complete it: a restored or re-linked original continues from its saved page groups.
+
+    A scope supplement's claim carries the finished job's own attempts and history: withdrawn, it stays finished and
+    discarded with that count rather than deleted, so no later claim regains a budget."""
+    if value and value.get('scope_pages'):
+        c.execute("UPDATE agent_jobs SET done=1,fingerprint=? WHERE id=? AND fingerprint=?", ('discarded:'+fp, key, fp))
+    else:
+        c.execute('DELETE FROM agent_jobs WHERE id=? AND fingerprint=?', (key, fp))
+
+
+def _scope_gap(batches, rows):
+    """D: the first saved page group read before the reader was asked for uncertainty_scopes (no scope_requested mark) and
+    never supplemented, whose originals have doubts and requirement lines but no scope field. Its raw payload hash is the
+    one-time source the save rechecks. None when every group is current, scoped, clear or already supplemented; this never
+    marks a group or document incomplete (_needs_requirements_upgrade and page coverage are unchanged)."""
+    from family_agent import _hash
+    raw={r['first_page']:r for r in rows}
+    for batch in batches:
+        row=raw.get(batch['pages'][0])
+        if row is None or json.loads(row['pages'])!=batch['pages']:continue
+        payload=json.loads(row['payload'])
+        if payload.get('scope_requested') or (payload.get('previous_group') or {}).get('scope_supplement'):continue
+        if any(o.get('uncertainties') and o.get('requirements') and 'uncertainty_scopes' not in o for o in batch['draft'].get('originals',[])):
+            return dict(pages=batch['pages'],draft=batch['draft'],hash=_hash(row['payload']))
+    return None
 
 
 def prepare(store, now, budget=ROUND_CALLS):
@@ -389,6 +414,14 @@ def prepare(store, now, budget=ROUND_CALLS):
                                 value['previous_requirements']=[text for original in legacy[0]['draft']['originals']
                                     for text in original['requirements']]
                         elif page_count is not None and not _pending(done,page_count):continue
+                    elif undecided and not mapped and page_count is not None and not _pending(done,page_count):
+                        # D: one complete document's first group read before uncertainty_scopes with unscoped doubts is read once
+                        # more, bounded, keeping its exact requirement lines (and so its part ids) as the one-time source.
+                        gap=_scope_gap(batches,_rows(c,source,message,value['fingerprint']))
+                        if gap:
+                            value.update(scope_pages=gap['pages'],scope_supplement=gap['hash'],
+                                         previous_requirements=[t for o in gap['draft']['originals'] for t in o['requirements']])
+                            done={p for b in batches if b['pages']!=gap['pages'] for p in b['pages']}
                         # A shared legacy group never changes after any decision. Missing groups retain the original
                         # bounded first-read path, which does not replace the already saved legacy groups.
                     value['decision_scope']=decision_scope
@@ -400,7 +433,8 @@ def prepare(store, now, budget=ROUND_CALLS):
         # a failed or exhausted first document cannot prevent a later current document from being claimed.
         for value, done, page_count in sorted(candidates, key=lambda item: (len(item[1]), item[0]['upload_id'])):
             key = _document_key(source, message, value)
-            fp = store._job(key, _job_value(value['fingerprint'], done), now, model=True)
+            fp = (store._job_supplement(key, dict(_job_value(value['fingerprint'], done), scope_supplement=value['scope_supplement']), now)
+                  if value.get('scope_pages') else store._job(key, _job_value(value['fingerprint'], done), now, model=True))
             if fp:
                 selected = (source, message, value, done, page_count, key, fp)
                 break
@@ -414,7 +448,7 @@ def prepare(store, now, budget=ROUND_CALLS):
     try:  # No database connection is held from here until each re-check.
         with store._db() as c:  # Re-checked before any conversion or probe: a claim taken a moment ago may already be stale.
             if not _claim_intact(store, c, source, message, value, key, fp):
-                _void(c, key, fp)  # Revoked, corrected, unlinked, replaced or lost claim: nothing is converted, probed or sent.
+                _void(c, key, fp, value)  # Revoked, corrected, unlinked, replaced or lost claim: nothing is converted, probed or sent.
                 return dict(used=0, failed=0)
         body = value['body']
         if value['original'] == 'docx':
@@ -423,19 +457,19 @@ def prepare(store, now, budget=ROUND_CALLS):
             body = family_media.docx_pdf(value['body'])
             with store._db() as c:  # Re-checked after conversion: a revoked, corrected, unlinked or replaced original renders nothing.
                 if not _claim_intact(store, c, source, message, value, key, fp):
-                    _void(c, key, fp)
+                    _void(c, key, fp, value)
                     return dict(used=0, failed=0)
         elif value['original'] == 'pptx':
             body = family_media.pptx_pdf(value['body'])
             with store._db() as c:
                 if not _claim_intact(store, c, source, message, value, key, fp):
-                    _void(c, key, fp)
+                    _void(c, key, fp, value)
                     return dict(used=0, failed=0)
         elif value['original'] == 'xlsx':
             body = family_media.xlsx_pdf(value['body'])
             with store._db() as c:
                 if not _claim_intact(store, c, source, message, value, key, fp):
-                    _void(c, key, fp)
+                    _void(c, key, fp, value)
                     return dict(used=0, failed=0)
         started = time.monotonic()
 
@@ -447,14 +481,14 @@ def prepare(store, now, budget=ROUND_CALLS):
             page_count = family_pdf.page_count(body, deadline())
         if value['expected_pages'] is not None:
             require(page_count == value['expected_pages'], 'pptx_page_count_changed')
-        pages = value.get('upgrade_pages') or _pending(done, page_count)[:BATCH_PAGES]
+        pages = value.get('upgrade_pages') or value.get('scope_pages') or _pending(done, page_count)[:BATCH_PAGES]
         require(pages, 'pdf_material_changed')
         rendered = family_pdf.render_pages(body, pages, deadline())
         # A converted DOCX whose page total differs from the saved groups is refused here, before any model call.
         require(rendered['page_count'] == page_count and [p['page'] for p in rendered['pages']] == pages, 'pdf_page_count_changed')
         with store._db() as c:  # Re-checked after rendering: a revoked, corrected, unlinked or replaced original sends nothing out.
             if not _claim_intact(store, c, source, message, value, key, fp):
-                _void(c, key, fp)
+                _void(c, key, fp, value)
                 return dict(used=0, failed=0)
         left = [p for p in _pending(done, page_count) if p not in pages]
         text = json.dumps(dict(source_message=message, source_name=source['name'],
@@ -476,7 +510,7 @@ def prepare(store, now, budget=ROUND_CALLS):
         with store._db() as c:
             c.execute('BEGIN IMMEDIATE')
             if not _claim_intact(store, c, source, message, value, key, fp):
-                _void(c, key, fp)  # Changed while the model ran: drop the result, keep nothing, leave no error.
+                _void(c, key, fp, value)  # Changed while the model ran: drop the result, keep nothing, leave no error.
                 return dict(used=1, failed=0)
             saved_rows=_rows(c, source, message, value['fingerprint'])
             batches_now, done_now, count_now = _batches(saved_rows,value['upload_id'])
@@ -485,6 +519,15 @@ def prepare(store, now, budget=ROUND_CALLS):
                 require(old is not None and any(b['pages']==pages and _needs_requirements_upgrade(b) for b in batches_now), 'pdf_material_changed')
                 done_now={p for b in batches_now if not _needs_requirements_upgrade(b) for p in b['pages']}
                 result['previous_group']=dict(payload=json.loads(old['payload']),updated=old['updated'],pages=json.loads(old['pages']),page_count=old['page_count'])
+            elif value.get('scope_pages'):
+                from family_agent import _hash
+                # The same old group, still the one-time source, in this transaction; it stays verbatim as this group's history.
+                old=next((r for r in saved_rows if r['first_page']==pages[0] and json.loads(r['pages'])==pages),None)
+                require(old is not None and _hash(old['payload'])==value['scope_supplement'], 'pdf_material_changed')
+                done_now={p for b in batches_now if b['pages']!=pages for p in b['pages']}
+                result['previous_group']=dict(payload=json.loads(old['payload']),updated=old['updated'],pages=json.loads(old['pages']),
+                                              page_count=old['page_count'],scope_supplement=True)
+            result['scope_requested']=1  # read under the scope protocol: never a supplement candidate
             require(count_now in (None, page_count) and not (done_now & set(pages)), 'pdf_material_changed')
             c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?) '
                       'ON CONFLICT(source_id,message_id,fingerprint,first_page) DO UPDATE SET '
