@@ -39,7 +39,7 @@ enum Palette {
 enum ListMode: String, CaseIterable, Identifiable { case calendar = "日历", wrong = "错题本", learning = "学习进展"; var id: String { rawValue } }
 
 enum SheetKind: Identifiable {
-    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong
+    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong, taskWrong(DayItem)
     var id: String {
         switch self {
         case .feedback(let i): return "feedback-" + i.id
@@ -47,6 +47,7 @@ enum SheetKind: Identifiable {
         case .wrong(let i, let r): return "wrong-\(i.id)-\(r.id)"
         case .correction(let r): return "correction-\(r.id)"
         case .addWrong: return "wrong-add"
+        case .taskWrong(let i): return "wrong-task-" + i.id
         }
     }
 }
@@ -1423,6 +1424,8 @@ struct Inspector: View {
                     if item.category == "homework" {
                         Button { store.openWebTools(item.task_id, "check") } label: { Label("交作答照片检查", systemImage: "camera") }
                             .buttonStyle(GroveButtonStyle()).probe("check-web")
+                        Button { store.sheet = .taskWrong(item); store.sheetDirty = false } label: { Label("直接记错题", systemImage: "exclamationmark.bubble") }
+                            .buttonStyle(GroveButtonStyle()).probe("wrong-task-new")
                     }
                 }
                 Text("文字反馈在这里写，照片可加可不加，不调用 AI，不自动标已办或判错；照片检查在网页版同一份作业里进行。").font(Palette.small).foregroundStyle(Palette.ink2)
@@ -1473,6 +1476,7 @@ struct SheetHost: View {
         case .wrong(let item, let record): WrongSheet(store: store, item: item, record: record)
         case .correction(let record): CorrectionSheet(store: store, record: record)
         case .addWrong: WrongAddSheet(store: store)
+        case .taskWrong(let item): WrongAddSheet(store: store, item: item)
         }
     }
 }
@@ -1694,6 +1698,8 @@ struct CorrectionSheet: View {
 /// 不新建作业或反馈。保存走原有错题保存与同一提交标识的防重复。
 struct WrongAddSheet: View {
     @ObservedObject var store: WorkspaceStore
+    /// 有值时是当前原作业：孩子、作业和科目固定，不用先写反馈；题号/题面/原答/订正任一项即可，照片可不选，选了保整张原图。
+    var item: DayItem? = nil
     @StateObject var save = SaveState()
     @State var subject = ""
     @State var label = ""
@@ -1706,18 +1712,21 @@ struct WrongAddSheet: View {
     @State var picking = false
 
     var body: some View {
-        SheetFrame(store: store, save: save, title: "记一道错题", context: "\(store.childName) · 没有原作业（不会新建作业或反馈）",
+        SheetFrame(store: store, save: save, title: "记一道错题",
+                   context: item.map { "\(store.childName) · \($0.subject) · \($0.title)（不用先写反馈，不会新建作业）" } ?? "\(store.childName) · 没有原作业（不会新建作业或反馈）",
                    dirty: !(subject + label + text + answer + correction).isEmpty || !photos.isEmpty,
-                   canSave: !label.trimmingCharacters(in: .whitespaces).isEmpty && !photos.isEmpty, saveTitle: "保存错题", onSave: submit) {
+                   canSave: item == nil ? !label.trimmingCharacters(in: .whitespaces).isEmpty && !photos.isEmpty
+                       : [label, text, answer, correction].contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                   saveTitle: "保存错题", onSave: submit) {
             Section {
-                TextField("科目（可不填）", text: $subject).probe("wrong-add-subject")
-                TextField("哪一题（必填）", text: $label).probe("wrong-add-label")
+                if item == nil { TextField("科目（可不填）", text: $subject).probe("wrong-add-subject") }
+                TextField(item == nil ? "哪一题（必填）" : "哪一题（可不填）", text: $label).probe("wrong-add-label")
                 TextField("题面（可不填）", text: $text).probe("wrong-add-text")
                 TextField("孩子原答（可不填）", text: $answer).probe("wrong-add-answer")
                 TextField("订正 / 正确做法（可不填）", text: $correction).probe("wrong-add-correction")
             }
-            Section("这道题的照片（必选，原图原样保留）") {
-                if photos.isEmpty { Text("没有原作业时，需要一张这道题的照片作原件。").font(.caption).foregroundStyle(Palette.ink2) }
+            Section(item == nil ? "这道题的照片（必选，原图原样保留）" : "这道题的照片（可不选，整张原图保留）") {
+                if photos.isEmpty { Text(item == nil ? "没有原作业时，需要一张这道题的照片作原件。" : "可只选照片并写题号；不选照片也能保存。").font(.caption).foregroundStyle(Palette.ink2) }
                 ForEach(photos, id: \.self) { url in Text(url.lastPathComponent).lineLimit(1).truncationMode(.middle).probe("wrong-add-photo-name", text: url.lastPathComponent) }
                 Button(photos.isEmpty ? "选择照片…" : "换一张照片…") { pick() }.probe("wrong-add-photo")
             }
@@ -1738,23 +1747,30 @@ struct WrongAddSheet: View {
     func submit() {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         Task {
-            guard let url = photos.first else { save.busy = false; return }
-            let sent = await WorkspaceStore.uploadPhotos([url], cached: uploaded, keys: uploadKeys, read: WorkspaceStore.readPicked) {
-                await store.client.upload($0, name: $1, key: $2)
-            }
-            uploaded = sent.cached; uploadKeys = sent.keys
-            switch sent.stop {
-            case .unreadable?: save.busy = false; save.message = "读不到所选照片，未保存；输入已保留。"; return
-            case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存错题；可以重试。"; return
-            case .outcome(let other)?: await store.finish(other, save, done: ""); return
-            case nil: break
-            }
-            let id = sent.ids.first ?? ""
+            var id = ""
+            if let url = photos.first {
+                let sent = await WorkspaceStore.uploadPhotos([url], cached: uploaded, keys: uploadKeys, read: WorkspaceStore.readPicked) {
+                    await store.client.upload($0, name: $1, key: $2)
+                }
+                uploaded = sent.cached; uploadKeys = sent.keys
+                switch sent.stop {
+                case .unreadable?: save.busy = false; save.message = "读不到所选照片，未保存；输入已保留。"; return
+                case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存错题；可以重试。"; return
+                case .outcome(let other)?: await store.finish(other, save, done: ""); return
+                case nil: break
+                }
+                id = sent.ids.first ?? ""
+            } else if item == nil { save.busy = false; return }
             let today = store.view?.today ?? store.day
             let day = store.day.isEmpty || store.day > today ? today : store.day
-            let body: [String: Any] = ["child": store.childName, "day": day, "subject": subject.trimmingCharacters(in: .whitespaces), "request_key": save.key,
+            var body: [String: Any] = ["child": store.childName, "day": day, "subject": subject.trimmingCharacters(in: .whitespaces), "request_key": save.key,
                                        "items": [["attachment": id, "label": label, "text": text, "answer": answer, "correction": correction]]]
-            await store.finish(await store.client.post("/api/wrong/save", body), save, done: "错题已记进错题本。")
+            if let item = item {
+                // 只带 task_id、不带任何 feedback_* 键：服务端在保存事务里核同孩原作业，不造反馈、不标完成。
+                body["subject"] = [WorkspaceStore.general, WorkspaceStore.unknown].contains(item.subject) ? "" : item.subject
+                body["task_id"] = item.task_id
+            }
+            await store.finish(await store.client.post("/api/wrong/save", body), save, done: item == nil ? "错题已记进错题本。" : "错题已记在这份作业下。")
         }
     }
 }

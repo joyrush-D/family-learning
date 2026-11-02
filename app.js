@@ -567,7 +567,7 @@ $('#refreshRecordTaskLink').onclick=async()=>{
  try{await load(false);const record=data.records.find(r=>r.id===id);if(!record)throw Error('记录当前不可用');prepareRecordTaskLink(record,true);prepareRecordVideo(record);if(!recordTaskLinkContext.inherited&&[...$('#recordTaskSelect').options].some(o=>o.value===wanted))$('#recordTaskSelect').value=wanted;$('#recordTaskLinkStatus').textContent='已读取当前关联；请核对后再保存你的选择。'}catch(error){$('#recordTaskLinkStatus').textContent=error.message+'；原选择保留。'}finally{recordTaskLinkBusy=false;recordTaskControls()}
 };
 
-let taskFeedbackContext=null,taskFeedbackPending=null,taskWrongPending=null,homeworkReviewSerial=0,homeworkReviewBusy=false,taskFeedbackExcluded=new Set();
+let taskFeedbackContext=null,taskFeedbackPending=null,taskWrongPending=null,taskWrongUpload=null,homeworkReviewSerial=0,homeworkReviewBusy=false,taskFeedbackExcluded=new Set();
 const sharedCapture=$('#recordForm .capture'),captureHint=sharedCapture.querySelector('.muted.small'),recordCaptureHint=captureHint.textContent;
 function captureBusy(){return uploading||recorder||micPending||drafting||readingBusy||homeworkReviewBusy||!!$('#taskForm').dataset.saving}
 function taskFeedbackDraftState(){
@@ -575,7 +575,7 @@ function taskFeedbackDraftState(){
  return JSON.stringify([f.elements.note.value,$('#taskTranscript').value,$('#taskTranscriptState').value,$('#taskFeedbackDay').value,$('#taskAssistance').value,f.elements.status.value,pendingIDs,[...taskFeedbackExcluded],failedFiles.map(file=>[file.name,file.size])]);
 }
 function unappliedHomeworkReviewDraft(root=$('#taskFeedbackHistory')){return [...root.querySelectorAll('[data-homework-review-result] textarea,[data-homework-review-instruction]')].some(x=>(x.dataset.feedbackLock===undefined?!x.disabled:x.dataset.feedbackLock==='enabled')&&(x.hasAttribute('data-homework-review-instruction')?x.value.trim()!==(x.closest('[data-homework-review]').querySelector('[data-homework-review-result]').dataset.instruction||''):!!x.value.trim()))}
-function unappliedTaskWrongDraft(){return [...document.querySelectorAll('[data-task-wrong-form] input[data-wrong-field], [data-task-wrong-form] textarea')].some(x=>x.value.trim())}
+function unappliedTaskWrongDraft(){return [...document.querySelectorAll('[data-task-wrong-form] input[data-wrong-field], [data-task-wrong-form] textarea')].some(x=>x.value.trim())||[...document.querySelectorAll('[data-task-wrong-file]')].some(x=>x.files?.length)}
 function taskFeedbackDraftChanged(){return !!taskFeedbackContext&&(taskFeedbackDraftState()!==taskFeedbackContext.initial||unappliedHomeworkReviewDraft()||unappliedTaskWrongDraft())}
 function taskCloseAllowed(){
  if(captureBusy()||taskFeedbackPending||taskWrongPending){toast('请先完成当前保存或录音');return false}
@@ -589,7 +589,7 @@ function prepareTaskCapture(task,record=null,recentId=null){
  $('#taskRequirement').textContent=task.action||'具体要求尚未填写';
  $('#taskFeedbackFormHeading').textContent=record?'更正这次反馈':'追加一次作答 / 反馈';
  homeworkReviewSerial++;
- taskWrongPending=null;taskFeedbackExcluded.clear();
+ taskWrongPending=null;taskWrongUpload=null;taskFeedbackExcluded.clear();
  taskFeedbackContext={task_id:record?recordTask(record,task).id:task.id,child:task.child,day:record?.day||data.today,category:record?.category||(task.agenda?.category==='todo'?'家长观察':'学习进展'),request_key:crypto.randomUUID(),record_id:record?.id,expected_created:record?.created,originals:record?.attachments||[]};
  $('#taskFeedbackDay').value=record?.day||data.today;$('#taskForm').elements.status.value=status(task)==='已归档'?'待跟进':status(task);formVersion++;pendingIDs=[...(record?.attachments||[])];failedFiles=[];draft=null;draftVersion++;resetCareFeedback();
  $('#taskCaptureHome').append(sharedCapture);captureHint.textContent='提交作答照片、PDF或纯文字Word/TXT，可同时补充老师参考答案。每份最多20MB。';$('#draftButton').classList.add('hide');$('#draftResult').innerHTML='';$('#draftStatus').textContent='';$('#uploadStatus').textContent='';
@@ -883,6 +883,11 @@ function sameAffairTasks(task){return [task,...data.tasks.filter(t=>t.id!==task.
 function sameAffairState(t){const group=sameAffairTasks(t);if(group.length<2)return null;const closed=group.filter(m=>taskClosed(m)),open=group.filter(m=>!taskClosed(m));
  return closed.length&&open.length?{open,closed,note:'同一事项另有一份已标记“'+taskStatusLabel(status(closed[0]))+'”，是否还需要再做或再交待核对；各份原状态和记录保留，不据反馈推定完成。'}:null}
 function recordTask(record,task){const own=String(record?.source||'').startsWith('事项:')?String(record.source).slice(3):record?.linked_task_id;return sameAffairTasks(task).find(t=>t.id===own)||task}
+// The same homework with no saved feedback: a hand-noted item or one whole photo goes straight under this task (no placeholder feedback, no model, no completion).
+function taskDirectWrongHTML(task){
+ if(task.agenda?.category!=='homework')return '';
+ return `<details class="task-direct-wrong" data-task-wrong-form="direct"><summary>直接记错题</summary><p class="small muted">不用先写反馈或检查；题号、题面、孩子原答、订正写任意一项即可，不知道的留空。照片可加一张，整张原图保留。不调用 AI，也不会把作业标为已完成。</p><label>这道题的照片（可选）<input type="file" accept="image/jpeg,image/png,image/webp" data-task-wrong-file></label><label>题号或位置<input data-wrong-field="label" maxlength="80"></label><label>题面（可选）<textarea data-wrong-field="text" maxlength="2000"></textarea></label><label>孩子原答（可选）<input data-wrong-field="answer" maxlength="1000"></label><label>订正或正确答案（可选）<input data-wrong-field="correction" maxlength="1000"></label><label>家长备注（可选）<textarea data-wrong-field="note" maxlength="1000"></textarea></label><button type="button" data-task-wrong-save="direct">保存这条错题</button><p role="status" data-task-wrong-status></p></details>`;
+}
 function drawTaskFeedback(task,recentId=null){
  videoDraftSerial++;videoDraftViews.clear();videoReviewPending.clear();videoTranscripts.clear();
  drawTaskSchoolResources(task);
@@ -894,7 +899,7 @@ function drawTaskFeedback(task,recentId=null){
   const homework=task.agenda?.category==='homework',count=test=>records.filter(test).length,saved=[[homework?'作答 / 反馈':'反馈',count(r=>homeworkAnswerRecord(r,task)),'条'],['检查',count(r=>!!homeworkReviewOriginalId(r)),'次'],['错题',count(r=>r.source==='错题照片核对'),'条'],['订正/复测',count(r=>['订正','复测'].includes(r.followup_kind)),'条']],other=records.length-saved.reduce((n,x)=>n+x[1],0),taskState=status(task)||'待跟进';
   $('#taskFeedbackIntro').textContent='已保存 '+[...saved.filter(x=>x[1]).map(([name,n,unit])=>name+n+unit),...(other>0?['其他关联'+other+'条']:[])].join(' · ')+'；事项状态：'+(taskState==='不适用'?'无需处理':taskState)+'。';
  }
- $('#taskFeedbackHistory').innerHTML=records.length?'<h3>已保存的作答与反馈</h3>'+records.map(r=>{
+ $('#taskFeedbackHistory').innerHTML=taskDirectWrongHTML(task)+(records.length?'<h3>已保存的作答与反馈</h3>'+records.map(r=>{
   const reviewOriginal=homeworkReviewOriginalId(r);
   const latest=reviewOriginal&&!records.some(x=>homeworkReviewOriginalId(x)===reviewOriginal&&(x.created>r.created||x.created===r.created&&x.id>r.id));
   const savedReview=reviewOriginal?`<section data-saved-homework-review="${r.id}"><p class="small" role="status" data-saved-review-status></p><button type="button" hidden>重试读取检查</button><div class="saved-review-focus" data-saved-review-focus role="group" aria-label="需订正与待补查的题目" hidden></div><div class="source" data-saved-review-text></div></section>`:'';
@@ -908,7 +913,7 @@ function drawTaskFeedback(task,recentId=null){
   const files=photos.map(a=>reviewOriginal?`<p class="task-file-link"><a href="${endpoint('/upload/')+encodeURIComponent(a.id)}" target="_blank" rel="noopener">${esc(a.name)}</a></p>`:uploadHTML(a)).join('')+(r.attachments||[]).map(id=>data.uploads.find(a=>a.id===id)).filter(a=>a&&!photos.includes(a)).map(uploadHTML).join('');
   const historical=reviewOriginal&&!latest,tag=historical?'details':'article';
   return `<${tag} class="task-feedback-record" data-feedback-kind="${recordKind}">${historical?`<summary>${esc(r.day)} · 此前检查 · 原作答 #${reviewOriginal}</summary>`:'<header class="task-record-heading">'}${historical?'':`<strong>${reviewOriginal?'检查意见':recordKind==='answer'?'作答 / 反馈':r.source==='错题照片核对'?'错题':esc(r.followup_kind||'关联记录')}</strong><time>${esc(r.day)}</time></header>`}${paperNote&&!reviewOriginal?`<p class="small">来自作答：${esc(paperNote)}</p>`:''}${r.retry&&!reviewOriginal?retryViewHTML(r):`<p class="task-record-note">${reviewOriginal?esc(records.find(x=>x.id===reviewOriginal)?.note?.split('\n')[0]?.slice(0,100)||'原作答 #'+reviewOriginal):''}${reviewOriginal?'':esc(r.note||(r.transcript?'已保存语音转写':'已保存原件，内容待核对'))}</p>`}${r.source==='错题照片核对'&&r.wrong_region?`<figure class="task-wrong-crop" data-wrong-region-crop="${r.id}"><figcaption class="small muted">${r.wrong_region.current?'原图框题（由原图临时裁出）':'依据旧版原作答或原图，仅供追溯'}</figcaption></figure>`:''}${savedReview}${r.comparison_note?`<p class="small">当时的补充：${esc(r.comparison_note)}</p>`:''}${r.assistance&&!r.retry?`<p class="small muted">本次帮助：${esc(r.assistance)}</p>`:''}${r.transcript?`<p class="source">转写（${esc(r.transcript_state)}）：${esc(r.transcript)}</p>`:''}${review}${wrong}${files?reviewOriginal?`<div class="task-record-files">${files}</div>`:files:''}${videoDraftPanelHTML(r)}${r.source==='事项:'+task.id&&reviewOriginal?'<p class="small muted">需调整时，回原作答补充一句并再次复核；本次意见保留。</p>':r.source==='事项:'+task.id?`<button type="button" data-task-feedback-edit="${r.id}">更正这条反馈</button>`:`${r.retry?'':`<p class="small muted">关联记录 · ${r.source==='错题照片核对'?esc(correctionItemName(r.title)):esc(r.title)+' · '+esc(r.source)}</p>`}<div class="task-link-actions"><button type="button" data-record="${r.id}">查看 / 更正原记录</button>${r.source==='错题照片核对'?`<button type="button" data-followup="${r.id}" data-followup-kind="订正">记订正 / 复测</button>`:''}</div>${r.source==='错题照片核对'&&window.FamilyTopicDiagnosis?FamilyTopicDiagnosis.slot(r,data.children.find(c=>c.name===r.child)?.id):''}`}</${tag}>`;
- }).join(''):'';
+ }).join(''):'');
  for(const panel of $('#taskFeedbackHistory').querySelectorAll('[data-saved-homework-review]')){const record=records.find(r=>r.id===Number(panel.dataset.savedHomeworkReview)),history=panel.closest('details.task-feedback-record'),read=()=>{if(!history||history.open)loadSavedHomeworkReview(panel,record,task)};(history||panel).addEventListener('toggle',read);panel.querySelector('button').onclick=read;read()}
  for(const panel of $('#taskFeedbackHistory').querySelectorAll('[data-homework-review]')){const record=records.find(r=>r.id===Number(panel.dataset.homeworkReview));loadHomeworkReviewSources(panel,record,task)}
 }
@@ -982,38 +987,57 @@ $('#taskFeedbackHistory').addEventListener('click',async e=>{
 });
 $('#taskFeedbackHistory').addEventListener('click',async e=>{
  const button=e.target.closest('[data-task-wrong-save]');if(!button||captureBusy()||taskFeedbackPending||homeworkReviewBusy)return;
- const panel=button.closest('[data-task-wrong-form]'),record=data.records.find(r=>r.id===Number(button.dataset.taskWrongSave)),task=data.tasks.find(t=>t.id===taskFeedbackContext?.task_id);
- if(!panel||!record||!task||!homeworkAnswerRecord(record,task)||task.agenda?.category!=='homework')return;
+ // "direct" files a hand-noted item or one whole photo under this same homework with no saved feedback: only task_id is sent, never a feedback key.
+ const direct=button.dataset.taskWrongSave==='direct',panel=button.closest('[data-task-wrong-form]'),record=direct?null:data.records.find(r=>r.id===Number(button.dataset.taskWrongSave)),task=data.tasks.find(t=>t.id===taskFeedbackContext?.task_id);
+ if(!panel||!task||task.agenda?.category!=='homework'||!direct&&(!record||!homeworkAnswerRecord(record,task)))return;
  const status=panel.querySelector('[data-task-wrong-status]');
- if(taskWrongPending&&taskWrongPending.feedback_record_id!==record.id){status.textContent='请先核对上一条错题的保存结果。';return}
+ if(taskWrongPending&&(taskWrongPending.feedback_record_id??'direct:'+taskWrongPending.task_id)!==(direct?'direct:'+task.id:record.id)){status.textContent='请先核对上一条错题的保存结果。';return}
  if(!taskWrongPending){
   if([...document.querySelectorAll('[data-task-wrong-form]')].some(other=>other!==panel&&[...other.querySelectorAll('[data-wrong-field]')].some(x=>x.value.trim()))){status.textContent='另一份作答还有未保存的错题，请先保存或清空。';return}
   if(taskFeedbackDraftState()!==taskFeedbackContext.initial||unappliedHomeworkReviewDraft()){status.textContent='请先保存当前作业反馈或批改草稿，再记错题。';return}
-  const value=name=>panel.querySelector(`[data-wrong-field="${name}"]`).value.trim(),photo=panel.querySelector('[data-task-wrong-photo]')?.value||'';
-  if(!(value('label')||value('text'))||!value('answer')||!value('correction')){status.textContent='请核对题号或题面、孩子原答和订正后再保存；未判定的题先保留在反馈中。';return}
-  if(photo&&!record.attachments.includes(photo)){status.textContent='照片已变化，请重新打开原作业核对。';return}
-  const framed=photo&&panel.taskWrongRegion?.upload_id===photo?panel.taskWrongRegion:null;
-  taskWrongPending={child:task.child,day:record.day,subject:record.subject||'',task_id:recordTask(record,task).id,feedback_record_id:record.id,feedback_created:record.created,feedback_linked_at:record.linked_task_at||'',
-   request_key:crypto.randomUUID().replaceAll('-',''),items:[{attachment:photo,label:value('label'),text:value('text'),answer:value('answer'),correction:value('correction'),note:value('note'),...(framed?{region:{x:framed.x,y:framed.y,width:framed.width,height:framed.height,natural_width:framed.natural_width,natural_height:framed.natural_height}}:{})}]};
+  const value=name=>panel.querySelector(`[data-wrong-field="${name}"]`).value.trim();
+  if(direct){
+   const file=panel.querySelector('[data-task-wrong-file]')?.files?.[0]||null;
+   if(!['label','text','answer','correction'].some(value)){status.textContent='请至少写题号、题面、孩子原答或订正中的一项；不知道的留空即可。';return}
+   if(file&&(!['image/jpeg','image/png','image/webp'].includes(file.type)||!file.size||file.size>20*1024*1024)){status.textContent='照片只支持20MB以内的 JPG、PNG 或 WebP；已填的文字仍保留。';return}
+   if(!file)taskWrongUpload=null;else if(taskWrongUpload?.file!==file)taskWrongUpload={file,key:crypto.randomUUID().replaceAll('-',''),id:''};
+   taskWrongPending={child:task.child,day:new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),subject:String(task.agenda?.subject||'').trim(),task_id:task.id,
+    request_key:crypto.randomUUID().replaceAll('-',''),items:[{attachment:taskWrongUpload?.id||'',label:value('label'),text:value('text'),answer:value('answer'),correction:value('correction'),note:value('note')}]};
+  }else{
+   const photo=panel.querySelector('[data-task-wrong-photo]')?.value||'';
+   if(!(value('label')||value('text'))||!value('answer')||!value('correction')){status.textContent='请核对题号或题面、孩子原答和订正后再保存；未判定的题先保留在反馈中。';return}
+   if(photo&&!record.attachments.includes(photo)){status.textContent='照片已变化，请重新打开原作业核对。';return}
+   const framed=photo&&panel.taskWrongRegion?.upload_id===photo?panel.taskWrongRegion:null;
+   taskWrongPending={child:task.child,day:record.day,subject:record.subject||'',task_id:recordTask(record,task).id,feedback_record_id:record.id,feedback_created:record.created,feedback_linked_at:record.linked_task_at||'',
+    request_key:crypto.randomUUID().replaceAll('-',''),items:[{attachment:photo,label:value('label'),text:value('text'),answer:value('answer'),correction:value('correction'),note:value('note'),...(framed?{region:{x:framed.x,y:framed.y,width:framed.width,height:framed.height,natural_width:framed.natural_width,natural_height:framed.natural_height}}:{})}]};
+  }
  }
- const body=taskWrongPending,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
- button.disabled=true;panel.querySelectorAll('input,textarea,select').forEach(x=>x.disabled=true);status.textContent='正在保存错题…';
+ const body=taskWrongPending,upload=direct&&taskWrongUpload&&!taskWrongUpload.id?taskWrongUpload:null,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),upload?120000:20000);
+ button.disabled=true;panel.querySelectorAll('input,textarea,select').forEach(x=>x.disabled=true);status.textContent=upload?'正在保存照片原件…':'正在保存错题…';
  let saved=false,knownFailure=false;
  try{
+  if(upload){
+   // P2's optional request key: a retry after a lost receipt gets back the one original already saved, not a second copy.
+   const response=await apiFetch('/api/upload',{signal:controller.signal,method:'POST',headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(upload.file.name),'X-Request-Key':upload.key,'Content-Type':'application/octet-stream'},body:upload.file});
+   const out=await response.json();
+   if(!response.ok){knownFailure=response.status>=400&&response.status<500;throw Error(out.error||'照片原件尚未保存')}
+   if(!/^[a-f0-9]{32}$/.test(out.attachment?.id||''))throw Error('照片保存回执不完整');
+   upload.id=out.attachment.id;body.items[0].attachment=upload.id;status.textContent='正在保存错题…';
+  }
   const response=await apiFetch('/api/wrong/save',{signal:controller.signal,method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(body)});
   const out=await response.json();
   if(!response.ok){
    if(response.status===409){
     await load(false);
-    const prior=data.records.find(r=>r.request_key===body.request_key+'-01'&&r.related_record_id===record.id&&r.linked_task_id===task.id&&r.child===task.child&&sameWrongRegion(r.wrong_region,body.items[0].region&&{...body.items[0].region,upload_id:body.items[0].attachment}));
+    const prior=data.records.find(r=>r.request_key===body.request_key+'-01'&&r.linked_task_id===task.id&&r.child===task.child&&(direct?r.source==='错题照片核对'&&!r.related_record_id:r.related_record_id===record.id&&sameWrongRegion(r.wrong_region,body.items[0].region&&{...body.items[0].region,upload_id:body.items[0].attachment})));
     if(prior)saved=true;
    }
    if(!saved){knownFailure=response.status>=400&&response.status<500&&out.code!=='request_record_changed';throw Object.assign(Error(out.error||'错题保存结果尚未核对'),{code:out.code})}
   }else if(out.ok&&out.saved?.length===1&&Number.isInteger(out.saved[0].id))saved=true;
   else throw Error('错题保存回执不完整');
-  taskWrongPending=null;
+  taskWrongPending=null;taskWrongUpload=null;
   try{await load(false);drawTaskFeedback(data.tasks.find(t=>t.id===task.id)||task);$('#taskFeedbackStatus').textContent='错题已保存在这份作业下；可在下方补充订正或复测。'}
-  catch{$('#taskFeedbackStatus').textContent='错题已保存，列表暂未刷新；请重新打开这份作业核对。';panel.querySelectorAll('[data-wrong-field]').forEach(x=>x.value='')}
+  catch{$('#taskFeedbackStatus').textContent='错题已保存，列表暂未刷新；请重新打开这份作业核对。';panel.querySelectorAll('[data-wrong-field],[data-task-wrong-file]').forEach(x=>x.value='')}
  }catch(error){
   if(knownFailure)taskWrongPending=null;
   if(knownFailure&&body.items[0].region&&['wrong_region_unverified','wrong_feedback_changed'].includes(error.code))panel.querySelector('[data-task-wrong-frame-status]').textContent='框选未保存；可点“清除框”后不框继续保存，原作业不受影响。';
