@@ -2344,6 +2344,25 @@ class Store:
             c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts) VALUES(?,?,?)', (key, fingerprint, int(model)))
         return fingerprint
 
+    def _job_supplement(self, key, value, now):
+        """One bounded re-read of a finished job's own input for missing evidence (a receipt's doubt scopes).
+
+        The same key keeps its attempts, backoff and error history under the new request: claiming adds one attempt to
+        the finished job's count instead of starting a new budget, and an exhausted or cooling job is refused. A job never
+        recorded is refused too, so no input gains a budget it did not have."""
+        fingerprint = _hash(value)
+        with self._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            row = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
+            if row is None or row['attempts'] >= MAX_ATTEMPTS or row['next_try'] > now.isoformat(): return None
+            if row['fingerprint'] == fingerprint:
+                if row['done']: return None
+                c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
+                return fingerprint
+            if not row['done']: return None  # another unfinished request owns this key
+            c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+1,done=0 WHERE id=?', (fingerprint, key))
+            return fingerprint
+
     def _school_succeed(self, source_id, old, head, tail, now):
         """Continue a due school batch whose last publication has grown past its frozen input.
 

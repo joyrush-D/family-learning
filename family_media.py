@@ -723,6 +723,7 @@ def _saved_draft(row, value, *, legacy=False):
         require(isinstance(draft, dict) and draft.pop('kind', None) == value['kind'], 'draft_kind_mismatch')
         draft.pop('previous_aggregate',None)  # Retained verbatim for history; never used as action evidence.
         draft.pop('previous_notes',None)
+        draft.pop('previous_scope_receipt',None)
         ids=() if legacy and row['fingerprint']==value['legacy_fingerprint'] else value['original_ids']
         return family_llm.validate_school_material(draft,original_ids=ids,require_requirements=bool(ids) and not legacy)
     except (MediaError, family_llm.LLMDraftError,ValueError,TypeError):
@@ -736,6 +737,27 @@ def _draft_decisions(c, source, message):
         if any(q['ref']==ref for q in json.loads(row['evidence'])):
             found.append([row['id'],row['state'],row['updated']])
     return found
+
+
+_DECIDED_PLAN=('approved','school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id')
+
+
+def _scope_supplement(c, source, message, value, old):
+    """Whether this message's saved current receipt may be read once more, bounded, for its doubts' requirement scopes.
+
+    Only a receipt read before uncertainty_scopes (an original with doubts and requirement lines but no scope field) and
+    never supplemented, whose school items citing it are all this child's undecided pending candidates (no task, no
+    decision, history or dependency); any accepted, dismissed, edited or executed item keeps the old receipt. Returns the
+    old receipt's own hash, which the save rechecks, or None."""
+    from family_agent import _hash
+    draft=_saved_draft(old,value)
+    if draft is None or not value['original_ids'] or 'previous_scope_receipt' in json.loads(old['payload']):return None
+    if not any(o.get('uncertainties') and o.get('requirements') and 'uncertainty_scopes' not in o for o in draft.get('originals') or ()):return None
+    ref='message:'+source['id']+':'+message['id']
+    rows=[r for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'",(source['child_id'],))
+          if any(q.get('ref')==ref for q in json.loads(r['evidence']))]
+    if not rows or any(r['state']!='pending' or r['task_id'] or any(json.loads(r['plan']).get(k) for k in _DECIDED_PLAN) for r in rows):return None
+    return _hash(old['payload'])
 
 
 def _draft_undecided(decisions):
@@ -822,20 +844,24 @@ def prepare_draft(store, now):
                     continue
                 old = c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',
                                 (source['id'], message['id'])).fetchone()
+                supplement=None
                 if _saved_draft(old,value) is not None:
-                    continue
+                    supplement=_scope_supplement(c,source,message,value,old)
+                    if supplement is None:continue
                 decisions=_draft_decisions(c,source,message) if value['original_ids'] else []
                 if not _draft_undecided(decisions): continue
         except Exception:
             continue  # No model receives unreadable, unsupported, or foreign originals.
         key = draft_key(source, message)
-        fp = store._job(key, {'material': value['fingerprint']}, now, model=True)
+        # A scope supplement keeps the finished job's own attempts and history (one marker per old receipt).
+        fp = (store._job_supplement(key, {'material': value['fingerprint'], 'scope_supplement': supplement}, now) if supplement
+              else store._job(key, {'material': value['fingerprint']}, now, model=True))
         if fp:
-            selected = (source, message, value, key, fp, decisions)
+            selected = (source, message, value, key, fp, decisions, supplement)
             break
     if selected is None:
         return dict(used=0, failed=0)
-    source, message, value, key, fp, decisions = selected
+    source, message, value, key, fp, decisions, supplement = selected
     # Claiming a slot and sending bytes are separate steps: a changed binding or decision consumes no model call.
     try:
         with store._db() as c:
@@ -861,6 +887,10 @@ def prepare_draft(store, now):
                     and job is not None and job['fingerprint'] == fp
                     and (not value['original_ids'] or _draft_decisions(c,source,message)==decisions), 'draft_material_changed')
             old=c.execute('SELECT * FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source['id'],message['id'])).fetchone()
+            if supplement:
+                # The same old receipt, still eligible, in the same transaction; it stays verbatim beside the new reading.
+                require(old is not None and _scope_supplement(c,source,message,value,old)==supplement, 'draft_material_changed')
+                result['previous_scope_receipt']=dict(fingerprint=old['fingerprint'],payload=old['payload'],updated=old['updated'])
             if value['original_ids'] and old:
                 try: previous=json.loads(old['payload'])
                 except (ValueError,TypeError): previous=None
