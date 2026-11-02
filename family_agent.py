@@ -160,7 +160,7 @@ def _task_prompt(pages, pdf=None, material=None):
     prompt+='\nevidence的collection_content_incomplete记录收集时尚未读全的原始状态，content_incomplete说明当前仍有未读内容；当前已完整读取的原件范围另列在pdf_material或school_material。二者不是家长是否看过、同意或执行的状态，不能把收集时的缺口当成当前适用条件未知。原件摘要的疑点、截断和遗漏仍分别保留，只依据已读清内容。'
     prompt+='\n空白填写栏（如“日期：____”）、表头及材料对照解释不是学校新增行动；只有原文明确要求填写或提交才归纳为要求。“不是作业答题页”“与练习分开”等说明不生成学习要求；无原文证据不添加“全班”等适用人群。'
     if pdf: prompt+='\n'+SCHOOL_PDF_PROMPT+'\nrequirements_in说明本轮完整要求在哪个字段，original_parts或complete_action_requirements中的完整要求只发送一次；groups.text是另外有界截断的背景摘要，不能用它覆盖或缩短完整要求。页组重复出现的同一要求按同原件合并页码，不产生重复行动。'
-    if material: prompt+='\nschool_material是本条消息已关联原件的有效整理，ref对应原消息，draft含title、note和uncertainties。带original_id的条目只对应该upload_id原件，不把其他条目或通知的要求猜成该原件内容。这是Agent从原件整理的参考，不是老师逐字原文或孩子作答；只依据其中明确要求理解作业或通知，不复制成绩、完成或掌握结论。明确的科目、动作、范围和数量写title/goal；uncertainties中的缺失只写reason，不清空已读清的要求。仅不清楚截止日不要求家长确认作业类别；原件有缺失或疑问时state=review，reason具体写待补充的那一部分。'
+    if material: prompt+='\nschool_material是本条消息已关联原件的有效整理，ref对应原消息，draft含title、note和uncertainties。带original_id的条目只对应该upload_id原件，不把其他条目或通知的要求猜成该原件内容。这是Agent从原件整理的参考，不是老师逐字原文或孩子作答；只依据其中明确要求理解作业或通知，不复制成绩、完成或掌握结论。明确的科目、动作、范围和数量写title/goal；uncertainties中的缺失只写reason，不清空已读清的要求。仅不清楚截止日不要求家长确认作业类别；原件有缺失或疑问时state=review，reason具体写待补充的那一部分；original_parts要求行已标出疑点范围时按其规则。'
     return prompt
 
 
@@ -325,16 +325,61 @@ def _school_original_coverage(evidence, pdf=None, material=None):
 
 
 _SCHOOL_DOUBT_RESOURCE=r'音频|录音|视频|链接|二维码|课件|签字单|回执单|空白表|空表|表格|模板|答题卡|纸本|纸质'
-_SCHOOL_DOUBT_READING=(r'看不清|不清晰|不清楚|模糊|遮挡|残缺|缺页|缺字|漏页|未读|没读|读不|无法辨认|无法识别|冲突|矛盾|不一致|不明|'
-                       r'不确定|无法确定|歧义|日期|截止|期限|范围|题|页|哪几|哪些|多少|标准|内容|要求')
+_SCHOOL_DOUBT_CHECK=r'题面|电子版|电子题|扫描件|参考答案|答案|原题|题目内容|题目原文|讲义'
+_SCHOOL_DOUBT_UNKNOWN=(r'看不清|不清晰|不清楚|模糊|遮挡|残缺|缺页|缺字|漏页|无法辨认|无法识别|冲突|矛盾|不一致|不明|不确定|无法确定|歧义|'
+                       r'哪几|哪些|多少|未注明|未写明|未说明|没写|没说|待确认|是否')
+_SCHOOL_DOUBT_RANGE=r'第\s*[0-9一二两三四五六七八九十百]+\s*(?:[-–—~至到]\s*[0-9一二两三四五六七八九十百]+\s*)?[页课题单元部分段篇首项个行]|unit\s*\d+|《[^》]{1,40}》'
+_SCHOOL_LINE_DEFERS=r'附件(?:所列|中|里|内|上)|见附件|所附|如下|以下|下表|上述|下发|另发|另附'
 
 
-def _school_doubt_kind(text,kind):
-    """A doubt its reader scoped as a missing execution resource stays one only when its own words name such a resource
-    (朗读音频、签字单、配套空白表) and no reading gap; anything touching what to do, its content, questions, pages, range, dates
-    or standard is a reading gap of its requirement, and a missing original naming no such resource stays one too (通知提到的
-    附件未收到). Never a way to lower the doubts the reader gave."""
-    return 'resource' if kind=='resource' and re.search(_SCHOOL_DOUBT_RESOURCE,text) and not re.search(_SCHOOL_DOUBT_READING,text) else 'reading'
+def _school_doubt_kind(text,kind,lines=()):
+    """A doubt its reader scoped as a missing resource stays one only when the scoped line itself already states the work.
+
+    Its own words name an execution resource (朗读音频、签字单、配套空白表) or a later-checking one (电子题面、参考答案) and
+    state no unknown (看不清、哪几题、未注明、不一致…); each scoped line names no work listed elsewhere (做附件所列题), every
+    page/question/lesson the doubt names is one that line states, and a missing question text or answer needs a line with its
+    own range (练习册第7页第2至4题). Otherwise it is a reading gap of its line: a resource name never hides a real unknown
+    range, standard or date, and a page or question word alone never holds a line that states its whole work.
+    """
+    if kind!='resource' or re.search(_SCHOOL_DOUBT_UNKNOWN,text):return 'reading'
+    resource=re.search(_SCHOOL_DOUBT_RESOURCE,text);check=re.search(_SCHOOL_DOUBT_CHECK,text)
+    if not (resource or check):return 'reading'
+    named=lambda words:{re.sub(r'\s+','',x).lower() for x in re.findall(_SCHOOL_DOUBT_RANGE,words,re.I)}
+    for line in lines:
+        if re.search(_SCHOOL_LINE_DEFERS,line) or named(text)-named(line):return 'reading'
+        if check and not resource and not (named(line) or re.search(r'[0-9一二两三四五六七八九十]+\s*[遍次篇道题个首段页]',line)):return 'reading'
+    return 'resource'
+
+
+def _school_part_doubts(parts,pdf,material):
+    """original_parts as the mapper reads them; the parts themselves stay the verification basis.
+
+    When the read originals have doubts, each requirement line carries the doubts its reader scoped to it and the program
+    verified (_school_doubt_view): reading_doubts (its own content, range, standard or date unread), resource_doubts (the
+    line is complete; only an execution or later-checking resource is missing) and unlocated_doubts (no scope locates them,
+    old receipts included: they hold every action of these originals). Originals without doubts add nothing.
+    """
+    values=[v for v in (pdf,material) if v and v.get('uncertainties')]
+    if not values:return parts
+    unlocated=list(dict.fromkeys(u for v in values for u in _school_doubt_view(v,[])['uncertainties']))
+    shown=[]
+    for part in parts:
+        part=dict(part)
+        if part.get('requirement'):
+            reading=[];resource=[]
+            for v in values:
+                view=_school_doubt_view(v,[part])
+                reading+=[u for u in view['uncertainties'] if u not in unlocated];resource+=view.get('resource_uncertainties',[])
+            part.update(reading_doubts=reading,resource_doubts=resource,unlocated_doubts=unlocated)
+        shown.append(part)
+    return shown
+
+
+_SCHOOL_PART_DOUBT_PROMPT=('\noriginal_parts中的要求行若带reading_doubts、resource_doubts、unlocated_doubts，是程序已按原件回执核对到该行的疑点原话：'
+    '本行动basis所用的任一行有reading_doubts（该要求自己的内容、范围、题号、完成标准或日期未读清）或unlocated_doubts（未定位到具体要求的原件疑点）时，'
+    'state=review，reason写明这些疑点。只有resource_doubts（要求本身已写清，只缺执行或后续核对所需资料，如朗读音频、空白表、未上传的电子题面或参考答案）的行动，'
+    '不因这些疑点改为review，可按其他条件ready，并在reason保留该资料缺口原话，不说成要求未读清。另一行的疑点不影响本行动。'
+    '不带这些字段的要求行仍按原规则：原件有缺失或疑问时state=review。')
 
 
 def _school_doubt_view(value,parts):
@@ -447,7 +492,7 @@ def _pdf_evidence(material):
                 for doubt in original.get('uncertainties',[]):  # each doubt with the requirement lines its reader scoped it to, if any
                     s=scoped.get(doubt);lines=[r for r in s['requirements'] if r in original.get('requirements',[])] if s else []
                     scopes.append(dict(ref=m['ref'],upload_id=m['upload_id'],pages=b['pages'],uncertainty=doubt,
-                                       requirements=lines or None,kind=_school_doubt_kind(doubt,s['kind']) if lines else 'reading'))
+                                       requirements=lines or None,kind=_school_doubt_kind(doubt,s['kind'],lines) if lines else 'reading'))
                 for context in original.get('deferred_contexts',[]):
                     waiting=sorted(set(context['pages'])-covered)
                     if waiting:
@@ -1082,14 +1127,14 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
             state='review';brief['reason']+=' 原件整理待补充：'+'；'.join(pdf['uncertainties'])[:350]
         if pdf.get('resource_uncertainties'):  # this action's own complete line lacks only an execution resource
             brief['resource_needed']=list(pdf['resource_uncertainties'])
-            brief['reason']+=' 本项要求已读全，所需资料待补充：'+'；'.join(pdf['resource_uncertainties'])[:350]
+            brief['reason']+=(' 另缺执行所需资料：' if state=='review' else ' 本项要求已读全，所需资料待补充：')+'；'.join(pdf['resource_uncertainties'])[:350]
     if material:
         brief['material_evidence']=dict(fingerprint=material['fingerprint'])
         if state!='reference' and material['uncertainties'] and not any(e.get('kind')=='qq_window_fragment' for e in evidence):
             state='review';brief['reason']='待补充：'+'；'.join(material['uncertainties'])[:350]
         if material.get('resource_uncertainties'):
             brief['resource_needed']=list(dict.fromkeys(brief.get('resource_needed',[])+material['resource_uncertainties']))
-            brief['reason']+=' 本项要求已读全，所需资料待补充：'+'；'.join(material['resource_uncertainties'])[:350]
+            brief['reason']+=(' 另缺执行所需资料：' if state=='review' else ' 本项要求已读全，所需资料待补充：')+'；'.join(material['resource_uncertainties'])[:350]
     # A single complete native instruction can explicitly name the executor even when its summary omits it.
     # Keep that short role in the action; display names, quoted speech and unresolved shared scope do not prove it.
     if (purpose=='admin' and state=='ready' and len(evidence)==1 and evidence[0].get('kind')=='text'
@@ -8240,7 +8285,7 @@ def _school_drafts(store, c, row):
         for doubt in e['draft']['uncertainties']:
             s=scoped.get(doubt) if e.get('original_id') else None
             scopes.append(dict(ref=e['ref'],upload_id=e.get('original_id',''),pages=[],uncertainty=doubt,
-                               requirements=list(s['requirements']) if s else None,kind=_school_doubt_kind(doubt,s['kind']) if s else 'reading'))
+                               requirements=list(s['requirements']) if s else None,kind=_school_doubt_kind(doubt,s['kind'],s['requirements']) if s else 'reading'))
     return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],complete_refs=complete,model=model,doubt_scopes=scopes,
                 uncertainties=list(dict.fromkeys(missing+[u for e in model for u in e['draft']['uncertainties']])))
 
@@ -8797,7 +8842,7 @@ def _school_original_prompt(pages,pdf,material):
     prompt=prompt.replace('candidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。','candidate是本轮原件的原候选，不是整份行动清单。candidate和existing_actions的title/goal是已保存的旧文字，只用于对应编号和保留决定；其中读原件前生成的“内容未读”“请核对是否适用、准备什么、何时完成”等待核占位及原消息正文里的“内容未读”标记都是收集时状态，不是本轮原件内容或当前缺口，当前读取范围以content_incomplete和已读原件为准。')
     # One purpose rule: a bare name read in full is reference whatever its purpose; only unread or undecidable content waits.
     prompt=prompt.replace('unknown：只有链接/短链、需登录后才能看到或文字不足以判断，title/goal/advice留空且state=review，','unknown：只有链接/短链、需登录后才能看到或文字不足以判断，title/goal/advice留空且state=review；已读完整原件中只是名称/标题的requirement行是已读资料，用途unknown时也按下方规则state=reference，')
-    return prompt+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
+    return prompt+_SCHOOL_PART_DOUBT_PROMPT+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
         '\n每条basis.text必须是所选part的text中连续的原文子串，字词、标点和换行均保持原样，禁止跳字、改标点或把不连续句子拼成一次引用。需要引用相隔的句子时，用同一个part的多个basis，每条分别连续引用，不能删掉中间的对照说明后拼接。'+\
         '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'+\
         '\n每项goal/submission分别保留必做和选做部分明确的具体输出与完成标准，包括方法数量、单位、过程及签字等，并保留各自条件。标题、总范围或笼统的“完成后检查”不能代替这些逐项标准；不得因压缩描述而丢掉要求或条件。题目本身可留在原件中，明确的完成标准仍须写入对应行动。'+\
@@ -9308,7 +9353,7 @@ def _refresh_school(app, store, now, budget):
                 try:
                     with store._db() as c: original_key,known=_school_original_known(store,c,dict(row,evidence=_json([dict(ref=e['ref']) for e in reading_evidence])))
                     value.update(original_revision=SCHOOL_ORIGINAL_REVISION,original_scope=original_key)
-                    context.update(candidate_id=row['id'],original_parts=original_parts,existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
+                    context.update(candidate_id=row['id'],original_parts=_school_part_doubts(original_parts,pdf_evidence,material),existing_actions=[dict(id=r['id'],state=r['state'],title=r['title'],goal=r['body'],due=r['due'],original_action=json.loads(r['plan']).get('school_original_action',{})) for r in known])
                     with store._db() as c:batch_proof=_school_untouched_batch_correction(store,c,row,evidence)
                     if batch_proof:context['verified_first_batch_correction']=batch_proof
                     if legacy_correction:
