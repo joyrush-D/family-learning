@@ -324,13 +324,47 @@ def _school_original_coverage(evidence, pdf=None, material=None):
     return complete_refs,fragments,covered
 
 
+_SCHOOL_DOUBT_RESOURCE=r'音频|录音|视频|链接|二维码|课件|签字单|回执单|纸本|纸质'
+_SCHOOL_DOUBT_READING=(r'看不清|不清晰|不清楚|模糊|遮挡|残缺|缺页|缺字|漏页|未读|没读|读不|无法辨认|无法识别|冲突|矛盾|不一致|不明|'
+                       r'不确定|无法确定|歧义|日期|截止|期限|范围|题|页|哪几|哪些|多少|标准|原件|附件')
+
+
+def _school_doubt_kind(text,kind):
+    """A doubt its reader scoped as a missing execution resource stays one only when its own words name such a resource
+    (朗读音频、签字单、纸本) and no reading gap; anything touching what to do, questions, pages, range, dates, standard or a
+    missing original is a reading gap of its requirement. Never a way to lower the doubts the reader gave."""
+    return 'resource' if kind=='resource' and re.search(_SCHOOL_DOUBT_RESOURCE,text) and not re.search(_SCHOOL_DOUBT_READING,text) else 'reading'
+
+
+def _school_doubt_view(value,parts):
+    """The doubts of read originals (_pdf_evidence/_school_drafts) that reach one action whose own read parts are parts.
+
+    Every unscoped doubt (old receipts: all of them; deferred pages, unread text) holds it as before. A doubt its reader
+    scoped to requirement lines of the same message and upload reaches only those lines: a reading gap holds the action
+    quoting one of them, a missing execution resource stays with it as needed material (resource_uncertainties) and holds
+    nothing; another line's doubt does not reach it. With parts=[] only the unscoped doubts remain."""
+    if not value or not value.get('doubt_scopes'):return value
+    own={(p['ref'],tuple(p['upload_ids']),p['text']) for p in parts if p.get('requirement')}
+    found={}
+    for scope in value['doubt_scopes']:found.setdefault(scope['uncertainty'],[]).append(scope)
+    held=[];resource=[]
+    for doubt in value['uncertainties']:
+        scopes=found.get(doubt)
+        if not scopes or any(s['requirements'] is None for s in scopes):held.append(doubt);continue
+        mine=[s for s in scopes if any((s['ref'],(s['upload_id'],),r) in own for r in s['requirements'])]
+        if any(s['kind']!='resource' for s in mine):held.append(doubt)
+        elif mine:resource.append(doubt)
+    return dict(value,uncertainties=held,resource_uncertainties=resource)
+
+
 def _school_model_evidence(evidence, pdf=None, material=None):
     """Describe current reading coverage separately from immutable collection metadata; no family-read state."""
     complete_refs,_,_=_school_original_coverage(evidence,pdf,material)
     unresolved=set()
-    if pdf and (pdf.get('uncertainties') or any(d['omitted'] or d['truncated'] for d in pdf['documents'])):
+    # A doubt scoped to some requirement lines stays in their drafts; only an unscoped one leaves the whole original unread.
+    if pdf and (_school_doubt_view(pdf,[])['uncertainties'] or any(d['omitted'] or d['truncated'] for d in pdf['documents'])):
         unresolved|={d['ref'] for d in pdf['documents']}
-    if material and material['uncertainties']: unresolved|=set(material['refs'])
+    if material and _school_doubt_view(material,[])['uncertainties']: unresolved|=set(material['refs'])
     complete_refs-=unresolved
     result=[]
     for entry in evidence:
@@ -398,7 +432,7 @@ def _pdf_evidence(material):
         for m in material for b in m['batches'] for original in b['draft'].get('originals',[]) for r in original['requirements'])
     uncertainty_progress=any(family_llm.school_uncertainty_has_reading_progress(u)
         for m in material for b in m['batches'] for original in b['draft'].get('originals',[]) for u in original.get('uncertainties',[]))
-    model=[];documents=[];uncertainties=[];total=min(requirements_size,PDF_TEXT_LIMIT)
+    model=[];documents=[];uncertainties=[];scopes=[];total=min(requirements_size,PDF_TEXT_LIMIT)
     complete_requirements=requirements_size<=PDF_TEXT_LIMIT and not reading_progress and not uncertainty_progress
     for m in material:
         groups=[];omitted=[];truncated=[];processed=[]
@@ -408,6 +442,11 @@ def _pdf_evidence(material):
             for uncertainty in b['draft'].get('uncertainties',[]):
                 if uncertainty not in uncertainties and len(uncertainties)<20: uncertainties.append(uncertainty)
             for original in b['draft'].get('originals',[]):
+                scoped={s['uncertainty']:s for s in original.get('uncertainty_scopes',[])}
+                for doubt in original.get('uncertainties',[]):  # each doubt with the requirement lines its reader scoped it to, if any
+                    s=scoped.get(doubt);lines=[r for r in s['requirements'] if r in original.get('requirements',[])] if s else []
+                    scopes.append(dict(ref=m['ref'],upload_id=m['upload_id'],pages=b['pages'],uncertainty=doubt,
+                                       requirements=lines or None,kind=_school_doubt_kind(doubt,s['kind']) if lines else 'reading'))
                 for context in original.get('deferred_contexts',[]):
                     waiting=sorted(set(context['pages'])-covered)
                     if waiting:
@@ -428,7 +467,7 @@ def _pdf_evidence(material):
         model.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],processed_pages=sorted(processed),complete=True,
                           groups=groups,omitted_groups=omitted,truncated_groups=truncated))
         documents.append(dict(ref=m['ref'],name=m['name'],upload_id=m['upload_id'],**kind,page_count=m['page_count'],groups=len(m['batches']),sent=len(groups),omitted=omitted,truncated=truncated))
-    return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties,
+    return dict(fingerprint=fingerprint,documents=documents,model=model,uncertainties=uncertainties,doubt_scopes=scopes,
                 requirements_complete=complete_requirements,reading_progress_in_requirements=reading_progress,
                 reading_progress_in_uncertainties=uncertainty_progress)
 
@@ -1040,10 +1079,16 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
             state='review';brief['reason']+=' '+label+'整理摘要未全部送核，证据不足，请核对原件后再确认。'
         if pdf.get('uncertainties'):
             state='review';brief['reason']+=' 原件整理待补充：'+'；'.join(pdf['uncertainties'])[:350]
+        if pdf.get('resource_uncertainties'):  # this action's own complete line lacks only an execution resource
+            brief['resource_needed']=list(pdf['resource_uncertainties'])
+            brief['reason']+=' 本项要求已读全，所需资料待补充：'+'；'.join(pdf['resource_uncertainties'])[:350]
     if material:
         brief['material_evidence']=dict(fingerprint=material['fingerprint'])
         if state!='reference' and material['uncertainties'] and not any(e.get('kind')=='qq_window_fragment' for e in evidence):
             state='review';brief['reason']='待补充：'+'；'.join(material['uncertainties'])[:350]
+        if material.get('resource_uncertainties'):
+            brief['resource_needed']=list(dict.fromkeys(brief.get('resource_needed',[])+material['resource_uncertainties']))
+            brief['reason']+=' 本项要求已读全，所需资料待补充：'+'；'.join(material['resource_uncertainties'])[:350]
     # A single complete native instruction can explicitly name the executor even when its summary omits it.
     # Keep that short role in the action; display names, quoted speech and unresolved shared scope do not prove it.
     if (purpose=='admin' and state=='ready' and len(evidence)==1 and evidence[0].get('kind')=='text'
@@ -8182,10 +8227,20 @@ def _school_drafts(store, c, row):
                         sent.append(part[:remaining]);remaining-=len(sent[-1])
                         if sent[-1]!=part: missing.append('原件整理文字未全部读入')
                     bounded[key]=[p for p in sent if p] if key=='uncertainties' else sent[0]
+                if draft.get('uncertainty_scopes'):  # only scopes whose doubt and lines were read whole this round
+                    bounded['uncertainty_scopes']=[s for s in draft['uncertainty_scopes'] if s['uncertainty'] in bounded['uncertainties']
+                                                   and set(s['requirements'])<=set(bounded.get('requirements',()))]
                 model.append(dict(ref=quote['ref'],upload_ids=[draft['upload_id']] if originals is not None else ids,draft=bounded,
                                   **(dict(original_id=draft['upload_id']) if originals is not None else {})))
     if not entries: return None
-    return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],complete_refs=complete,model=model,
+    scopes=[]
+    for e in model:
+        scoped={s['uncertainty']:s for s in e['draft'].get('uncertainty_scopes',[])}
+        for doubt in e['draft']['uncertainties']:
+            s=scoped.get(doubt) if e.get('original_id') else None
+            scopes.append(dict(ref=e['ref'],upload_id=e.get('original_id',''),pages=[],uncertainty=doubt,
+                               requirements=list(s['requirements']) if s else None,kind=_school_doubt_kind(doubt,s['kind']) if s else 'reading'))
+    return dict(fingerprint=_hash(entries),refs=[e['ref'] for e in entries],complete_refs=complete,model=model,doubt_scopes=scopes,
                 uncertainties=list(dict.fromkeys(missing+[u for e in model for u in e['draft']['uncertainties']])))
 
 
@@ -8876,12 +8931,14 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         has_action=any(_LEARNING_ACTIVITY.search(a['quote']) or _LEARNING_ACTION.search(a['quote'])
             or conditions and re.search(r'(?:完成|做|写)\s*(?:第[一二三四五六七八九十0-9]+项\s*[:：]?\s*)?《[^》\n]{2,40}》',a['quote'])
             or re.search(r'打印|签字|交回|盖章|提交|上传|带|携带|准备|领取|报名|缴|考试|测验|比赛|家长会',a['quote']) for a in action_anchors if a not in metadata)
+        mine=[lookup[q['part']] for q in basis]  # this action's own read parts: only their scoped doubts and unscoped ones hold it
         own=[] if has_action or conditions or legacy_correction else [lookup[q['part']] for q in basis
-            if _school_own_requirement(lookup[q['part']],pdf,material,subject,names)]
+            if _school_own_requirement(lookup[q['part']],_school_doubt_view(pdf,mine),_school_doubt_view(material,mine),subject,names)]
         has_action=has_action or bool(own)
         if value['state']=='ready' and not has_action and any(lookup[q['part']].get('background_only') for q in basis):
             raise AgentError('原件背景没有完整行动要求，不能自动新增任务')
-        reading_gap=bool((pdf or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[])) or (material or {}).get('uncertainties'))
+        reading_gap=bool((_school_doubt_view(pdf,mine) or {}).get('uncertainties') or any(d['omitted'] or d['truncated'] for d in (pdf or {}).get('documents',[]))
+                         or (_school_doubt_view(material,mine) or {}).get('uncertainties'))
         if value['state']!='reference' and not has_action and not reading_gap:
             raise AgentError('依据没有本项动作和对象，不能仅引用日期或标题')
         identity=_hash([row['child_id'],sorted((_json([a['ref'],a['upload_ids'],a['quote']]) for a in anchors))])
@@ -8925,6 +8982,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             _,cited_pages=_school_material(store,c,item_row)
             cited_pdf=_pdf_evidence(_school_pdf(store,c,item_row))
             cited_material=_school_drafts(store,c,item_row)
+        cited_pdf,cited_material=_school_doubt_view(cited_pdf,mine),_school_doubt_view(cited_material,mine)
         if own and not all(_school_own_requirement(p,cited_pdf,cited_material,subject,names) for p in own):
             raise AgentError('完整要求与本项原件页组不一致，原要求保留')  # the item's own scoped evidence must hold the same lines
         cited_page=_page_evidence(cited,cited_pages) if cited_pages else None

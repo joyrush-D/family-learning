@@ -358,6 +358,29 @@ def school_uncertainty_has_reading_progress(text):
         r'(?:本轮|本次|当前批次)[^。！？；;\n]{0,12}(?:仅见|只见|仅读取|只读取)[^。！？；;\n]{0,12}第?[0-9一二三四五六七八九十百、至\-–]{1,20}页',text))
 
 
+def _school_uncertainty_scopes(scopes,uncertainties,requirements):
+    """Which of one original's own requirement lines each of its doubts affects, as its reader states it.
+
+    Optional: an old receipt has none and keeps every doubt original-wide. A scope names one doubt of this original word
+    for word, at least one of this same original's requirement lines word for word, and whether the line is complete but
+    lacks an execution resource (resource) or its reading is incomplete (reading). A doubt given twice, or pointing at a line
+    or doubt this original does not hold, keeps no scope and stays original-wide; the doubt's own words are never dropped.
+    """
+    if not isinstance(scopes,list) or len(scopes)>10:raise LLMDraftError('学校原件疑点范围格式不正确，原件保留')
+    for scope in scopes:
+        if (not isinstance(scope,dict) or set(scope)!={'uncertainty','requirements','kind'} or not isinstance(scope['uncertainty'],str)
+                or scope['kind'] not in ('resource','reading') or not isinstance(scope['requirements'],list)
+                or not 1<=len(scope['requirements'])<=12 or any(not isinstance(r,str) for r in scope['requirements'])):
+            raise LLMDraftError('学校原件疑点范围格式不正确，原件保留')
+    lines=set(requirements or ());kept=[]
+    for scope in scopes:
+        doubt=[u for u in uncertainties if u.strip()==scope['uncertainty'].strip()];named=[r.strip() for r in scope['requirements']]
+        if (len(doubt)==1 and sum(1 for s in scopes if s['uncertainty'].strip()==doubt[0].strip())==1
+                and len(set(named))==len(named) and set(named)<=lines):
+            kept.append(dict(uncertainty=doubt[0],requirements=named,kind=scope['kind']))
+    return kept
+
+
 def validate_school_material(value, *, original_ids=(), require_requirements=False, allow_page_scope=False, deferred_pages=None,
                              allow_legacy_reading_progress=False):
     """Legacy notes stay readable; identified originals must each return their own checked note.
@@ -379,6 +402,7 @@ def validate_school_material(value, *, original_ids=(), require_requirements=Fal
             fields={'upload_id','title','note','uncertainties'}
             allowed=(fields|{'requirements'},) if require_requirements else (fields,fields|{'requirements'})
             if allow_page_scope:allowed+=(fields|{'requirements','deferred_contexts'},)
+            allowed+=tuple(a|{'uncertainty_scopes'} for a in allowed if 'requirements' in a)  # optional: old receipts have none
             if (not isinstance(original,dict) or set(original) not in allowed
                     or deferred_pages is not None and 'deferred_contexts' not in original):
                 raise LLMDraftError('学校逐原件草稿字段不正确，请手动核对')
@@ -417,6 +441,9 @@ def validate_school_material(value, *, original_ids=(), require_requirements=Fal
                             or not isinstance(context['note'],str) or not context['note'].strip() or len(context['note'])>300):
                         raise LLMDraftError('页组待处理范围不在本轮边界内，原件保留')
                 checked[ident]['deferred_contexts']=contexts
+            if 'uncertainty_scopes' in original:
+                checked[ident]['uncertainty_scopes']=_school_uncertainty_scopes(original['uncertainty_scopes'],
+                    checked[ident]['uncertainties'],checked[ident].get('requirements'))
         ordered=[checked[i] for i in ids]
         summary=dict(title=ordered[0]['title'] if len(ids)==1 else '学校资料（共%d份）'%len(ids),
                      note='\n'.join(o['note'] for o in ordered),
@@ -559,6 +586,11 @@ def extract_draft(text='',images=(),timeout=60,*,target_child='',data_path=None,
             original_schema=dict(schema,required=['upload_id','title','note','uncertainties','requirements'],
                 properties=dict(upload_id=dict(type='string',enum=ids),requirements=dict(type='array',maxItems=12,
                     items=dict(type='string',minLength=1,maxLength=2000)),**schema['properties']))
+            original_schema['required'].append('uncertainty_scopes')
+            original_schema['properties']['uncertainty_scopes']=dict(type='array',maxItems=10,items=dict(type='object',additionalProperties=False,
+                required=['uncertainty','requirements','kind'],properties=dict(uncertainty=dict(type='string',minLength=1,maxLength=300),
+                    requirements=dict(type='array',minItems=1,maxItems=12,items=dict(type='string',minLength=1,maxLength=2000)),
+                    kind=dict(type='string',enum=['resource','reading']))))
             if pages:
                 original_schema['required'].append('deferred_contexts')
                 page_spec=dict(type='integer',minimum=1,maximum=200)
@@ -587,9 +619,10 @@ title用不超过200字概括这份资料。note（不超过4000字）按原件�
 uncertainties只写实际读不清、相互冲突、缺页或影响理解的归属/日期疑点（最多10项，每项不超过300字）；清楚的原件用空数组。目标孩子已经由授权来源绑定，不因题面未署名就要求再次确认归属。只有time为空或截图才说发布日期未知。未写教材版本、没说签字/录音/打卡/打印或提交方式、未定最低选做数量，都不自动视为缺失：原文没有这些要求就不加要求、不提确认；“选做题任选”保留原话即可。明确的截止不猜测额外提交项目；未注明截止留空，不因此抹掉作业或让家长重做分类。
 本次输出仅供家长核对，不会创建、修改或关闭任何任务、目标或学习记录。'''
         if ids:
-            prompt+='\n本轮original_ids是程序核对的完整原件身份清单。每个original_image身份只对应紧随其后的那张图片；original_document的upload_id只对应其正文。必须逐份返回originals，各含upload_id、title、note、uncertainties、requirements；每个身份恰好一次，不能遗漏、重复或合并，不返回跨原件汇总。每份note只写该原件实际可见的背景、题面与说明，不将其他图片、文件名或通知中的要求猜成该原件内容；通知只提供日期和解释上下文。读不清的原件仍保留自己的身份并具体说明未知。'
+            prompt+='\n本轮original_ids是程序核对的完整原件身份清单。每个original_image身份只对应紧随其后的那张图片；original_document的upload_id只对应其正文。必须逐份返回originals，各含upload_id、title、note、uncertainties、requirements、uncertainty_scopes；每个身份恰好一次，不能遗漏、重复或合并，不返回跨原件汇总。每份note只写该原件实际可见的背景、题面与说明，不将其他图片、文件名或通知中的要求猜成该原件内容；通知只提供日期和解释上下文。读不清的原件仍保留自己的身份并具体说明未知。'
             if pages:prompt+='\n本轮多个original_image具有同一upload_id，各自page对应同一原件的不同页。它们是一个页组，originals只返回这一份原件；requirements完整保留本组各页中的所有独立要求和跨页追加的完成标准，不把一项作业按页拆成重复任务。额外返回deferred_contexts数组：仅把material_scope.unprocessed_pages中尚待分轮送入的页及其处理范围写在这里，每项pages是其中的页码，note说明处理范围，不猜该页内容。没有这种范围用空数组；unprocessed_pages为空时必须用空数组。比如当前第1至3页，同练习选做条件或完整标准见已知待处理第4页，或通知还提到后页的独立回执，后续页未送入只是deferred_contexts处理范围；requirements保留当前可见要求和老师跨页指针，uncertainties不重复写“第4页本轮未送入”“无法核对后页条件”或“本轮仅见1至3页”。这不说明条件已理解，程序待各页完整要求汇齐后才整理行动。uncertainties仍保留当前页模糊、真实缺件/缺页、冲突、日期/归属疑点，以及不能仅靠处理这些已知后续页核对的实质未知；不得把这些疑点移到deferred_contexts或假称已经解决。已读页及关联清单不是未知上下文的内容证据。'
             prompt+='\nrequirements是本份原件中的完整独立行动要求字符串数组，每项对应一个独立成果；同一作业的打印、签字、交回步骤并入该项，另一份独立回执另列。逐项写明动作、对象、范围、明确日期或期限、必做/选做、适用条件、否定要求及具体输出和完成标准，方法数量、单位、过程、数量和提交方式等不得因简写而遗漏。题目本身可在note中保留，题内明确的完成标准必须并入对应requirements；一份原件有多个行动时全部分别保留。题面、表头、空白填写栏、答案、孩子作答、参考说明和材料对照本身不生成行动；没有明确行动用空数组，读不清或条件不明仍说明具体uncertainties，不猜缺失要求。每份最多12项，每项最多2000字，本轮所有原件的requirements合计最多4000字；不能用标题、总范围或笼统检查替代具体标准。'
+            prompt+='\nuncertainty_scopes逐条说明疑点只影响本份原件哪几条requirements：仅当某条疑点确定只影响其中某几条要求时，写uncertainty（逐字复制该条uncertainties）、requirements（逐字复制受影响的requirements，至少一条）和kind。kind=resource只用于该要求本身已完整读清、仅缺执行时要用的配套资源，例如未随附的朗读音频、须在纸本上完成的签字单；缺失或看不清的内容影响做什么、题目范围、题号、日期或完成标准时用reading。影响整份原件、对应哪条要求不确定、真实缺页、来源或归属不明的疑点不写入uncertainty_scopes，仍是整份原件的疑点；不得为减少待核而缩小影响范围或改写疑点。没有能确定范围的疑点用空数组。'
             prompt+='\n同一份练习的必做题与选做题是同一成果的不同要求，完整写入同一个requirements字符串，不能仅因选做条件或出现在续页就另造独立任务。续页明确“属于前面的同一份练习”时，把其方法、单位、检查等标准和选做条件合入该练习，保留练习自己的截止日期；不把必做或选做偷换成全员必做。另一份独立练习、独立复习安排或回执仍各列一项，不能仅按科目或同文件合并。'
             prompt+='\nrequirements只保留学校实际提出的行动、对象和完成标准，不混入模型读取过程或给程序的建议。原文“选做条件见第4页”可照实保留；你自行添加的“须待第4页送入后核对”“本轮未重送”“processed_pages”等处理进度只能放在note或合法deferred_contexts中，不能成为家长作业要求。不要为了去掉进度而省略同段真实标准，也不要猜尚未看到的续页内容。'
         if previous:
