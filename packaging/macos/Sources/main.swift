@@ -900,6 +900,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKNa
            let real = NSBitmapImageRep(cgImage: shot).representation(using: .png, properties: [:]) {
             try? real.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + "-window.png"))
         }
+        // 本 App 自己另开、当前可见的原件窗口（不含登录窗口）：同样只按自己的窗口号取合成画面，按打开顺序编号存图，并记下标题与地址。
+        var documents: [[String: Any]] = []
+        for (index, w) in popups.filter({ $0 !== loginWindow && $0.isVisible }).enumerated() {
+            let file = name + "-document-\(index + 1).png"
+            guard let shot = CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(w.windowNumber), [.boundsIgnoreFraming, .bestResolution]),
+                  let png = NSBitmapImageRep(cgImage: shot).representation(using: .png, properties: [:]) else { continue }
+            try? png.write(to: URL(fileURLWithPath: dir).appendingPathComponent(file))
+            documents.append(["file": file, "title": w.title, "path": (w.contentView as? WKWebView)?.url?.path ?? ""])
+        }
+        if !documents.isEmpty, let data = try? JSONSerialization.data(withJSONObject: documents, options: [.prettyPrinted, .sortedKeys]) {
+            try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent(name + "-documents.json"))
+        }
     }
 
     func sleep(_ seconds: Double) async { try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
