@@ -7595,16 +7595,18 @@ def _school_date_head_joined(text):
     """A short day head standing alone before a comma (周五，请孩子把回执交给老师) dates its own next clause as it does written
     together (周五请孩子把回执…). Only that one adjacent clause, which must lead with its executor (请/由孩子/孩子/家长…) and
     hold no negation, condition, question or day of its own; anything else stays as it was for the existing date checks."""
+    # A known subject or list label before the day (语文：…、2. …) labels this item; it never moves the day elsewhere.
+    label=r'(?:(?:'+_SCHOOL_NATIVE_SUBJECTS+r'|道德与法治|音乐|美术|体育|家长事务|行政事项)\s*[：:]\s*|[0-9一二三四五六七八九十]{1,2}\s*[.、．)）]\s*)?'
     def join(m):
-        clause=m[3]
+        clause=m[4]
         if (re.search(r'不用|不必|无需|不需|免|别|勿|如果|若|如需|假如|视情况|是否',clause) or re.search(_SCHOOL_DAY_HEAD,clause)
                 or not re.match(r'(?:请|由家长|由孩子|由学生|家长|孩子|学生)',clause)):return m[0]
-        return m[1]+m[2]+clause
-    text=re.sub(r'(^|[。；;！!？?\n])\s*('+_SCHOOL_DAY_HEAD+r')\s*[，,]\s*([^。；;！!？?\n，,]+)',join,text or '')
+        return m[1]+m[2]+m[3]+clause
+    text=re.sub(r'(^|[。；;！!？?\n])(\s*'+label+r')('+_SCHOOL_DAY_HEAD+r')\s*[，,]\s*([^。；;！!？?\n，,]+)',join,text or '')
     def ordered(m):
         # One ordered work after its own day (2026年11月4日晚先听示范音频，再朗读…): the comma before 再/然后/接着/随后 is not a
         # new action's boundary, as the same words written together already read; never with negation, condition or another day.
-        head=re.match(r'\s*'+_SCHOOL_DAY_HEAD,m[0])
+        head=re.match(r'\s*'+label+_SCHOOL_DAY_HEAD,m[0])
         if not head:return m[0]
         rest=m[0][head.end():];joined=re.sub(r'[，,]\s*(?=(?:再|然后|接着|随后))','',rest)
         if joined==rest or re.search(r'不用|不必|无需|不需|免|勿|如果|若|如需|假如|视情况|是否',joined) or re.search(_SCHOOL_DAY_HEAD,joined):return m[0]
