@@ -3335,7 +3335,7 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
     if clean(body) not in {clean(x) for x in (brief.get('goal'),(plan.get('approved') or {}).get('action'),row['body']) if clean(x)}:return body
     old=[line.strip() for line in str(task.get('action') or '').splitlines() if line.strip()];shown=title+'\n'+body
     from family_agenda import _exemption_unmet,_lifted_exemptions,_notice_own_words,_stored_date_quote
-    own_words=_notice_own_words(_stored_date_quote(plan),said) or said
+    found=_notice_own_words(_stored_date_quote(plan),said);own_words=found or said
     lifted=_lifted_exemptions('\n'.join(old),own_words)
     if lifted and (unmet:=_exemption_unmet('\n'.join(old),own_words,shown)):
         # The notice requires what the original exempted (不用抄写 → 抄写); words still exempting or leaving it out are refused.
@@ -3354,7 +3354,7 @@ def _school_update_whole(task, title, body, due, said, plan, row, *, connection=
     if fixed is None:
         # The same teacher-words composition the day projection shows (_notice_count_latest).
         from family_agenda import _notice_count_latest
-        fixed=_notice_count_latest(old,task['title'],own_words if own_words!=said else '',moved) if not lifted else None
+        fixed=_notice_count_latest(old,task['title'],found,moved) if not lifted else None
     if fixed is None and moved and connection is not None:
         # The same date-only composition the day projection shows (_day_moved_latest), from the task's own original.
         from family_agenda import _day_moved_latest,_message,sent_day
