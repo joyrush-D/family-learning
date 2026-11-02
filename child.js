@@ -64,7 +64,7 @@ function tickStudy() {
 }
 // Only the task's own teacher days (and an ordinary source's due) reach the child; unknown stays unshown.
 function studyDays(item) {
-  return [item.source_task_complete_on && item.source_task_complete_on !== item.source_task_due ? `老师要求完成：${item.source_task_complete_on}` : '',
+  return [item.source_task_complete_on && item.source_task_complete_on !== item.source_task_due ? `完成：${item.source_task_complete_on}` : '',
     item.source_task_handback_on ? `交回：${item.source_task_handback_on}` : '', item.source_task_inspection_on ? `检查：${item.source_task_inspection_on}` : '',
     item.source_task_due && ![item.source_task_inspection_on, item.source_task_handback_on].includes(item.source_task_due) ? `原截止：${item.source_task_due}` : ''].filter(Boolean).join(' · ');
 }
