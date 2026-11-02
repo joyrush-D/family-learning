@@ -1241,3 +1241,86 @@ class NaturalCountCorrectionTests(ScopeSaveTests):
             self.assertIn('每词三遍', '\n'.join(en['lines']), 'the family-touched requirement is never rewritten')
             self.assertEqual(en['status'], '进行中')
             self.assertIn('两遍', '\n'.join(en['version']['notices'][0]['lines']), 'the notice stays readable on the same card')
+
+
+class LiftedExemptionTests(ScopeSaveTests):
+    """Root run12 added-action negative (fictional, newly written equivalent): the original exempts copying (不用抄写); the
+    later notice of the same teacher changes the count AND requires copying (…只需跟读两遍，抄写). Same characters are no proof
+    of the same requirement: a latest keeping the old exemption while dropping the new copy step is never shown or saved.
+    An omitted exemption stays kept; a newly negated original step (不用听音频) is no count-only change either."""
+    T = dict(sender='虚构乙英语老师', sender_id='fic-en2-teacher')
+    R1, R2 = 'message:%s:831' % EN, 'message:%s:832' % EN
+    ORIGINAL = '英语：今晚听音频跟读《星海短句》第1至3句，每句三遍；只做口头跟读，不用抄写。'
+
+    def original(self):
+        self.batch(EN, [msg('831', self.ORIGINAL, '16:20', **self.T)], lambda targets, pending: [proposal(
+            self.R1, self.ORIGINAL.rstrip('。'), '英语：跟读《星海短句》第1至3句', self.ORIGINAL)])
+        item, = self.items_for(self.R1)
+        if item['state'] == 'pending':
+            self.store.act(dict(id=item['id'], action='accept')); item, = self.items_for(self.R1)
+        return item['task_id']
+
+    def notice(self, text, goal='今晚跟读《星海短句》第1至3句，共两遍。\n只做口头跟读，不用抄写。'):
+        task = self.original()
+        self.batch(EN, [msg('832', text, '17:10', **self.T)], lambda targets, pending: [proposal(
+            self.R2, text.rstrip('。'), '英语：跟读《星海短句》两遍', goal, state='review', change='update', target=task)])
+        item, = [i for i in self.items_for(self.R2) if i['state'] == 'pending']
+        return task, item
+
+    def card(self, view, task):
+        rows = [r for g in view['groups'] for r in g['items'] if r.get('task_id') == task]
+        self.assertEqual(len(rows), 1)
+        return rows[0]
+
+    def test_root_case_a_lifted_exemption_is_never_kept_by_a_count_only_latest(self):
+        task, item = self.notice('更正跟读：《星海短句》第1至3句今晚只需跟读两遍，抄写。')
+        for view in self.views(DAY):
+            row = self.card(view, task)
+            version = row.get('version') or {}
+            self.assertEqual(version.get('state'), 'review', version)
+            self.assertTrue(any('抄写' in r and '原要求写明不用' in r for r in version.get('reasons', [])), version.get('reasons'))
+            self.assertIn('每句三遍', '\n'.join(row['lines']), 'the saved requirement stays until a whole one is confirmed')
+        before = self.task(task)['action']
+        request = form_request(self, item, task)
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_change(self.app, self.store, request)
+        self.assertEqual(refused.exception.status, 409)
+        self.assertEqual(self.task(task)['action'], before, 'the default candidate still exempting copying writes nothing')
+        with self.assertRaises(agent.AgentError):
+            agent.apply_school_change(self.app, self.store, dict(request, target_version=request['target_version'] + 1))
+        self.assertEqual(self.task(task)['action'], before)
+
+    def test_a_candidate_requiring_the_lifted_step_is_not_refused_for_dropping_the_old_exemption(self):
+        goal = '今晚听音频跟读《星海短句》第1至3句，每句两遍；只做口头跟读，并抄写。'
+        task, item = self.notice('更正跟读：《星海短句》第1至3句今晚只需跟读两遍，抄写。', goal)
+        for view in self.views(DAY):
+            version = self.card(view, task).get('version') or {}
+            if version.get('state') == 'latest':
+                words = '\n'.join(version['lines'])
+                self.assertIn('抄写', words)
+                self.assertNotIn('不用抄写', words)
+        self.assertTrue(agent.apply_school_change(self.app, self.store, form_request(self, item, task))['school_changed'])
+        saved = self.task(task)['action']
+        self.assertIn('抄写', saved)
+        self.assertNotIn('不用抄写', saved)
+
+    def test_a_count_correction_omitting_the_exemption_keeps_it_and_saves_the_whole(self):
+        task, item = self.notice('更正跟读：《星海短句》第1至3句今晚只需跟读两遍。')
+        latest = ['英语：今晚听音频跟读《星海短句》第1至3句，每句两遍；只做口头跟读，不用抄写。']
+        for view in self.views(DAY):
+            version = self.card(view, task).get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            self.assertEqual(version['lines'], latest)
+        request = form_request(self, item, task)
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['school_changed'])
+        self.assertEqual(self.task(task)['action'], '\n'.join(latest))
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['replayed'])
+
+    def test_a_newly_negated_original_step_is_no_count_only_change(self):
+        task, item = self.notice('更正跟读：《星海短句》第1至3句今晚只需跟读两遍，不用听音频。')
+        for view in self.views(DAY):
+            self.assertEqual((self.card(view, task).get('version') or {}).get('state'), 'review')
+        before = self.task(task)['action']
+        with self.assertRaises(agent.AgentError):
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        self.assertEqual(self.task(task)['action'], before)
