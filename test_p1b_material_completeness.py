@@ -274,7 +274,8 @@ class ScopedDoubtImageChainTests(_ScopeBase):
 
     def _day(self):
         mine,_=whole.WholeDayTests._list(self)
-        return sorted(i['title']+i['body'] for i in mine if [p['ref'] for p in i['agenda'].get('publications',[])]==[self.ref])
+        return sorted((i['title']+i['body'],i['kind'],i['status'],bool(i.get('task_id'))) for i in mine
+                      if [p['ref'] for p in i['agenda'].get('publications',[])]==[self.ref])
 
     def test_each_doubt_holds_only_the_requirement_it_names(self):
         found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='reading')])
@@ -285,8 +286,10 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         self.assertNotIn('resource_needed',self.brief(dictation))
         for doubt in (U_RES,U_READ):self.assertNotIn(doubt,self.brief(dictation)['reason'])
         self.assertEqual(self.brief(sheet)['state'],'review');self.assertIn(U_READ,self.brief(sheet)['reason']);self.assertNotIn(U_RES,self.brief(sheet)['reason'])
-        day=self._day()
-        self.assertTrue(any('跟读' in t for t in day) and any('听写' in t for t in day),day);self.assertFalse([t for t in day if '练习纸' in t],day)
+        day=self._day();shown={text:rest for text,*rest in day}
+        # The two freed lines are the day's tasks; the line with its own reading gap is still a card to check, not a task.
+        self.assertEqual([shown[next(t for t in shown if w in t)] for w in ('跟读','听写','练习纸')],
+                         [['task','待跟进',True],['task','待跟进',True],['school','待核对',False]])
         made=self._db();agent.run_once(self.app,self.now+dt.timedelta(minutes=2))  # reopen: no call, write or duplicate
         self.assertEqual(self._db(),made);self.assertEqual(self._day(),day)
 
