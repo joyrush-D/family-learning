@@ -241,6 +241,14 @@ class UncertaintyScopeValidatorTests(unittest.TestCase):
             with self.subTest(doubt=doubt):self.assertEqual(agent._school_doubt_kind(doubt,'resource'),'reading')
         self.assertEqual(agent._school_doubt_kind(U_RES,'reading'),'reading')
 
+    def test_a_line_stating_its_work_is_not_held_by_a_missing_question_text_but_an_unknown_range_is(self):
+        kind=agent._school_doubt_kind;line='数学：完成练习册第7页第2至4题，每题写步骤，11月5日交。'
+        for doubt in ('练习册第7页电子题面未上传，无法核对题目内容。','参考答案未上传，之后无法核对。'):
+            with self.subTest(doubt=doubt):self.assertEqual(kind(doubt,'resource',[line]),'resource')
+        for doubt,lines in (('附件未上传，题目内容无法读取。',['完成附件所列练习题。']),('第8页题面未上传。',[line]),('练习册题面未上传。',['完成练习册。']),
+                            ('第7页要做哪几题不清楚，参考答案也未上传。',['完成练习册第7页。']),('朗读音频未附，截止日期未注明。',['朗读第3课三遍。'])):
+            with self.subTest(doubt=doubt):self.assertEqual(kind(doubt,'resource',lines),'reading')
+
 
 class DoubtViewTests(unittest.TestCase):
     def test_only_its_own_lines_and_unscoped_doubts_reach_an_action(self):
@@ -287,6 +295,16 @@ class ScopedDoubtImageChainTests(_ScopeBase):
     @staticmethod
     def brief(row):return json.loads(row['plan'])['school_task']
 
+    def _request(self):
+        # The actual original-actions request this normal chain sent (recorded by the stubbed model entry, 0 API).
+        calls=[c for c in self.model.call_args_list if (c.args[2] if len(c.args)>2 else c.kwargs.get('name'))=='family_school_task']
+        self.assertEqual(len(calls),1);messages=calls[0].args[0]
+        prompt=''.join(m['content'] for m in messages[:-1] if isinstance(m.get('content'),str))
+        return prompt,{p['text']:p for p in json.loads(messages[-1]['content'])['original_parts'] if p.get('requirement')}
+
+    def _doubts(self,parts):
+        return {k:(p['reading_doubts'],p['resource_doubts'],p['unlocated_doubts']) for k,p in parts.items()}
+
     def _day(self):
         mine,_=whole.WholeDayTests._list(self)
         return sorted((i['title']+i['body'],i['kind'],i['status'],bool(i.get('task_id')),i['agenda'].get('resource_needed',[])) for i in mine
@@ -297,8 +315,11 @@ class ScopedDoubtImageChainTests(_ScopeBase):
         follow,dictation,sheet=found[ROLE_OLD],found[R_DICT],found[R_SHEET]
         self.assertEqual([r['state'] for r in (follow,dictation,sheet)],['accepted','accepted','pending'])
         self.assertEqual(self.brief(follow).get('resource_needed'),[U_RES]);self.assertIn(U_RES,self.brief(follow)['reason'])
-        self.assertNotIn(U_READ,self.brief(follow)['reason'])
+        self.assertNotIn(U_READ,self.brief(follow)['reason']);self.assertIn('本项要求已读全',self.brief(follow)['reason'])
         self.assertNotIn('resource_needed',self.brief(dictation))
+        prompt,parts=self._request()
+        self.assertIn(agent._SCHOOL_PART_DOUBT_PROMPT.strip(),prompt)  # the rule reaches the mapper with the scoped lines
+        self.assertEqual(self._doubts(parts),{ROLE_OLD:([],[U_RES],[]),R_DICT:([],[],[]),R_SHEET:([U_READ],[],[])})
         for doubt in (U_RES,U_READ):self.assertNotIn(doubt,self.brief(dictation)['reason'])
         self.assertEqual(self.brief(sheet)['state'],'review');self.assertIn(U_READ,self.brief(sheet)['reason']);self.assertNotIn(U_RES,self.brief(sheet)['reason'])
         day=self._day();shown={text:rest for text,*rest in day}
@@ -311,8 +332,18 @@ class ScopedDoubtImageChainTests(_ScopeBase):
     def test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide(self):
         found=self._scoped(None)
         self.assertEqual({r['state'] for r in found.values()},{'pending'})
+        self.assertEqual(set(map(str,self._doubts(self._request()[1]).values())),{str(([],[],[U_RES,U_READ]))})  # all unlocated
         for r in found.values():
             for doubt in (U_RES,U_READ):self.assertIn(doubt,self.brief(r)['reason'])
+
+    def test_one_line_with_a_reading_and_a_resource_doubt_stays_review_in_its_own_words(self):
+        found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[ROLE_OLD],kind='reading')])
+        follow=found[ROLE_OLD];reason=self.brief(follow)['reason']
+        self.assertEqual([found[k]['state'] for k in (ROLE_OLD,R_DICT,R_SHEET)],['pending','accepted','accepted'])
+        self.assertEqual(self.brief(follow)['state'],'review');self.assertIn(U_READ,reason);self.assertIn(U_RES,reason)
+        self.assertNotIn('本项要求已读全',reason);self.assertEqual(self.brief(follow).get('resource_needed'),[U_RES])
+        self.assertEqual(self._doubts(self._request()[1])[ROLE_OLD],([U_READ],[U_RES],[]))
+        made=self._db();agent.run_once(self.app,self.now+dt.timedelta(minutes=2));self.assertEqual(self._db(),made)
 
     def test_a_false_resource_or_unverifiable_pointer_never_frees_a_line(self):
         found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='resource')])
@@ -402,7 +433,8 @@ class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
                               (json.dumps(payload,ensure_ascii=False),r['source_id'],r['message_id'],fp,r['first_page']))
         ident=self.candidate(keys=keys,ident='p1b-pdf-scoped')
         def mapping(messages):
-            context=json.loads(messages[-1]['content'])
+            context=json.loads(messages[-1]['content']);self.sent=context  # the actual mapper request, 0 API
+            self.prompt=''.join(m['content'] for m in messages[:-1] if isinstance(m.get('content'),str))
             parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
             return {'actions':[dict(pdf_evidence.draft(goal=text),title=subject+'：'+text[text.index('晚')+1:][:14],learning_subject=subject,
                                     due=day.isoformat(),existing_item_id=ident if subject=='数学' else '',basis=[dict(part=parts[text],text=text)])
@@ -412,7 +444,12 @@ class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
             rows={json.loads(r['plan'])['school_original_action']['requirements'][0]['text']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")
                   if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
         self.assertEqual(set(rows),set(lines.values()))
+        self.lines=lines
         return {subject:rows[text] for subject,text in lines.items()}
+
+    def sent_doubts(self):
+        parts={p['text']:p for p in self.sent['original_parts'] if p.get('requirement')}
+        return {s:(parts[t]['reading_doubts'],parts[t]['resource_doubts'],parts[t]['unlocated_doubts']) for s,t in self.lines.items()}
 
     def tasks(self):
         return sorted(t['title'] for t in self.app.tasks() if any(w in t['title']+t.get('action','') for w in ('练习册','朗读','练习纸')))
@@ -422,6 +459,8 @@ class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
         self.assertEqual([rows[s]['state'] for s in ('数学','语文','英语')],['accepted','accepted','pending'])
         self.assertEqual(brief('语文').get('resource_needed'),[self.RES]);self.assertNotIn('resource_needed',brief('数学'))
         self.assertEqual(brief('英语')['state'],'review');self.assertIn(U_READ,brief('英语')['reason']);self.assertNotIn(U_READ,brief('数学')['reason'])
+        self.assertIn(agent._SCHOOL_PART_DOUBT_PROMPT.strip(),self.prompt)
+        self.assertEqual(self.sent_doubts(),{'数学':([],[],[]),'语文':([],[self.RES],[]),'英语':([U_READ],[],[])})
         first=self.tasks()
         self.assertEqual(len(first),2,first);self.assertFalse([t for t in first if t.startswith('英语')],first)
         needs={t['title'][:2]:t['agenda'].get('resource_needed') for t in self.app.tasks() if t['title'][:2] in ('数学','语文')}
@@ -431,6 +470,7 @@ class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
     def test_old_pdf_receipts_without_scopes_hold_every_line(self):
         rows=self._run(False)
         self.assertEqual({r['state'] for r in rows.values()},{'pending'});self.assertEqual(self.tasks(),[])
+        self.assertEqual(set(map(str,self.sent_doubts().values())),{str(([],[],[self.RES,U_READ]))})
         for r in rows.values():self.assertIn(U_READ,json.loads(r['plan'])['school_task']['reason'])
 
 def load_tests(loader,tests,pattern):
@@ -445,7 +485,8 @@ def load_tests(loader,tests,pattern):
     suite.addTests(loader.loadTestsFromTestCase(UncertaintyScopeValidatorTests))
     suite.addTests(loader.loadTestsFromTestCase(DoubtViewTests))
     for name in ('test_each_doubt_holds_only_the_requirement_it_names','test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide',
-                 'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide'):
+                 'test_a_false_resource_or_unverifiable_pointer_never_frees_a_line','test_a_pointer_to_no_requirement_line_stays_original_wide',
+                 'test_one_line_with_a_reading_and_a_resource_doubt_stays_review_in_its_own_words'):
         suite.addTest(ScopedDoubtImageChainTests(name))
     for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
         suite.addTest(ScopedDoubtPdfTests(name))
