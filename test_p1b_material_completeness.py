@@ -205,6 +205,108 @@ class OriginalRoleChainTests(_ScopeBase):
         self.assertEqual(agenda(),first)
 
 
+import copy
+import family_llm
+
+R_DICT='2026年11月5日英语课参加听写。'
+R_SHEET='2026年11月4日晚完成英语练习纸第二部分。'
+U_RES='跟读用的音频未随图片附上，需家长另行获取音频。'
+U_READ='练习纸第二部分要做的题号看不清。'
+
+
+class UncertaintyScopeValidatorTests(unittest.TestCase):
+    ident='0'*32
+
+    def _check(self,scopes):
+        value=dict(originals=[dict(upload_id=self.ident,title='英语作业',note='三项要求。',uncertainties=[U_RES,U_READ],
+                                   requirements=[ROLE_OLD,R_DICT,R_SHEET],uncertainty_scopes=scopes)])
+        return family_llm.validate_school_material(value,original_ids=[self.ident],require_requirements=True)
+
+    def test_only_exact_doubts_and_own_lines_are_a_scope(self):
+        kept=self._check([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),
+                          dict(uncertainty=U_READ,requirements=['练习纸第二部分'],kind='reading')])
+        self.assertEqual(kept['originals'][0]['uncertainty_scopes'],[dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource')])
+        self.assertEqual(kept['originals'][0]['uncertainties'],[U_RES,U_READ])  # the unscoped doubt keeps its words
+        again=family_llm.validate_school_material(kept,original_ids=[self.ident],require_requirements=True)
+        self.assertEqual(again,kept)  # a saved receipt reads back unchanged
+        twice=self._check([dict(uncertainty=U_READ,requirements=[R_SHEET],kind='reading'),dict(uncertainty=U_READ,requirements=[R_DICT],kind='reading')])
+        self.assertEqual(twice['originals'][0]['uncertainty_scopes'],[])
+        for bad in ([dict(uncertainty=U_READ,requirements=[],kind='reading')],[dict(uncertainty=U_READ,requirements=[R_SHEET],kind='other')],'x'):
+            with self.subTest(bad=bad),self.assertRaises(family_llm.LLMDraftError):self._check(bad)
+
+    def test_a_resource_claim_naming_a_reading_gap_is_a_reading_gap(self):
+        self.assertEqual(agent._school_doubt_kind(U_RES,'resource'),'resource')
+        for doubt in (U_READ,'朗读音频对应第几课不明确。','通知提到的附件未收到。','签字单日期看不清。'):
+            with self.subTest(doubt=doubt):self.assertEqual(agent._school_doubt_kind(doubt,'resource'),'reading')
+        self.assertEqual(agent._school_doubt_kind(U_RES,'reading'),'reading')
+
+
+class ScopedDoubtImageChainTests(_ScopeBase):
+    """C on the real image-original chain (save_upload -> attach -> reader receipt -> saved draft -> original actions ->
+    Store -> day list -> reopen): one original, three requirement lines, two doubts (fictional; controlled model stubs)."""
+
+    def _scoped(self,scopes):
+        fix=copy.deepcopy(scope.FIX);original=fix['call_1']['originals'][0]
+        original['requirements'].append(R_SHEET);original['uncertainties']=[U_RES,U_READ]
+        if scopes is not None:original['uncertainty_scopes']=scopes
+        sheet=copy.deepcopy(fix['call_3']['actions'][1])
+        sheet.update(title='英语：练习纸第二部分',goal=R_SHEET,reason='原件第三项要求。',due='2026-11-04',existing_item_id='',basis=[dict(part='',text=R_SHEET)])
+        fix['call_3']['actions'].append(sheet)
+        real=agent._school_original_actions
+        def cite(store,row,result,parts,*args,**kwargs):
+            ids={p['text']:p['id'] for p in parts}
+            for action in result.get('actions',[]):
+                for quote in action.get('basis',[]):quote['part']=ids.get(quote.get('text'),quote.get('part'))
+            return real(store,row,result,parts,*args,**kwargs)
+        with patch.object(scope,'FIX',fix),patch.object(agent,'_school_original_actions',cite):self._chain()
+        found={}
+        for r in self._db()[0].values():
+            action=json.loads(r['plan']).get('school_original_action') or {}
+            if action.get('requirements'):found[action['requirements'][0]['text']]=r
+        self.assertEqual(set(found),{ROLE_OLD,R_DICT,R_SHEET})
+        with self.store._db() as c:
+            saved=json.loads(c.execute("SELECT payload FROM agent_message_drafts WHERE message_id='503'").fetchone()['payload'])
+        self.assertEqual(saved['originals'][0]['uncertainties'],[U_RES,U_READ])  # the reader's doubts stay word for word
+        return found
+
+    @staticmethod
+    def brief(row):return json.loads(row['plan'])['school_task']
+
+    def _day(self):
+        mine,_=whole.WholeDayTests._list(self)
+        return sorted(i['title']+i['body'] for i in mine if [p['ref'] for p in i['agenda'].get('publications',[])]==[self.ref])
+
+    def test_each_doubt_holds_only_the_requirement_it_names(self):
+        found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='reading')])
+        follow,dictation,sheet=found[ROLE_OLD],found[R_DICT],found[R_SHEET]
+        self.assertEqual([r['state'] for r in (follow,dictation,sheet)],['accepted','accepted','pending'])
+        self.assertEqual(self.brief(follow).get('resource_needed'),[U_RES]);self.assertIn(U_RES,self.brief(follow)['reason'])
+        self.assertNotIn(U_READ,self.brief(follow)['reason'])
+        self.assertNotIn('resource_needed',self.brief(dictation))
+        for doubt in (U_RES,U_READ):self.assertNotIn(doubt,self.brief(dictation)['reason'])
+        self.assertEqual(self.brief(sheet)['state'],'review');self.assertIn(U_READ,self.brief(sheet)['reason']);self.assertNotIn(U_RES,self.brief(sheet)['reason'])
+        day=self._day()
+        self.assertTrue(any('跟读' in t for t in day) and any('听写' in t for t in day),day);self.assertFalse([t for t in day if '练习纸' in t],day)
+        made=self._db();agent.run_once(self.app,self.now+dt.timedelta(minutes=2))  # reopen: no call, write or duplicate
+        self.assertEqual(self._db(),made);self.assertEqual(self._day(),day)
+
+    def test_an_old_receipt_without_scopes_keeps_every_doubt_original_wide(self):
+        found=self._scoped(None)
+        self.assertEqual({r['state'] for r in found.values()},{'pending'})
+        for r in found.values():
+            for doubt in (U_RES,U_READ):self.assertIn(doubt,self.brief(r)['reason'])
+
+    def test_a_false_resource_or_unverifiable_pointer_never_frees_a_line(self):
+        found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=[R_SHEET],kind='resource')])
+        self.assertEqual([found[k]['state'] for k in (ROLE_OLD,R_DICT,R_SHEET)],['accepted','accepted','pending'])
+        self.assertIn(U_READ,self.brief(found[R_SHEET])['reason'])
+
+    def test_a_pointer_to_no_requirement_line_stays_original_wide(self):
+        found=self._scoped([dict(uncertainty=U_RES,requirements=[ROLE_OLD],kind='resource'),dict(uncertainty=U_READ,requirements=['练习纸第二部分'],kind='reading')])
+        self.assertEqual({r['state'] for r in found.values()},{'pending'})
+        for r in found.values():self.assertIn(U_READ,self.brief(r)['reason'])
+
+
 import test_school_pdf_evidence as pdf_evidence
 
 
