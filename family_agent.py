@@ -324,15 +324,16 @@ def _school_original_coverage(evidence, pdf=None, material=None):
     return complete_refs,fragments,covered
 
 
-_SCHOOL_DOUBT_RESOURCE=r'音频|录音|视频|链接|二维码|课件|签字单|回执单|纸本|纸质'
+_SCHOOL_DOUBT_RESOURCE=r'音频|录音|视频|链接|二维码|课件|签字单|回执单|空白表|空表|表格|模板|答题卡|纸本|纸质'
 _SCHOOL_DOUBT_READING=(r'看不清|不清晰|不清楚|模糊|遮挡|残缺|缺页|缺字|漏页|未读|没读|读不|无法辨认|无法识别|冲突|矛盾|不一致|不明|'
-                       r'不确定|无法确定|歧义|日期|截止|期限|范围|题|页|哪几|哪些|多少|标准|原件|附件')
+                       r'不确定|无法确定|歧义|日期|截止|期限|范围|题|页|哪几|哪些|多少|标准|内容|要求')
 
 
 def _school_doubt_kind(text,kind):
     """A doubt its reader scoped as a missing execution resource stays one only when its own words name such a resource
-    (朗读音频、签字单、纸本) and no reading gap; anything touching what to do, questions, pages, range, dates, standard or a
-    missing original is a reading gap of its requirement. Never a way to lower the doubts the reader gave."""
+    (朗读音频、签字单、配套空白表) and no reading gap; anything touching what to do, its content, questions, pages, range, dates
+    or standard is a reading gap of its requirement, and a missing original naming no such resource stays one too (通知提到的
+    附件未收到). Never a way to lower the doubts the reader gave."""
     return 'resource' if kind=='resource' and re.search(_SCHOOL_DOUBT_RESOURCE,text) and not re.search(_SCHOOL_DOUBT_READING,text) else 'reading'
 
 

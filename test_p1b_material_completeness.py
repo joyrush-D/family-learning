@@ -235,8 +235,9 @@ class UncertaintyScopeValidatorTests(unittest.TestCase):
             with self.subTest(bad=bad),self.assertRaises(family_llm.LLMDraftError):self._check(bad)
 
     def test_a_resource_claim_naming_a_reading_gap_is_a_reading_gap(self):
-        self.assertEqual(agent._school_doubt_kind(U_RES,'resource'),'resource')
-        for doubt in (U_READ,'朗读音频对应第几课不明确。','通知提到的附件未收到。','签字单日期看不清。'):
+        for doubt in (U_RES,'配套空白表未随原件附上，需家长另行打印。','签字单为纸本，未随附件发送。'):
+            with self.subTest(doubt=doubt):self.assertEqual(agent._school_doubt_kind(doubt,'resource'),'resource')
+        for doubt in (U_READ,'朗读音频对应第几课不明确。','通知提到的附件未收到。','签字单日期看不清。','空白表要填写的内容不清楚。','原件缺第2页。'):
             with self.subTest(doubt=doubt):self.assertEqual(agent._school_doubt_kind(doubt,'resource'),'reading')
         self.assertEqual(agent._school_doubt_kind(U_RES,'reading'),'reading')
 
