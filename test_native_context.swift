@@ -126,6 +126,25 @@ import Foundation
                "科目留空也能补录，标题取要做什么的第一行")
         expect(oralReport["complete_on"] as? String == next && oralReport["handback_on"] as? String == "" && oral["day"] as? String == today
                && oral["request_key"] as? String == "synthetic-oral-key-0001" && oral["version"] as? Int == 3, "完成日与交回日分开，未知留空，做的日子不当老师日期")
+        // 9 补录/反馈共用的照片上传：已传的沿用原编号不重传；回执丢失或失败只停在那一张、已传编号留着；读不到文件不发送。全在内存里，不连后台。
+        let a = URL(fileURLWithPath: "/synthetic/oral-a.png"), b = URL(fileURLWithPath: "/synthetic/oral-b.png"), gone = URL(fileURLWithPath: "/synthetic/gone.png")
+        var sends: [String] = [], replies: [PostOutcome] = [.saved(["attachment": ["id": String(repeating: "a", count: 32)]]), .unknown("虚构回执丢失")]
+        let fake: (Data, String) async -> PostOutcome = { _, name in sends.append(name); return replies.isEmpty ? .saved(["attachment": ["id": String(repeating: "b", count: 32)]]) : replies.removeFirst() }
+        let first = await WorkspaceStore.uploadPhotos([a, b], cached: [:], read: { _ in Data([1]) }, send: fake)
+        let stoppedOnLostReceipt: Bool = { if case .outcome(.unknown)? = first.stop { return true }; return false }()
+        expect(stoppedOnLostReceipt && first.cached == [a.path: String(repeating: "a", count: 32)] && sends == ["oral-a.png", "oral-b.png"], "回执丢失停在那一张，已传的编号留着")
+        let second = await WorkspaceStore.uploadPhotos([a, b], cached: first.cached, read: { _ in Data([1]) }, send: fake)
+        expect(second.stop == nil && second.ids == [String(repeating: "a", count: 32), String(repeating: "b", count: 32)] && sends == ["oral-a.png", "oral-b.png", "oral-b.png"],
+               "重试只补没传成功的那张，已传的不重传")
+        let third = await WorkspaceStore.uploadPhotos([a, b], cached: second.cached, read: { _ in Data([1]) }, send: fake)
+        expect(third.stop == nil && third.ids == second.ids && sends.count == 3, "保存回执丢失后再按保存：照片一张都不重传，编号与内容不变")
+        let unreadable = await WorkspaceStore.uploadPhotos([gone], cached: [:], read: { _ in nil }, send: fake)
+        let stoppedUnreadable: Bool = { if case .unreadable? = unreadable.stop { return true }; return false }()
+        expect(stoppedUnreadable && unreadable.ids.isEmpty && sends.count == 3, "读不到所选文件不发送、不保存")
+        let withPhotos = WorkspaceStore.oralBody(child: "child-2", day: today, key: "synthetic-oral-key-0002", version: 3, subject: "", what: "读课文",
+                                                 completeOn: "", handbackOn: "", attachments: second.ids)
+        expect((withPhotos["report"] as? [String: Any])?["attachments"] as? [String] == second.ids, "照片编号进同一份补录的原件列表")
+        seen["photo_upload"] = ["sends": sends, "ids": second.ids]
         await settle { store.change(child: "child-1") }
         snapshot("child_one_today")
         expect(store.childName == "示例甲" && ids() == ["FICTION-A1"] && wrongSummary().hasPrefix("错题 1"), "回到原来的甲和原来那一天，内容与首次一致")
