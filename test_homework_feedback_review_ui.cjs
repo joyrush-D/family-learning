@@ -7,6 +7,8 @@ const {once}=require('node:events');
 const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+// The current home list: the visible Grove row opens its detail, whose own action opens the task (not a hidden old page).
+async function openFromGrove(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
 // The stage line under the count, the note under the fill button and the right-hand save status, read together with the count.
 const reviewStage=panel=>panel.evaluate(el=>{const result=el.querySelector('[data-homework-review-result]');return {stage:result.querySelector('.homework-review-stage')?.textContent??null,hint:result.querySelector('.homework-review-next>p')?.textContent??null,questions:!!result.querySelector('.homework-review-questions'),counts:result.querySelector('.homework-review-counts')?.textContent??null,status:document.querySelector('#taskFeedbackStatus').textContent}});
 // After filling, the unsaved note and the original save button must both be whole, at least 12px clear (outside the button's focus ring), where a parent can see them: the viewport, the modal task dialog and every clipping ancestor inside it, above its sticky close bar.
@@ -49,7 +51,7 @@ async function threeAttemptSave(page,path,button,error,success,read){
 }
 async function server(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');const port=socket.address().port;await new Promise(r=>socket.close(r));
- const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];
+ const env={...process.env};for(const k of Object.keys(env))if(k.startsWith('FAMILY_'))delete env[k];if(process.env.FAMILY_QA_SOURCE)env.FAMILY_QA_SOURCE=process.env.FAMILY_QA_SOURCE;
  // The fault stays in this disposable demo process; no worker or household printer is started.
  const setup=`import runpy,sys,json,copy,hashlib
 from unittest.mock import patch
@@ -373,7 +375,7 @@ async function splitPdfFlow(p,host,width){
   await item.locator('[name=title]').fill(title);await entry.locator('[data-homework-close]').click();await p.locator('[data-homework-new]').first().click();assert.equal(await item.locator('[name=title]').inputValue(),title,'quick entry survives closing and reopening');await item.locator('[name=goal]').fill('先作答再核对');assert.equal(await item.locator('[name=reviewed]').count(),0,'parent save is the explicit confirmation without a duplicate checkbox');await item.locator('[type=submit]').click();await entry.locator('.homework-saved').waitFor();assert.equal(draftCalls,0,'manual entry does not require the model');await p.unroute('**/api/study/draft');await entry.locator('[data-homework-manual]').click();assert.equal(await entry.locator('[data-homework-item]').count(),1,'unused empty candidate is visible');await entry.locator('[data-homework-close]').click();await p.locator('[data-homework-new]').first().click();assert.equal(await entry.locator('.homework-saved').count(),0,'a later capture starts a new session');assert.equal(await entry.locator('[data-homework-item="0"] [name=title]').isVisible(),true);assert.equal(await entry.locator('[name=text]').inputValue(),'','a new task does not inherit the previous original');assert.equal(await entry.locator('[data-homework-original]').evaluate(x=>x.open),false);await entry.locator('[data-homework-close]').click();
   state=await(await fetch(host.url+'api/state')).json();const id=state.tasks.find(t=>t.title===title)?.id;assert(id,'homework entry creates the task');await p.locator('[data-query-target="task:'+id+'"]').waitFor();
   assert.match(await p.locator('[data-query-target="task:'+id+'"] [data-task="'+id+'"]:visible').first().innerText(),/提交作业反馈/);
-  await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
+  await openFromGrove(p,id);await p.locator('#taskDialog[open]').waitFor();
   assert.equal(await p.locator('#taskStatusDetails').evaluate(x=>x.open),false,'status update stays secondary');
   await p.locator('#taskForm [name=note]').fill('虚构未保存反馈');
   p.once('dialog',d=>d.dismiss());await p.locator('#taskDialog [data-close="taskDialog"]').click();
@@ -440,7 +442,7 @@ async function splitPdfFlow(p,host,width){
   await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
   assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),originalPrintKey,'unknown print receipt survives reopening');
   await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'pair retry saved');assert.deepEqual(pairBodies[1],pairBodies[0]);assert.equal(pairBodies[0].task_id,id);
-  await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
+  await p.unroute('**/api/print/homework');await p.unroute('**/api/print/homework/draft');await p.locator('nav [data-page=home]').click();await openFromGrove(p,id);await p.locator('#taskDialog[open]').waitFor();
 
    { // Exercise real preparation + HTTP ownership failure + changed file + lost queue receipt.
    const priorPrintIds=(await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort();
@@ -467,7 +469,7 @@ async function splitPdfFlow(p,host,width){
    await p.locator('#homeworkPrintDialog [data-close]').click();await p.reload();await p.locator('[data-query-target="task:'+recoveryTask.id+'"] [data-homework-print]').click();await p.locator('#homeworkPrintDialog[open]').waitFor();
    assert.equal(await printForm.evaluate(f=>f.dataset.requestKey),recoveryKey);await printForm.locator('[type=submit]').click();await eventually(async()=>!await p.locator('#homeworkPrintDialog').evaluate(x=>x.open),'original queue keys recover a lost receipt');
    const retriedJobs=(await (await fetch(host.url+'api/print/jobs')).json()).jobs;assert.deepEqual(retriedJobs.map(j=>j.id).sort(),realQueued.map(j=>j.id).sort(),'retry never duplicates a submitted part');assert.deepEqual(recoveryBodies[2],recoveryBodies[1]);assert.equal(recoveryBodies[0].request_key,recoveryBodies[1].request_key);
-   await p.unroute('**/api/print/homework');await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskDialog[open]').waitFor();
+   await p.unroute('**/api/print/homework');await p.locator('nav [data-page=home]').click();await openFromGrove(p,id);await p.locator('#taskDialog[open]').waitFor();
    }
    const printIdsBeforeChecks=(await (await fetch(host.url+'api/print/jobs')).json()).jobs.map(j=>j.id).sort();
 
@@ -484,7 +486,7 @@ async function splitPdfFlow(p,host,width){
   assert.equal(wrongRecords[0].attachments[0],state.records.find(r=>r.source==='事项:'+id).attachments[0],'saved photo is reused');
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'recording a wrong answer does not complete homework');
   assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),1,'wrong-item record does not start a second AI review');
-  await p.keyboard.press('Escape');await p.locator('[data-task="'+id+'"]').first().click();
+  await p.keyboard.press('Escape');await openFromGrove(p,id);
   // Fictional review: under the "错题" heading the link line read "关联记录 · 错题：第2题 · 作业错题"; it now names the item once, and the saved title, source and homework link stay as they were.
   const wrongCard=p.locator('#taskFeedbackHistory .task-feedback-record').filter({has:p.locator('[data-record="'+wrongRecords[0].id+'"]')});await wrongCard.waitFor();
   assert.equal(await wrongCard.locator('.task-record-heading strong').innerText(),'错题');assert.equal(await wrongCard.locator('p.muted').filter({hasText:'关联记录'}).innerText(),'关联记录 · '+wrongRecords[0].title.replace(/^错题：/,''),'wrong-item link line names the item once');
@@ -570,7 +572,7 @@ async function splitPdfFlow(p,host,width){
   assert.equal(corrected.length,1,'lost receipt does not duplicate correction');assert.equal(corrected[0].linked_task_id,id,'correction stays on original homework');assert.equal(state.records.find(r=>r.id===wrongRecords[0].id).title,wrongRecords[0].title,'the saved wrong item keeps its title');
   assert.deepEqual([corrected[0].child,corrected[0].subject,corrected[0].category],[child,wrongRecords[0].subject,'学习进展'],'saved correction keeps the wrong item owner');assert(corrected[0].score==null&&corrected[0].total==null,'saved correction carries no draft score');
   assert.equal(state.tasks.find(t=>t.id===id).update,null,'correction does not complete homework');
-  await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
+  await openFromGrove(p,id);await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
   // Fictional long-history reopen: “更正这条反馈” on the saved answer loaded its own text, originals and correction mode, but the dialog stayed at the history and focus stayed on the button the redraw removed (at 360 the note was about 2266px above the screen; at 1440 the correction heading about 112px above it).
   // Each check reads the page straight after the real click, before any test scroll or focus: declining the discard keeps the draft, the mode and the reading position; accepting it shows the heading, the loaded original and the note together with typing going on in that note; closing the unsaved correction still asks and writes nothing.
   // Static review: when tall originals made the heading-to-note span taller than the view, the reveal kept the heading and could leave the focused note below it. So the same switch also runs on another homework of this child whose three permitted originals (distinct short prefixes plus 180 ordinary Han characters) make that span measurably taller than the view at both widths: the note then shows whole and takes the tap with the correction save button below it, and every original stays loaded.
@@ -591,14 +593,14 @@ async function splitPdfFlow(p,host,width){
     const kept=(await(await fetch(host.url+'api/state')).json()).records.find(r=>r.id===answer.id);assert.deepEqual([kept.note,kept.attachments,kept.created],[answer.note,answer.attachments,answer.created],'switching to and discarding the correction writes nothing');
    };
    await correct(original,['synthetic-answer.png'],false);
-   await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
+   await openFromGrove(p,id);await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
    assert.deepEqual([await p.locator('#taskFeedbackFormHeading').textContent(),await note.inputValue()],['追加一次作答 / 反馈',''],'reopening starts a new answer again');
    const tallTask=(await post('api/task/new',{child,title:'虚构长原件更正 '+width,category:'homework',action:'核对三份长文件名原件',due:state.today})).task,names=['甲','乙','丙'].map(k=>k+'-'+'虚构长文件名'.repeat(30)+'.png'),ids=[];
    for(const [i,name] of names.entries()){const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'Content-Type':'image/png','X-File-Name':encodeURIComponent(name)},body:i===1?png:answerSheet});assert.equal(response.status,200);ids.push((await response.json()).attachment.id)}
    const tallId=(await post('api/task/feedback',{task_id:tallTask.id,child,day:state.today,note:'虚构三份长原件作答',attachments:ids,request_key:'synthetic-tall-originals-'+width})).record_id,tallAnswer=(await(await fetch(host.url+'api/state')).json()).records.find(r=>r.id===tallId);
    await p.keyboard.press('Escape');await p.reload();await p.locator('[data-query-target="task:'+tallTask.id+'"] [data-task="'+tallTask.id+'"]:visible').first().click();await p.locator('#taskFeedbackHistory [data-task-feedback-edit="'+tallId+'"]').waitFor();
    await correct(tallAnswer,names,true);
-   await p.locator('nav [data-page=home]').click();await p.locator('[data-task="'+id+'"]').first().click();await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
+   await p.locator('nav [data-page=home]').click();await openFromGrove(p,id);await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
   }
   const panel=p.locator('#taskFeedbackHistory [data-homework-review]').first(),firstAnswerId=Number(await panel.getAttribute('data-homework-review'));await panel.locator(':scope > details > summary').click();assert.equal(await panel.locator(':scope > details').evaluate(x=>x.open),true,'saved photo exposes review');assert.equal(await panel.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').count(),1);
   let calls=0;await p.route('**/api/print/homework/draft',r=>{calls++;const body=r.request().postDataJSON();assert.equal(body.question_sources.length,1);return calls===1?r.fulfill({status:503,json:{error:'虚构模型暂不可用'}}):r.fulfill({json:{draft:{text:'虚构第1题：卷面C，参考B；先找原文依据。',items:1,wrong_items:1,unknown_items:0,coverage:'仅此一页'},question_sha256:'a'.repeat(64)}})});
@@ -651,7 +653,7 @@ async function splitPdfFlow(p,host,width){
   state=await(await fetch(host.url+'api/state')).json();const records=state.records.filter(r=>r.source==='事项:'+id);assert.equal(records.length,2);assert.equal(state.tasks.find(t=>t.id===id).update,null,'grading must not complete homework');
   const photo=records.find(r=>r.id===firstAnswerId).attachments[0],review=records.find(r=>r.note.includes('批改参考'));assert(review.attachments.includes(photo));const report=review.attachments.find(a=>a!==photo);assert.equal(state.uploads.find(a=>a.id===report).mime,'text/plain; charset=utf-8');
   const secondAnswer=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,day:state.today,request_key:'synthetic-second-answer-'+width,attachments:[photo],note:'虚构第二份独立作答'})});assert.equal(secondAnswer.status,200);const secondAnswerId=(await secondAnswer.json()).record_id;state=await(await fetch(host.url+'api/state')).json();records.push(state.records.find(r=>r.id===secondAnswerId));
-  await p.keyboard.press('Escape');await p.reload();await p.locator('[data-task="'+id+'"]').first().click();assert.equal(await p.locator('#taskFeedbackHistory [data-feedback-kind=check] .task-record-files > summary').count(),0,'saved check originals are direct, without another disclosure');
+  await p.keyboard.press('Escape');await p.reload();await openFromGrove(p,id);assert.equal(await p.locator('#taskFeedbackHistory [data-feedback-kind=check] .task-record-files > summary').count(),0,'saved check originals are direct, without another disclosure');
   // Two feedback records (the original answer and an independent second one), one check, one wrong item and one correction: each saved record counts once under its own card's term, so the parts add up to the cards listed.
   {const line=await p.locator('#taskFeedbackIntro').textContent();assert.match(line,/^已保存 作答 \/ 反馈2条 · 检查1次 · 错题1条 · 订正\/复测1条；事项状态：/,'counts do not overlap: '+line);assert.doesNotMatch(line,/已完成/);assert.equal(await p.locator('#taskFeedbackHistory > .task-feedback-record').count(),5,'the counted parts match the saved cards')}await p.locator('#taskFeedbackHistory [data-feedback-kind=check]').first().getByText('作业批改参考', {exact:false}).first().waitFor();
   const firstReview=p.locator('#taskFeedbackHistory [data-homework-review]').nth(0),otherReview=p.locator('#taskFeedbackHistory [data-homework-review]').nth(1);assert.equal(await p.locator('#taskFeedbackHistory [data-homework-review]').count(),2);
@@ -678,13 +680,13 @@ async function splitPdfFlow(p,host,width){
   assert.equal(await p.locator('#taskForm [name=note]').inputValue(),records.find(r=>r.id===switchedId).note,'explicit discard switches to another saved feedback');
   await p.locator('#taskDialog [data-close="taskDialog"]').click();
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'unchanged feedback closes without warning');
-  await p.locator('[data-task="'+id+'"]').first().click();await p.locator('[data-task-feedback-edit]').first().click();
+  await openFromGrove(p,id);await p.locator('[data-task-feedback-edit]').first().click();
   await p.locator('#taskForm [name=note]').fill('虚构更正但未保存');
   p.once('dialog',d=>d.dismiss());await p.keyboard.press('Escape');
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),true,'Escape dismissal keeps edited feedback');
   p.once('dialog',d=>d.accept());await p.keyboard.press('Escape');
   assert.equal(await p.locator('#taskDialog').evaluate(x=>x.open),false,'explicit discard closes');
-  await p.locator('[data-task="'+id+'"]').first().click();
+  await openFromGrove(p,id);
   const finalReview=p.locator('#taskFeedbackHistory [data-homework-review]').first();await finalReview.locator(':scope > details').evaluate(x=>x.open=true);
   await finalReview.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first().check();await useAsPaper(finalReview.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first());await finalReview.locator('[data-homework-review-run]').click();
   await finalReview.locator('[data-homework-review-result] textarea').waitFor();
@@ -701,7 +703,7 @@ async function splitPdfFlow(p,host,width){
   const correction=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,record_id:source.id,expected_created:source.created,note:'虚构最终作答后来更正'})});assert.equal(correction.status,200);
   p.once('dialog',d=>d.accept());await p.locator('#saveTaskFeedback').click();await eventually(async()=>/原作答已在别处更正/.test(await p.locator('#taskError').innerText()),'stale review rejected');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,4,'rejected review leaves no new record');
-  p.once('dialog',d=>d.accept());await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
+  p.once('dialog',d=>d.accept());await p.locator('#taskDialog [data-close="taskDialog"]').click();await p.reload();await openFromGrove(p,id);
   const fresh=p.locator('#taskFeedbackHistory [data-homework-review="'+source.id+'"]');await fresh.locator(':scope > details').evaluate(x=>x.open=true);await fresh.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first().check();await useAsPaper(fresh.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').first());await fresh.locator('[data-homework-review-run]').click();await fresh.locator('[data-homework-review-result] textarea').waitFor();await fresh.locator('[data-homework-review-confirm]').check();await fresh.locator('[data-homework-review-apply]').click();await eventually(async()=>/已填入反馈，尚未保存/.test(await fresh.innerText()),'fresh review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'fresh review saved');
   state=await(await fetch(host.url+'api/state')).json();assert.equal(state.records.filter(r=>r.source==='事项:'+id).length,5,'fresh review links to corrected answer');
   const textOnly=state.records.find(r=>r.note==='虚构另一条实际反馈'),textWrong=p.locator('#taskFeedbackHistory [data-task-wrong-form="'+textOnly.id+'"]');
@@ -719,7 +721,7 @@ async function splitPdfFlow(p,host,width){
   const pdf=Buffer.from(await(await fetch(host.url+'attachment/'+encodeURIComponent('演示练习.pdf'))).arrayBuffer());
   const pdfUpload=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'X-File-Name':'synthetic-teacher-reference.pdf','Content-Type':'application/octet-stream'},body:pdf});assert.equal(pdfUpload.status,200);const reference=(await pdfUpload.json()).attachment.id;
   const original=await fetch(host.url+'api/task/feedback',{method:'POST',headers:{'Content-Type':'application/json','X-Family-Token':state.token},body:JSON.stringify({task_id:id,child,day:state.today,request_key:'synthetic-complete-review-'+width,attachments:[...photos,reference],note:'虚构完整题目与独立作答'})});assert.equal(original.status,200);const originalRecord=(await original.json()).record_id;
-  await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
+  await p.reload();await openFromGrove(p,id);
   const whole=p.locator('#taskFeedbackHistory [data-homework-review="'+originalRecord+'"]');await whole.locator(':scope > details > summary').click();
   assert.equal(await whole.locator(' :scope > details > .homework-review-material [data-homework-review-photo]').count(),6);assert.equal(await whole.locator('[data-homework-review-pages]').count(),1,'saved teacher PDF supports explicit page selection');
   for(const photo of photos){const choice=whole.locator(' :scope > details > .homework-review-material [data-homework-review-photo][value="'+photo+'"]');await choice.check();await useAsPaper(choice)}
@@ -737,7 +739,7 @@ async function splitPdfFlow(p,host,width){
   if(process.env.HOMEWORK_QUICK_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await whole.locator('[data-homework-review-result]').scrollIntoViewIfNeeded();await p.screenshot({path:path.join(process.env.HOMEWORK_QUICK_PROOF_DIR,'complete-review-'+width+'.png')})}
   await whole.locator('[data-homework-review-confirm]').check();await whole.locator('[data-homework-review-apply]').click();await eventually(async()=>/已填入反馈，尚未保存/.test(await whole.innerText()),'five-image review staged');await p.locator('#saveTaskFeedback').click();await eventually(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'five-image basis feedback saved');
   state=await(await fetch(host.url+'api/state')).json();const full=state.records.find(r=>r.note.includes('原作答反馈 #'+originalRecord+'。'));assert(full&&photos.every(x=>full.attachments.includes(x)));assert(!full.attachments.includes(reference),'unused teacher PDF is not claimed as grading basis');assert.deepEqual(state.printing.jobs.map(j=>j.id).sort(),printIdsBeforeChecks,'checking homework never prints');
-  await p.reload();await p.locator('[data-task="'+id+'"]').first().click();await eventually(async()=>await p.locator('[data-saved-homework-review="'+full.id+'"] [data-saved-review-text]').innerText()===completeReviewText,'saved five-image opinion and partial range reopen as visible text');assert.equal(await p.locator('[data-saved-homework-review="'+full.id+'"] [data-saved-review-text]').isVisible(),true);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);
+  await p.reload();await openFromGrove(p,id);await eventually(async()=>await p.locator('[data-saved-homework-review="'+full.id+'"] [data-saved-review-text]').innerText()===completeReviewText,'saved five-image opinion and partial range reopen as visible text');assert.equal(await p.locator('[data-saved-homework-review="'+full.id+'"] [data-saved-review-text]').isVisible(),true);assert.equal(await p.locator('#taskDialog').evaluate(x=>x.scrollWidth>x.clientWidth),false);assert.deepEqual(errors,[]);
   await p.unroute('**/api/print/homework/draft');
   // Reuse saved synthetic answers and their sibling PDF; no extra records affect the checks above.
   const delayedRecords=[source.id,secondAnswerId],sourcesPattern='**/api/print/homework/sources?**';
@@ -758,7 +760,7 @@ async function splitPdfFlow(p,host,width){
    });
    if(outcome==='success')await p.route('**/api/upload',async route=>{uploadPending=true;await uploadGate;await route.continue()});
    try{
-    await p.reload();await p.locator('[data-task="'+id+'"]').first().click();
+    await p.reload();await openFromGrove(p,id);
     const latePanels=delayedRecords.map(recordId=>p.locator('#taskFeedbackHistory [data-homework-review="'+recordId+'"]'));
     for(const latePanel of latePanels){await latePanel.locator(':scope > details').evaluate(x=>x.open=true);await latePanel.locator('[data-homework-review-sources]').evaluate(x=>x.parentElement.open=true)}
     await eventually(async()=>sourceGates.size===2,'both source responses held before generation');

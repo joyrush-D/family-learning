@@ -4,6 +4,8 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('n
 const {spawn}=require('node:child_process'),{once}=require('node:events'),{setTimeout:delay}=require('node:timers/promises');
 const {randomUUID,createHash}=require('node:crypto');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+// The current home list: the visible Grove row opens its detail, whose own action opens the task (not a hidden old page).
+async function openFromGrove(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
 const root=__dirname,out=process.env.WRONG_REGIONS_UI_PROOF_DIR||fs.mkdtempSync(path.join(require('node:os').tmpdir(),'synthetic-wrong-regions-'));fs.mkdirSync(out,{recursive:true});
 async function until(f,label){for(let n=0;n<180;n++){if(await f())return;await delay(50)}throw Error('Timed out: '+label)}
 let proc,browser,last,report={source:'committed-candidate-acceptance',product_model_calls:0,production_access:false,widths:[]};
@@ -25,7 +27,7 @@ let proc,browser,last,report={source:'committed-candidate-acceptance',product_mo
   const names=['toSafeImageSrc','regionFromPoints','cropImageRegions'];let instrumented=mod;
   for(const name of names)instrumented=instrumented.replace(new RegExp('(export (?:async )?function '+name+'\\([^)]*\\)[^{]*\\{)'),`$1 globalThis.__rootCropCalls??={};globalThis.__rootCropCalls['${name}']=(globalThis.__rootCropCalls['${name}']||0)+1;`);
   await p.route('**/vendor/wrong-notebook/image-crop.js',r=>r.fulfill({contentType:'text/javascript',body:instrumented}));
-  await p.goto(base);await p.locator(`[data-task="${task.id}"]`).first().click();
+  await p.goto(base);await openFromGrove(p,task.id);
   const photo=Buffer.from((await p.evaluate(()=>{const c=document.createElement('canvas');c.width=600;c.height=300;const g=c.getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,600,300);g.fillStyle='#111';g.font='25px sans-serif';g.fillText('SYNTHETIC / NOT FAMILY DATA',20,40);g.fillText('1. 3+4=7',20,100);g.fillText('2. 42-17=35',20,220);return c.toDataURL('image/png')})).split(',')[1],'base64');
   await p.locator('#taskForm [name=note]').fill('虚构原作答：第2题35');await p.locator('#cameraInput').setInputFiles({name:'synthetic-frame-'+width+'.png',mimeType:'image/png',buffer:photo});await p.locator('#pendingUploads img').waitFor();
   await p.locator('#saveTaskFeedback').click();await until(async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),'answer saved');
@@ -52,7 +54,7 @@ let proc,browser,last,report={source:'committed-candidate-acceptance',product_mo
   assert.deepEqual(Buffer.from(await(await fetch(base+'upload/'+originalUpload)).arrayBuffer()),photo);
   const calls=await p.evaluate(()=>globalThis.__rootCropCalls);for(const name of names)assert(calls[name]>0,'actual original module invoked: '+name);
   // Reload uses the unmodified vendored module and rebuilds the crop from the stored original.
-  await p.unroute('**/vendor/wrong-notebook/image-crop.js');await p.reload();await p.locator(`[data-task="${task.id}"]`).first().click();await p.locator(`[data-wrong-region-crop="${wrong[0].id}"] img`).waitFor();
+  await p.unroute('**/vendor/wrong-notebook/image-crop.js');await p.reload();await openFromGrove(p,task.id);await p.locator(`[data-wrong-region-crop="${wrong[0].id}"] img`).waitFor();
   assert(!await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),'no page horizontal overflow');
   await p.screenshot({path:path.join(out,`reopen-${width}.png`),fullPage:true});
   assert.deepEqual(errors,[]);report.widths.push({width,touch:width===360,region,upstream_calls:calls,one_saved_wrong:true,uploads_unchanged:true,original_bytes_unchanged:true,three_identical_attempts:true,reopen_from_unmodified_module:true});await p.close();
