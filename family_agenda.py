@@ -125,7 +125,7 @@ def _action_deadlines(text,published):
     text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
                 r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》(?:'+plain+r'*?'+locator+r'+)?'
                 r'|'+plain+r'+?'+locator+r'+)'
-                r'(?=(?:(?:签字|签名|盖章|填好|填写)(?:并|后)?)*'+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)
+                r'(?:(?:签字|签名|盖章|填好|填写)(?:并|后)?)*(?='+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)
     text=_titles_read_as_objects(text)
     # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
     pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+action
