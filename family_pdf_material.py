@@ -527,7 +527,6 @@ def prepare(store, now, budget=ROUND_CALLS):
                 done_now={p for b in batches_now if b['pages']!=pages for p in b['pages']}
                 result['previous_group']=dict(payload=json.loads(old['payload']),updated=old['updated'],pages=json.loads(old['pages']),
                                               page_count=old['page_count'],scope_supplement=True)
-            result['scope_requested']=1  # read under the scope protocol: never a supplement candidate
             require(count_now in (None, page_count) and not (done_now & set(pages)), 'pdf_material_changed')
             c.execute('INSERT INTO agent_pdf_material VALUES(?,?,?,?,?,?,?,?) '
                       'ON CONFLICT(source_id,message_id,fingerprint,first_page) DO UPDATE SET '
