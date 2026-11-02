@@ -159,13 +159,16 @@ let taskLinkPending='',taskLinkIntent='';
 // words, its original task (or none) and the existing topic-diagnosis panel for exactly that record and child; nothing is saved here.
 let recordTopicPending=null;
 {const m=/^#wrong=(\d{1,12})&child=([^&]{1,100})&do=topic$/.exec(location.hash);if(m)recordTopicPending={id:Number(m[1]),child:decodeURIComponent(m[2])}}
+// The original wrong record's later corrections and re-checks, each its own saved record; none is shown as none, never as corrected.
+function recordTopicFollowups(r){const f=data.records.filter(x=>x.related_record_id===r.id&&['订正','复测','独立复测'].includes(x.followup_kind)).sort((a,b)=>String(a.day||'').localeCompare(String(b.day||''))||a.id-b.id);
+ return `<section class="record-topic-original" data-record-topic-followups><h3>订正与复测</h3>${f.length?f.map(x=>`<p class="source" data-record-followup="${esc(x.id)}">${esc(x.day||'')} · ${esc(x.followup_kind)}：${esc(x.note||x.title||'')}</p>`).join(''):'<p class="small muted">还没有订正或复测记录。</p>'}</section>`}
 function revealRecordTopic(){
  if(!recordTopicPending||!data)return;const {id,child}=recordTopicPending;recordTopicPending=null;history.replaceState(null,'',location.pathname+location.search);
  document.querySelector('dialog.record-topic')?.remove();
  const owner=data.children.find(c=>c.id===child),r=owner&&data.records.find(x=>x.id===id&&(x.child===owner.name||owner.aliases?.includes(x.child)));
  const task=r?.linked_task_id&&data.tasks.find(t=>t.id===r.linked_task_id&&t.child===r.child),close='<div class="actions"><button type="button" data-record-topic-close>关闭</button></div>';
  const d=document.createElement('dialog');d.className='record-topic';d.dataset.recordTopic=String(id);
- d.innerHTML=r?`<header class="record-topic-head"><p class="small muted">知识点与练习 · ${esc(owner.name)} · ${esc(r.subject||'科目待定')} · 记于 ${esc(r.day)}</p><h2>${esc(r.title)}</h2><p class="small">${task?'原作业：'+esc(task.title):'未关联原作业（单独记下的错题）'}</p></header><section class="record-topic-original"><h3>原题与作答</h3><p class="source">${esc(r.note||'原记录没有写题面和作答。')}</p></section>${window.FamilyTopicDiagnosis?FamilyTopicDiagnosis.slot(r,owner.id):'<p class="error">知识点面板没有加载；原错题和订正照常可用。</p>'}${close}`:`<p class="error">读不到这道原错题（可能已删除，或不属于所选孩子）；没有改动任何记录。</p>${close}`;
+ d.innerHTML=r?`<header class="record-topic-head"><p class="small muted">知识点与练习 · ${esc(owner.name)} · ${esc(r.subject||'科目待定')} · 记于 ${esc(r.day)}</p><h2>${esc(r.title)}</h2><p class="small">${task?'原作业：'+esc(task.title):'未关联原作业（单独记下的错题）'}</p></header><section class="record-topic-original"><h3>原题与作答</h3><p class="source">${esc(r.note||'原记录没有写题面和作答。')}</p></section>${recordTopicFollowups(r)}${window.FamilyTopicDiagnosis?FamilyTopicDiagnosis.slot(r,owner.id):'<p class="error">知识点面板没有加载；原错题和订正照常可用。</p>'}${close}`:`<p class="error">读不到这道原错题（可能已删除，或不属于所选孩子）；没有改动任何记录。</p>${close}`;
  document.body.appendChild(d);
  const unsaved=()=>!!window.FamilyTopicDiagnosis?.hasUnsaved?.()&&!confirm('还有没提交的作答，确定关闭？');
  d.querySelector('[data-record-topic-close]').addEventListener('click',()=>{if(!unsaved())d.close()});d.addEventListener('cancel',e=>{if(unsaved())e.preventDefault()});d.addEventListener('close',()=>d.remove());

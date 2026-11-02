@@ -584,7 +584,16 @@ def record_review_context(c,record):
             if ctx.get('child_id')==record['child_id'] and ctx.get('record_id')==record['id']:
                 reviews.append(dict(id=r['id'],version=r['version'],title=r['title'],day=r['day'],start_time=r['start_time'],end_time=r['end_time'],
                                     status=r['status'],topic_id=ctx.get('topic_id',''),task_id=ctx.get('task_id',''),basis='current' if ctx.get('basis')==now else 'basis_changed'))
-    return dict(task=task,reviews=reviews,topic_hint=family_diagnosis.reviewed_hints(row).get('topic_hint',''))
+    # A current saved diagnosis (the diagnosis' own reader) that cites this exact record (record:<id>) as it reads now: its
+    # knowledge-component names citing that ref. A corrected record, another record (same title or not) or child is no source.
+    terms,ref=[],'record:%d'%record['id']
+    for d in family_diagnosis._current(c,record['child_id']):
+        cited=next((e for e in d.get('evidence') or [] if e.get('ref')==ref),None)
+        if cited is None or (cited.get('title') or '')!=(row.get('title') or '') or not str(cited.get('text') or '').startswith((row.get('note') or '')[:1000]): continue
+        for comp in (d.get('diagnosis') or {}).get('knowledge_components') or []:
+            if ref in (comp.get('evidence') or []) and str(comp.get('name') or '').strip():
+                terms.append(dict(name=str(comp['name']).strip()[:60],created=str(d.get('created') or '')[:10],subject=d.get('subject') or ''))
+    return dict(task=task,reviews=reviews,topic_hint=family_diagnosis.reviewed_hints(row).get('topic_hint',''),diagnosis_terms=terms)
 
 def day_schedule(cal,child_id,day,rows):
     """One child's lessons (timetable slots as written, no clock) and plans that day; cancelled or completed plans are left
@@ -886,7 +895,8 @@ def calendar_snapshot(start,end):
     return result
 
 def calendar_subscription():
-    events=calendar_store().subscription_events()
+    # A read: the saved series as they are (initialize=False, no table or column added); only the save routes initialize.
+    events=family_calendar.Store(connect,profiles,DATA,initialize=False).subscription_events()
     linked={e['task_id'] for e in events if e.get('task_id')}
     states={}
     with connect() as c:
