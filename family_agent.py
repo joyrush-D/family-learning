@@ -7587,6 +7587,20 @@ def _school_bracket_restated(text,published,keep=False):
 
 
 _SCHOOL_RESOURCE_TIME=r'发放|下发|分发|发下|印发|统一发|可领'
+_SCHOOL_DAY_HEAD=(r'(?:(?:下|本|这)?(?:周|星期|礼拜)[一二三四五六日天]|今天|今日|今晚|明天|明日|明早|明晚|后天|'
+                  r'(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号])(?:早上|早晨|上午|中午|下午|傍晚|晚上|晚)?')
+
+
+def _school_date_head_joined(text):
+    """A short day head standing alone before a comma (周五，请孩子把回执交给老师) dates its own next clause as it does written
+    together (周五请孩子把回执…). Only that one adjacent clause, which must lead with its executor (请/由孩子/孩子/家长…) and
+    hold no negation, condition, question or day of its own; anything else stays as it was for the existing date checks."""
+    def join(m):
+        clause=m[3]
+        if (re.search(r'不用|不必|无需|不需|免|别|勿|如果|若|如需|假如|视情况|是否',clause) or re.search(_SCHOOL_DAY_HEAD,clause)
+                or not re.match(r'(?:请|由家长|由孩子|由学生|家长|孩子|学生)',clause)):return m[0]
+        return m[1]+m[2]+clause
+    return re.sub(r'(^|[。；;！!？?\n])\s*('+_SCHOOL_DAY_HEAD+r')\s*[，,]\s*([^。；;！!？?\n，,]+)',join,text or '')
 
 
 def _school_resource_time_free(text):
@@ -9157,7 +9171,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         due=_text(value,'due',10)
         stamps={e['ref']:sent_day(e.get('time')) for e in cited}
         # A clause only saying when a material is given out (空白表11月6日发放) dates no role of this action; its words stay.
-        action_anchors_dated=[dict(a,quote=_school_resource_time_free(a['quote'])) for a in action_anchors]
+        action_anchors_dated=[dict(a,quote=_school_date_head_joined(_school_resource_time_free(a['quote']))) for a in action_anchors]
         restated=[_school_bracket_restated(a['quote'],stamps.get(a['ref'],'')) for a in action_anchors_dated]
         dates=set().union(*(deadlines(r if r is not None else a['quote'],stamps.get(a['ref'],'')) for a,r in zip(action_anchors_dated,restated)))
         # Another action's own requirement words (never a shared background header) make an overlapping range shared.
@@ -9177,7 +9191,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
         if generated_match:
             inherited_dates=deadlines(batch_proof['action_text']+'\n'+batch_proof['shared_date_text'],sent_day(batch_proof['original_time']))
             if len(inherited_dates)==1 and not dates:dates=inherited_dates
-        stated=dates if conditions else set().union(*(deadlines(_school_resource_time_free(brief['goal']),s) for s in stamps.values()))
+        stated=dates if conditions else set().union(*(deadlines(_school_date_head_joined(_school_resource_time_free(brief['goal'])),s) for s in stamps.values()))
         if own_dated and not stated:stated=dates
         if roles and dates<=roles[0]|{roles[1]} and stated<=roles[0]|{roles[1]} and (not due or due in roles[0]|{roles[1]}):
             # Its own completion day and its handback/check day are two roles of one action, not two candidate days: the
