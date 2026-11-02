@@ -187,6 +187,35 @@ class UploadReceiptTests(unittest.TestCase):
         self.assertEqual(len(self.uploads()),before+2)
 
 
+
+class OralWordsTests(unittest.TestCase):
+    """A recorded oral item without a goal shows its own full words in the day lines; a goal stays first."""
+    setUp=HomeworkPrintScopeTests.setUp
+    tearDown=HomeworkPrintScopeTests.tearDown
+    request=HomeworkPrintScopeTests.request
+
+    def save(self,key,text,goal=''):
+        status,value=self.request('GET','/api/study?child_id=child-1&day=2026-11-02');self.assertEqual(status,200,value)
+        body=dict(child_id='child-1',day='2026-11-02',request_key=key,version=value['day']['version'],title=text.splitlines()[0][:80],subject='',
+                  planned_minutes=None,report=dict(text=text,explanation='',excerpt='',goal=goal,attachments=[],complete_on='',handback_on=''))
+        status,value=self.request('POST','/api/study/item',body);self.assertEqual(status,200,value)
+
+    def item(self,title):
+        view=app.day_view('child-1','2026-11-02')
+        return next(i for g in view['groups'] for i in g['items'] if i['title']==title)
+
+    def test_multi_line_words_reach_the_day_lines_once_and_a_goal_stays_first(self):
+        self.save('synthetic-oral-words-0001','读课文两遍\n家长在书上签字\n明天把书带回学校')
+        shown='\n'.join(self.item('读课文两遍')['lines'])
+        self.assertIn('家长在书上签字',shown);self.assertIn('明天把书带回学校',shown);self.assertNotIn('读课文两遍',shown)
+        self.save('synthetic-oral-words-0002','抄写生字\n每个三遍',goal='完成生字本第5页')
+        shown='\n'.join(self.item('抄写生字')['lines'])
+        self.assertIn('完成生字本第5页',shown);self.assertNotIn('每个三遍',shown)
+        self.save('synthetic-oral-words-0003','背古诗')
+        self.assertEqual(self.item('背古诗')['lines'],[])  # one line, the title itself: nothing repeated, the standard stays unknown
+
+
+
 del HomeworkPrintScopeTests  # reused methods only; the scope suite runs in its own module
 
 

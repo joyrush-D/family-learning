@@ -116,6 +116,7 @@ struct DayView: Decodable {
     let children: [DayChild]
     let token: String
     let source_error: String?
+    let school_pending: Int?   // 这个孩子已收到、尚未整理的学校消息条数（与网页清单同一规则）；读不到时缺省，不猜
     let groups: [ItemGroup]
     let closed: [ItemGroup]
     let wrong: [WrongGroup]
