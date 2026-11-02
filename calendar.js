@@ -471,7 +471,7 @@ function calendarReviewMode(e){
  f.classList.toggle('calendar-review-form',true);
  const r=e.review,task=r.task_id&&data.tasks.find(t=>t.id===r.task_id),topic=/^知识点：(.+)$/m.exec(e.note||'')?.[1];
  const p=document.createElement('p');p.id='calendarReviewContext';p.className='small calendar-review-context';
- p.innerHTML=`<b>家庭复习</b> · ${esc(calendarNames(e.child_ids))} · 原错题：${esc(r.record_title||'标题读不到')} · 知识点：${esc(topic||'未确认')} · ${task?'原作业：'+esc(task.title):'独立错题，没有原作业'}。这里只改这次复习的日期、时间和状态；孩子与原错题关联不变，完成只记这条复习，不改老师作业。`;
+ p.innerHTML=`<b>家庭复习</b> · ${esc(calendarNames(e.child_ids))} · 原错题：${esc(r.record_title||'标题读不到')} · 知识点：${esc(topic||'未确认')} · ${task?'原作业：'+esc(task.title):'独立错题，没有原作业'}`;
  $('#calendarFields').prepend(p)}
 function calendarDraftMissing(context){const d=context.form||context.draft;return d?[!d.child_ids?.length?'孩子':'',!d.title?.trim()?'安排内容':'',!d.day?'日期':''].filter(Boolean).join('、'):''}
 function calendarDraftSchedule(context){const d=context.form||context.draft;if(!d||d.repeat==='none')return '';const times=[d,...(d.extra_times||[])].map((p,n)=>p.start_time?p.start_time+(p.end_time?'–'+p.end_time:''):'时段'+(n+1)+'钟点待定');return (d.day?'从 '+d.day:'起点待定')+(d.until?' 至 '+d.until:' · 未设截止')+' · '+calendarRepeatLabel(d)+' · '+times.join('、')}
