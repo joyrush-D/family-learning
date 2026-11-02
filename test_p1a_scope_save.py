@@ -1138,3 +1138,91 @@ class LessonUnitTests(ScopeSaveTests):
         text = '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。今晚跟读后请家长在跟读记录卡签字。'
         self.layout('992', text, '今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写。\n周五课堂听写，范围由老师明天再说。\n今晚跟读后请家长在跟读记录卡签字。',
                     extra=('家长', '跟读记录卡', '签字'))
+
+
+class NaturalCountCorrectionTests(ScopeSaveTests):
+    """Root run12 fresh natural shape (newly written fictional equivalent): the correction's own words restate the same
+    follow-reading with one new count (只需跟读两遍) while the model summary says 共两遍 and leaves 听音频 in advice. The latest
+    is composed from the original and the teacher's own words, on the page and in the confirmed save; the replaced count is
+    never named an unchanged standard; any other new word of the notice keeps the review."""
+    T = dict(sender='虚构甲英语老师', sender_id='fic-en-teacher')
+    R3, R7 = 'message:%s:103' % EN, 'message:%s:107' % EN
+    ORIGINAL = '英语：今晚听音频跟读Unit 9第1到6个单词，每词三遍。只做口头跟读，不用抄写；周五课堂听写，范围由老师明天再说。'
+    LATEST = ['今晚听音频跟读Unit 9第1到6个单词，每词两遍。', '只做口头跟读，不用抄写。']
+
+    def setup_original(self):
+        self.batch(EN, [msg('103', self.ORIGINAL, '16:20', **self.T)], lambda targets, pending: [dict(proposal(
+            self.R3, '今晚听音频跟读Unit 9第1到6个单词，每词三遍', '英语：跟读Unit 9第1—6个单词',
+            '今晚听音频跟读Unit 9第1到6个单词，每词三遍。\n只做口头跟读，不用抄写。\n周五课堂听写，范围由老师明天再说。'),
+            task_advice='跟读时可先听一遍再逐词跟读三遍，注意发音；听写范围等老师明天说明后再准备。')])
+        home = next(i for i in self.items_for(self.R3) if '跟读' in i['title'])
+        if home['state'] == 'pending':
+            self.store.act(dict(id=home['id'], action='accept')); home = next(i for i in self.items_for(self.R3) if '跟读' in i['title'])
+        lesson, = [i for i in self.items_for(self.R3) if '听写' in i['title']]
+        return home['task_id'], lesson
+
+    def correct(self, notice, quote):
+        task, lesson = self.setup_original()
+        def replies(targets, pending):
+            return [dict(proposal(self.R7, quote, '英语：跟读Unit 9第1—6个单词两遍', '今晚跟读Unit 9第1到6个单词，共两遍。\n只做口头跟读，不用抄写。',
+                                  state='review', change='update', target=task), task_advice='可先听音频再跟读，分两遍完成。'),
+                    proposal(self.R7, '周五课堂听写的范围还没定，等明天另行通知', '英语：周五课堂听写', '周五课堂听写。\n听写范围老师尚未确定，等明天另行通知。',
+                             due=FRI, state='review', change='same', target='pending:' + lesson['id'])]
+        self.batch(EN, [msg('107', notice, '17:10', **self.T)], replies)
+        return task, lesson
+
+    def row(self, view, task):
+        return [r for g in view['groups'] for r in g['items'] if r.get('task_id') == task]
+
+    def test_the_teachers_own_count_correction_is_the_whole_latest_and_saves_so(self):
+        task, lesson = self.correct('更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定，等明天另行通知。',
+                                    'Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写')
+        for view in self.views(DAY):
+            en, = self.row(view, task)
+            version = en.get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            self.assertEqual(version['lines'], self.LATEST)
+            self.assertIn('三遍', '\n'.join(version['previous']['lines']), 'the old count stays history')
+            self.assertIn('三遍', version.get('change', ''))
+            self.assertIn('两遍', version.get('change', ''))
+            self.assertEqual(sorted(p['ref'] for p in en['publications']), [self.R3, self.R7])
+        for view in self.views(FRI):
+            cards = [r for g in view['groups'] for r in g['items'] if '听写' in r['title']]
+            self.assertEqual([c['id'] for c in cards], [lesson['id']], 'the unknown-scope lesson stays one card')
+            self.assertNotIn('Unit 9', '\n'.join(cards[0]['lines']))
+        item, = [i for i in self.items_for(self.R7) if i['state'] == 'pending' and '跟读' in i['title']]
+        request = form_request(self, item, task)
+        stale = dict(request, target_version=request['target_version'] + 1)
+        with self.assertRaises(agent.AgentError) as refused:
+            agent.apply_school_change(self.app, self.store, stale)
+        self.assertEqual(refused.exception.status, 409)
+        self.assertIn('三遍', self.task(task)['action'], 'a stale version writes nothing')
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['school_changed'])
+        self.assertEqual(self.task(task)['action'], '\n'.join(self.LATEST), 'the save keeps the same whole latest')
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['replayed'], 'a lost receipt retried writes nothing twice')
+        self.assertEqual(self.task(task)['action'], '\n'.join(self.LATEST))
+        for view in self.views(DAY):
+            en, = self.row(view, task)
+            self.assertEqual(en['lines'], self.LATEST)
+
+    def assert_review_naming_no_replaced_count(self, notice, quote):
+        task, _ = self.correct(notice, quote)
+        for view in self.views(DAY):
+            en, = self.row(view, task)
+            version = en.get('version') or {}
+            self.assertEqual(version.get('state'), 'review', version)
+            self.assertIn('每词三遍', '\n'.join(en['lines']), 'the saved requirement stays until confirmed')
+            self.assertNotIn('三遍', '\n'.join(version.get('reasons', [])), 'the replaced count is no unchanged standard')
+        item, = [i for i in self.items_for(self.R7) if i['state'] == 'pending' and '跟读' in i['title']]
+        before = self.task(task)['action']
+        with self.assertRaises(agent.AgentError):
+            agent.apply_school_change(self.app, self.store, form_request(self, item, task))
+        self.assertEqual(self.task(task)['action'], before, 'an unprovable candidate writes nothing')
+
+    def test_a_notice_changing_the_counts_scope_itself_stays_under_review(self):
+        self.assert_review_naming_no_replaced_count('更正刚才的英语跟读：Unit 9第1到6个单词今晚整组跟读两遍，仍然不用抄写。',
+                                                    'Unit 9第1到6个单词今晚整组跟读两遍，仍然不用抄写')
+
+    def test_a_notice_adding_its_own_step_stays_under_review(self):
+        self.assert_review_naming_no_replaced_count('更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，并把录音发给老师。',
+                                                    'Unit 9第1到6个单词今晚只需跟读两遍，并把录音发给老师')
