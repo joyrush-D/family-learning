@@ -225,12 +225,35 @@ class PdfOriginalRoleTests(pdf_evidence.SchoolPdfEvidenceTests):
         self.assertEqual(agendas(),first)  # reopening reads the same facts, no write
 
 
+    def test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected(self):
+        import family_agenda
+        keys=self.native_notice('p1b-pdf-pending');day=self.now.date();after=day+dt.timedelta(days=1)
+        math='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤，%d月%d日早上交。'%(day.month,day.day,after.month,after.day)
+        self.seed_groups(keys=keys,note='题面背景',uncertainties=['另附回执模板未附'],requirements=[math])
+        ident=self.candidate(keys=keys,ident='p1b-pdf-pending')
+        def mapping(messages):
+            context=json.loads(messages[-1]['content']);parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
+            return {'actions':[dict(pdf_evidence.draft(goal=math),due=day.isoformat(),existing_item_id=ident,basis=[dict(part=parts[math],text=math)])]}
+        self.refresh(mapping);row=self.item(ident)
+        # The unscoped doubt still holds it for review (requirement-scoped doubts are another P1b step); its days are proven.
+        self.assertEqual((row['state'],row['due'],json.loads(row['plan'])['school_task']['state']),('pending',after.isoformat(),'review'))
+        def facts(selected):
+            snapshot=family_agenda.snapshot(self.app,selected.isoformat(),selected.isoformat())
+            found=[i['agenda'] for i in snapshot['inbox'] if i.get('id')==ident]
+            self.assertEqual(len(found),1,selected);return {k:found[0].get(k) for k in ('due_on','due_kind','complete_on','published_on')}
+        first=facts(day)
+        self.assertEqual(first,dict(due_on=after.isoformat(),due_kind='handback',complete_on=day.isoformat(),published_on=day.isoformat()))
+        self.assertEqual(facts(after),first)  # the selected day never re-reads its relative words
+        self.assertEqual(facts(day),first)  # reopening reads the same facts
+
+
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
     suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
     suite.addTest(SameHomeworkFlowTests('test_another_lessons_recording_upload_stays_its_own_item_through_save_and_reopen'))
     suite.addTest(PdfOriginalRoleTests('test_pdf_requirement_roles_reach_the_day_view_and_stay_on_reopen'))
+    suite.addTest(PdfOriginalRoleTests('test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected'))
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role'):
         suite.addTest(OriginalRoleChainTests(name))
     return suite
