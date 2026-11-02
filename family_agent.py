@@ -324,7 +324,10 @@ def _school_original_coverage(evidence, pdf=None, material=None):
     return complete_refs,fragments,covered
 
 
-_SCHOOL_DOUBT_RESOURCE=r'音频|录音|视频|链接|二维码|课件|签字单|回执单|空白表|空表|表格|模板|答题卡|纸本|纸质'
+_SCHOOL_DOUBT_RESOURCE=r'音频|录音|视频|链接|二维码|课件|签字单|回执单|空白表|空表|表格|表单|登记表|报名表|模板|答题卡|纸本|纸质'
+# What the unattached resource itself may hold beyond the teacher's stated action (表单本身是否另有填写项目): a resource gap.
+_SCHOOL_DOUBT_EXTRA=(r'(?:表单|表格|空白表|空表|回执单?|签字单|登记表|报名表|模板)(?:本身|上|里|内|中)?(?:是否|有无|有没有|会不会)?'
+                     r'(?:另有|还有|另外有|其他|额外)(?:需要)?(?:填写|填|勾选)?(?:的)?(?:项目|栏目|内容|字段|栏)')
 _SCHOOL_DOUBT_CHECK=r'题面|电子版|电子题|扫描件|参考答案|答案|原题|题目内容|题目原文|讲义'
 _SCHOOL_DOUBT_UNKNOWN=(r'看不清|不清晰|不清楚|模糊|遮挡|残缺|缺页|缺字|漏页|无法辨认|无法识别|冲突|矛盾|不一致|不明|不确定|无法确定|歧义|'
                        r'哪几|哪些|多少|未注明|未写明|未说明|没写|没说|待确认|是否')
@@ -341,7 +344,12 @@ def _school_doubt_kind(text,kind,lines=()):
     own range (练习册第7页第2至4题). Otherwise it is a reading gap of its line: a resource name never hides a real unknown
     range, standard or date, and a page or question word alone never holds a line that states its whole work.
     """
-    if kind!='resource' or re.search(_SCHOOL_DOUBT_UNKNOWN,text):return 'reading'
+    if kind!='resource':return 'reading'
+    extra=re.search(_SCHOOL_DOUBT_EXTRA,text)
+    if extra and not all(re.search(r'签字|签名|勾选|填写|填好|交回|上交|提交|盖章',line) for line in lines):return 'reading'
+    # Only an unknown about that resource's own extra fields is set aside; any unknown of the teacher's own range, count,
+    # date or standard (哪几项、交回日期未注明) still makes it a reading gap.
+    if re.search(_SCHOOL_DOUBT_UNKNOWN,re.sub(_SCHOOL_DOUBT_EXTRA,'',text)):return 'reading'
     resource=re.search(_SCHOOL_DOUBT_RESOURCE,text);check=re.search(_SCHOOL_DOUBT_CHECK,text)
     if not (resource or check):return 'reading'
     named=lambda words:{re.sub(r'\s+','',x).lower() for x in re.findall(_SCHOOL_DOUBT_RANGE,words,re.I)}
@@ -8912,7 +8920,7 @@ def _school_original_prompt(pages,pdf,material):
     prompt=prompt.replace('candidate仅定位当前这一项，不是完整要求或原文。结合本项全部evidence正文和有效原件，整理完整结论；共享原消息中的其他独立事项不混入本项。','candidate是本轮原件的原候选，不是整份行动清单。candidate和existing_actions的title/goal是已保存的旧文字，只用于对应编号和保留决定；其中读原件前生成的“内容未读”“请核对是否适用、准备什么、何时完成”等待核占位及原消息正文里的“内容未读”标记都是收集时状态，不是本轮原件内容或当前缺口，当前读取范围以content_incomplete和已读原件为准。')
     # One purpose rule: a bare name read in full is reference whatever its purpose; only unread or undecidable content waits.
     prompt=prompt.replace('unknown：只有链接/短链、需登录后才能看到或文字不足以判断，title/goal/advice留空且state=review，','unknown：只有链接/短链、需登录后才能看到或文字不足以判断，title/goal/advice留空且state=review；已读完整原件中只是名称/标题的requirement行是已读资料，用途unknown时也按下方规则state=reference，')
-    return prompt+_SCHOOL_PART_DOUBT_PROMPT+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
+    return prompt+_SCHOOL_PART_DOUBT_PROMPT+_SCHOOL_POINTER_PROMPT+'\n本轮返回actions数组（最多36项），逐项写清科目/事务、动作、范围、完成标准和各自due；一份原件可以含多个独立要求，不能只返回其中一项。完成该作业后的打印、签字、交回仍放该作业goal/submission；另一份独立回执单列行政事项。每项basis逐字引用original_parts里含本项动作和对象的文字，part选该段id；摘要仍是Agent参考，不是老师逐字原话。日期必须由本项basis支持，不能借另一项日期。截止没写due留空，不能猜今天。existing_actions中的同一行动用existing_item_id，不新增或恢复accepted/dismissed；当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。原件范围、学习/行政、必做/选做、疑点分别保留；页面已读齐不代表行动理解准确。'+\
         '\n每条basis.text必须是所选part的text中连续的原文子串，字词、标点和换行均保持原样，禁止跳字、改标点或把不连续句子拼成一次引用。需要引用相隔的句子时，用同一个part的多个basis，每条分别连续引用，不能删掉中间的对照说明后拼接。'+\
         '\n表头和空白填写栏不是学校行动要求。例如原件只要求打印、家长签字并交回，仅另设“日期：____”空栏而未明确要求填写日期时，goal和submission都不得新增“填写日期”；仅保留明确要求的打印、签字、交回。'+\
         '\n每项goal/submission分别保留必做和选做部分明确的具体输出与完成标准，包括方法数量、单位、过程及签字等，并保留各自条件。标题、总范围或笼统的“完成后检查”不能代替这些逐项标准；不得因压缩描述而丢掉要求或条件。题目本身可留在原件中，明确的完成标准仍须写入对应行动。'+\
@@ -8981,6 +8989,36 @@ def _school_own_requirement(part,pdf,material,subject='',names=None):
     return _school_requirement_substance(part['text'],_school_requirement_files(part,pdf,names),subject)
 
 
+def _school_recover_pointer(row,result,parts,known):
+    """A reply naming no existing item at all keeps an untouched default pointer's id on one provable action.
+
+    Only when the candidate being mapped is the one known item of this original scope and still its initial unread
+    placeholder (pending, no task, record or care link, its unsummarized default words, no mapping, history, decision or
+    dependency): the action whose basis holds the read original's first own requirement line, in the original's own part
+    order (never the reply's order), takes the id, as a reply choosing it would (the pointer check accepts any action).
+    Any id named, an edited, decided or mapped candidate, other known items or no single such action changes nothing, and
+    the existing checks decide (原件清单未保留原候选 still refuses).
+    """
+    actions=result.get('actions') if isinstance(result,dict) else None
+    if not isinstance(actions,list) or not actions or any(not isinstance(v,dict) or v.get('existing_item_id') for v in actions):return result
+    if [r['id'] for r in known]!=[row['id']]:return result
+    candidate=dict(row);plan=json.loads(candidate['plan']);brief=plan.get('school_task',{})
+    if (candidate['state']!='pending' or candidate['task_id'] or candidate.get('record_id') is not None or candidate.get('care_id')
+            or plan.get('school_original_action') or not _school_unsummarized(candidate,brief)
+            or any(plan.get(k) for k in ('approved','school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id'))):
+        return result
+    first=next((p['text'] for p in parts if p.get('requirement')),None)
+    holds=lambda v:isinstance(v.get('basis'),list) and any(isinstance(q,dict) and str(q.get('text','')).strip()==first for q in v['basis'])
+    if first is None or sum(1 for v in actions if holds(v))!=1:return result
+    result=copy.deepcopy(result)
+    next(v for v in result['actions'] if holds(v))['existing_item_id']=row['id']
+    return result
+
+
+_SCHOOL_POINTER_PROMPT=('\ncandidate只是附件的默认待核占位、且没有其他existing_actions时，若无法判断它对应哪一项，existing_item_id可以全部留空：'
+    '程序只在它仍是未改、未决定的唯一默认占位时，把编号留给原件中第一项完整要求所在的行动。candidate已有内容、决定或还有其他已存行动时，仍须按上述规则明确返回。')
+
+
 def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,material,targets,goals,now,*,legacy_correction=None):
     """Validate every independent action before any write; each deadline has its own bounded basis."""
     from family_agenda import date,deadlines,sent_day
@@ -8995,6 +9033,7 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
                    if _school_pdf_reflow(old,pdf,known)}
     fields=set(TASK_BRIEF_SCHEMA['required'])|{'due','existing_item_id','basis'}
     scope=_hash([row['child_id'],sorted(e['ref'] for e in evidence),sorted({u for p in parts for u in p['upload_ids']})])
+    result=_school_recover_pointer(row,result,parts,known)
     for value in result['actions']:
         if not isinstance(value,dict) or set(value) not in (fields,fields|{'condition_changes'}): raise AgentError('原件行动字段无法核对')
         conditions=value.get('condition_changes',[])
