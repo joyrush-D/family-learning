@@ -1060,7 +1060,7 @@ def _school_brief(value, incomplete=False, evidence=(), school_tasks=(), pages=N
     if pdf: brief['pdf_evidence']=dict(fingerprint=pdf['fingerprint'],documents=pdf['documents'])
     brief['origin_basis']=_school_message_basis(evidence)
     _school_append_brief(brief,evidence,school_tasks)
-    _school_same_brief(brief,evidence,school_tasks)
+    _school_same_brief(brief,evidence,school_tasks,others=others)
     return brief
 
 
@@ -2946,7 +2946,33 @@ def _school_same_due(due, target, evidence):
     return ''
 
 
-def _school_same_brief(brief, evidence, targets):
+def _school_same_own(text, others, own):
+    """The reminder's words this affair owns: each whole clause run that another proposal of the same message alone quotes is set aside.
+
+    One notice may correct one affair and restate another (更正刚才的跟读：…只需两遍；周五听写的范围还没定): the other item's
+    correction is not this affair's change. A quote is that item's own part only where the original proves it: found once, both
+    ends on clause boundaries, and no two-character word of it (nor of the label leading its sentence, taken only when it names
+    the quoted action) is a word of this task's own title and goal. Anything else, an unclaimed clause or a quote touching this
+    task's words, stays and keeps every guard. Returns the remaining words and the parts set aside verbatim.
+    """
+    def pairs(value):
+        chars=re.sub(r'[^\u4e00-\u9fff]','',value);return {chars[i:i+2] for i in range(len(chars)-1)}
+    mine=pairs(re.sub(r'^[^：:\n]{1,8}[：:]','',own))  # a subject label (英语：) names no affair of its own
+    spans=[]
+    for quote in dict.fromkeys(q.strip().strip('。；;，,') for q in others if isinstance(q,str)):
+        if not quote or text.count(quote)!=1:continue
+        start=text.index(quote);end=start+len(quote)
+        if start and text[start-1] not in '，,。；;！!？?\n：:' or end<len(text) and text[end] not in '，,。；;！!？?\n':continue
+        head=re.search(r'(?:^|(?<=[。；;！!？?\n]))[^，,。；;！!？?\n：:]{1,20}[：:]\s*$',text[:start])
+        if head and pairs(head[0])&pairs(quote):start=head.start()
+        if pairs(text[start:end])&mine or any(max(start,a)<min(end,b) for a,b in spans):continue
+        spans.append((start,end))
+    rest=text
+    for start,end in sorted(spans,reverse=True):rest=rest[:start]+rest[end:]
+    return rest,[text[a:b] for a,b in sorted(spans)]
+
+
+def _school_same_brief(brief, evidence, targets, others=()):
     """The same concrete affair reminded again links its one saved task as provenance; requirements, date and state stay.
 
     Only the model can tell a paraphrase of the same affair apart; the program proves no more than: this child's listed,
@@ -2954,15 +2980,19 @@ def _school_same_brief(brief, evidence, targets):
     补充提醒 and quoted names are not commands); no step, named object, count or range the task's own words and originals do
     not already state (两 = 2, 1-3 = 1、2、3). Subject, title, book, unit or file name alone never link; the publisher only
     says who reminded. Dates are checked where resolved (_select) and on save; attached files only on save (same bytes).
+    In a notice holding several items, only this affair's own words decide (_school_same_own): another proposal's proven
+    clauses are set aside, kept verbatim and proven again on save, so its correction neither changes nor hides this affair.
     """
     if brief.get('change')!='same': return
+    brief.pop('sibling_quotes',None)
     def uncertain(reason='模型认为是同一事项的再次提醒，但原事项或提醒原文尚不能核对为同一件；原事项和提醒原文都保留。'):
         brief.update(state='review',reason=reason);brief.pop('target_basis',None);brief.pop('input_basis',None);brief.pop('same_attachments',None)
     if brief.get('state')!='ready': brief.pop('target_basis',None);brief.pop('input_basis',None);return
     selected=next((t for t in targets if t['id']==brief.get('target_id')),None)
     if not selected or not selected.get('append_basis') or not selected.get('same_complete',selected.get('targets_complete')) or selected.get('goal_truncated'):
         uncertain();return
-    if not _school_same_object('\n'.join(e.get('text','') for e in evidence),selected['title']+'\n'+selected['goal']):
+    own,siblings=_school_same_own('\n'.join(e.get('text','') for e in evidence),others,selected['title']+'\n'+selected['goal'])
+    if not _school_same_object(own,selected['title']+'\n'+selected['goal']):
         uncertain('提醒与原事项没有共同的具体对象，不能认定为同一事项；原事项和提醒原文都保留。');return
     if selected.get('status') in ('不参加','不适用'):
         uncertain('原事项已标为不参加或不适用，再次提醒是否改变决定待家长核对；原决定和提醒原文都保留。');return
@@ -2972,7 +3002,7 @@ def _school_same_brief(brief, evidence, targets):
                 or not entry.get('text','').strip()):
             uncertain('提醒含未读全的内容，可能带来新要求；原事项和提醒原文都保留。');return
         attached=attached or bool(entry.get('attachments'));texts.append(entry['text'])
-    text='\n'.join(texts);facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
+    text=own;facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
     # Requirement units only: the reminder's proven relation clauses (元话语) state no change, count or step of this affair.
     said,relation=_school_relation_body(text)
     if _school_same_changes(said,facts) or brief.get('purpose') not in ('learning','admin'):
@@ -3000,6 +3030,7 @@ def _school_same_brief(brief, evidence, targets):
     brief['target_basis']=copy.deepcopy(selected.get('same_basis') or selected['append_basis'])
     brief['input_basis']=_school_message_basis(evidence)
     if relation: brief['relation_quotes']=relation  # verbatim relation clauses set aside, kept for the trace layer
+    if siblings: brief['sibling_quotes']=siblings  # another item's own clauses of the same notice, proven again on save
     if attached: brief['same_attachments']=True
 
 
@@ -3173,14 +3204,14 @@ def apply_school_same(app, store, ident, expected):
         original,_=_school_material(store,c,row);checked=copy.deepcopy(brief)
         targets=school_targets(app,store,row['child_id'],connection=c,evidence=[e.get('text','') for e in original])
         current=next((t for t in targets if t['id']==brief.get('target_id')),None)
-        _school_same_brief(checked,original,targets)
+        _school_same_brief(checked,original,targets,others=brief.get('sibling_quotes') or ())
         # A pending reminder saved before a guard it no longer passes (a reversed actor and step) is refused with that guard's
         # own reason; the ordinary refresh keeps it pending for review with its original, the task and the cursors unchanged.
         if current is not None and current.get('same_basis')==brief['target_basis'] and checked.get('state')=='review' and checked.get('reason'):
             raise AgentError(checked['reason'],409)
         if (current is None or current.get('same_basis')!=brief['target_basis'] or checked.get('state')!='ready'
                 or checked.get('target_basis')!=brief['target_basis'] or checked.get('input_basis')!=brief.get('input_basis')
-                or _school_same_due(row['due'],current,original)):
+                or checked.get('sibling_quotes')!=brief.get('sibling_quotes') or _school_same_due(row['due'],current,original)):
             raise AgentError('原事项已有新的安排、反馈或来源变化，提醒未自动关联；原事项和提醒原文都保留。',409)
         problem=_school_same_material(store,c,row,current)
         if problem: raise AgentError(problem,409)
