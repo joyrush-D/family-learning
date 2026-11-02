@@ -584,12 +584,14 @@ def record_review_context(c,record):
             if ctx.get('child_id')==record['child_id'] and ctx.get('record_id')==record['id']:
                 reviews.append(dict(id=r['id'],version=r['version'],title=r['title'],day=r['day'],start_time=r['start_time'],end_time=r['end_time'],
                                     status=r['status'],topic_id=ctx.get('topic_id',''),task_id=ctx.get('task_id',''),basis='current' if ctx.get('basis')==now else 'basis_changed'))
-    # A current saved diagnosis (the diagnosis' own reader) that cites this exact record (record:<id>) as it reads now: its
-    # knowledge-component names citing that ref. A corrected record, another record (same title or not) or child is no source.
+    # A current saved diagnosis (the diagnosis' own readers) whose whole evidence window is still what it ran on (the diagnosis'
+    # own _outdated rule over _records/_pick: any corrected, re-dated, re-helped or new evidence makes it no source), then only
+    # its knowledge-component names citing exactly this record (record:<id>). Another record (same title or not) or child is none.
     terms,ref=[],'record:%d'%record['id']
+    window=family_diagnosis._records(c,record['child'])
     for d in family_diagnosis._current(c,record['child_id']):
-        cited=next((e for e in d.get('evidence') or [] if e.get('ref')==ref),None)
-        if cited is None or (cited.get('title') or '')!=(row.get('title') or '') or not str(cited.get('text') or '').startswith((row.get('note') or '')[:1000]): continue
+        if family_diagnosis._outdated(d.get('evidence') or [],family_diagnosis._pick(window,d.get('subject') or '')): continue
+        if not any(e.get('ref')==ref for e in d.get('evidence') or []): continue
         for comp in (d.get('diagnosis') or {}).get('knowledge_components') or []:
             if ref in (comp.get('evidence') or []) and str(comp.get('name') or '').strip():
                 terms.append(dict(name=str(comp['name']).strip()[:60],created=str(d.get('created') or '')[:10],subject=d.get('subject') or ''))
