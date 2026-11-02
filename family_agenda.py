@@ -1302,6 +1302,13 @@ def _exemption_unmet(old,notice,shown):
 _ACTOR_WORDS=r'家长|监护人|父母|爸爸|妈妈|爸妈|学生|孩子|同学们?|班主任|老师'
 
 
+def _learner_read(text):
+    """text with the generic words for the learner of this child's own task (孩子、学生、同学、孩子们) read as one doer, for
+    comparison only: they name the same current learner, never another. Specific people (爸爸、妈妈), parents, teachers and
+    names stay as written; the saved words are never rewritten."""
+    return re.sub(r'孩子们|同学们|同学|学生','孩子',text or '')
+
+
 def _polar_clauses(text):
     """(clause, negated, requirement pieces) of each clause of text, read by its own polarity."""
     return [(c.strip(),_clause_negated(c),_requirement_pieces(c)) for c in re.split(r'[，,；;。！!？?\n]+',text or '') if c.strip()]
@@ -1310,7 +1317,8 @@ def _polar_clauses(text):
 def _rebound_actors(old,notice):
     """Each notice clause whose doer the notice's own words change while every other word of it is one original piece's own,
     of the same polarity (家长今晚听音频跟读… after 孩子今晚听音频跟读…；孩子签字 after 家长签字): the notice's clause words."""
-    actors=_unit_chars(''.join(re.findall(_ACTOR_WORDS,(old or '')+'\n'+(notice or ''))))
+    old,notice=_learner_read(old),_learner_read(notice)
+    actors=_unit_chars(''.join(re.findall(_ACTOR_WORDS,old+'\n'+notice)))
     if not actors:return []
     olds=_polar_clauses(old);units=set(family_agent._SCHOOL_COUNT_UNITS.split('|'));found=[]
     for raw,negated,_ in _polar_clauses(notice):
@@ -1318,8 +1326,9 @@ def _rebound_actors(old,notice):
         for piece in _requirement_pieces(norm,False):
             same=[u for _,n,pieces in olds if n==negated for u in pieces]
             if any(piece<=u for u in same):continue
+            # Only a doer the original piece itself names can change: a piece naming none (今晚听音频跟读…) proves nothing.
             core=piece-actors
-            if core and piece&actors and any(core<=u-actors and not piece&actors<=u for u in same):
+            if core and piece&actors and any(core<=u-actors and u&actors and not piece&actors<=u for u in same):
                 found.append(re.sub(r'^[^：:，,]{0,8}[：:]','',raw).strip());break
     return found
 
@@ -1329,9 +1338,9 @@ def _rebound_unmet(old,notice,shown):
     so: the notice's own clauses and the summary's clauses naming a doer, never the whole message; '' when none."""
     found=_rebound_actors(old,notice)
     if not found:return ''
-    held=[set().union(*pieces) for _,_,pieces in _polar_clauses(shown) if pieces]
+    held=[set().union(*pieces) for _,_,pieces in _polar_clauses(_learner_read(shown)) if pieces]
     def carried(clause):
-        norm=re.sub(_subject_patterns()[2].pattern,' ',_MOVE_NARRATION.sub(' ',clause.lower()))
+        norm=re.sub(_subject_patterns()[2].pattern,' ',_MOVE_NARRATION.sub(' ',_learner_read(clause).lower()))
         return all(any(piece<=h for h in held) for piece in _requirement_pieces(norm,False))
     if all(carried(c) for c in found):return ''
     said=list(dict.fromkeys(re.sub(r'^[^：:，,]{0,8}[：:]','',c).strip()[:24] for c,_,_ in _polar_clauses(shown) if re.search(_ACTOR_WORDS,c)))[:3]
@@ -1436,7 +1445,7 @@ def _notice_count_change(old_lines,notice):
     if len(tokens)!=1 or not written:return None
     rest=re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token({unit}).sub(' ',_MOVE_NARRATION.sub(' ',notice.lower())))
     rest=re.sub(_subject_patterns()[2].pattern,' ',rest)
-    pos,neg=_polar_pieces(old);said_pos,said_neg=_polar_pieces(rest,False);negation=_unit_chars('不用不必无需无须免别勿没未')
+    pos,neg=_polar_pieces(_learner_read(old));said_pos,said_neg=_polar_pieces(_learner_read(rest),False);negation=_unit_chars('不用不必无需无须免别勿没未')
     if not all(any(piece<=unit for unit in pos) for piece in said_pos) or not all(any(piece<=unit|negation for unit in neg) for piece in said_neg):
         return None
     return was[0],new,unit,written,tokens[0]

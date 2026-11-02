@@ -1360,3 +1360,28 @@ class LiftedExemptionTests(ScopeSaveTests):
         self.assertEqual(refused.exception.status, 409)
         self.assertTrue(str(refused.exception).startswith(reason), 'the save refusal gives the page\'s own reason')
         self.assertEqual(self.task(task)['action'], before, 'old actors are never saved as the latest')
+
+    def test_root_learner_alias_positive_generic_learner_words_are_the_same_doer(self):
+        """Root run15 positive: 学生 in the same teacher's correction of this child's own task is the same learner as 孩子."""
+        goal = '孩子今晚听音频跟读《星海短句》第1至3句，每句两遍；家长签字。'
+        task, item = self.notice('更正跟读：学生今晚听音频跟读《星海短句》第1至3句，两遍；家长签字。', goal,
+                                 original='英语：孩子今晚听音频跟读《星海短句》第1至3句，每句三遍；家长签字。')
+        for view in self.views(DAY):
+            version = self.card(view, task).get('version') or {}
+            self.assertEqual(version.get('state'), 'latest', version)
+            words = '\n'.join(version['lines'])
+            self.assertIn('每句两遍', words)
+            self.assertIn('家长签字', words)
+            self.assertNotIn('三遍', words)
+        request = form_request(self, item, task)
+        self.assertTrue(agent.apply_school_change(self.app, self.store, request)['school_changed'])
+        self.assertNotIn('三遍', self.task(task)['action'])
+        self.assertIn('每句两遍', self.task(task)['action'])
+
+    def test_a_doer_named_only_by_the_notice_is_no_proven_doer_change(self):
+        """The original clause names no doer: a notice naming 学生 for it proves no change of who does it."""
+        task, item = self.notice('更正跟读：学生今晚听音频跟读《星海短句》第1至3句，两遍；家长签字。', '学生今晚听音频跟读《星海短句》第1至3句，每句两遍；家长签字。',
+                                 original='英语：今晚听音频跟读《星海短句》第1至3句，每句三遍；家长签字。')
+        for view in self.views(DAY):
+            version = self.card(view, task).get('version') or {}
+            self.assertFalse(any('执行人' in r for r in version.get('reasons', [])), version.get('reasons'))
