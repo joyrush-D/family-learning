@@ -592,21 +592,21 @@ class SchoolSameAffairTests(unittest.TestCase):
             self.assertEqual((self._rows(c, 'manual_tasks'), self._rows(c, 'agent_items')), snapshot)
 
     def test_multi_affair_notice_in_other_words_restates_its_own_affair_only(self):
-        # Another date, affair, count and label wording: the label leading the other item names its action by a shared word.
+        # Another date, affair, count and label: the label leading the other item names its action (跟读) by a shared word.
         wednesday = self._day(2)
         original = '英语：今晚听音频跟读Unit 4第1到8个短语，每个两遍。只做口头跟读，不用抄写；周三课上口语小测，内容由老师之后再说。'
         home_id, quiz_id = self._two_items(41, original, dict(title_quote='今晚听音频跟读Unit 4第1到8个短语，每个两遍', task_title='英语：跟读Unit 4第1—8个短语',
                                                               task_goal='今晚听音频跟读Unit 4第1到8个短语，每个两遍。\n只做口头跟读，不用抄写。'),
                                            dict(title_quote='周三课上口语小测，内容由老师之后再说', task_title='英语：周三课上口语小测',
                                                 task_goal='周三课上口语小测。\n内容由老师之后再说。'), wednesday)
-        text = '跟读要求有调整：Unit 4第1到8个短语今晚只需跟读一遍，仍然不用抄写；周三口语小测的内容还没定，之后另行通知。'
+        text = '更正刚才的跟读：Unit 4第1到8个短语今晚只需跟读一遍，仍然不用抄写；周三口语小测的内容还没定，之后另行通知。'
         _, reminder = self._corrected(47, text, dict(title_quote='Unit 4第1到8个短语今晚只需跟读一遍，仍然不用抄写', task_title='英语：跟读Unit 4第1—8个短语一遍',
                                                     task_goal='今晚听音频跟读Unit 4第1到8个短语，每个一遍。\n不用抄写。'),
                                       dict(title_quote='周三口语小测的内容还没定，之后另行通知', task_title='英语：周三课上口语小测',
                                            task_goal='周三课上口语小测。\n内容还没定。'), home_id, quiz_id, wednesday)
         brief = json.loads(reminder['plan'])['school_task']
         self.assertEqual((brief['state'], brief['change'], brief['target_id']), ('ready', 'same', quiz_id), brief.get('reason'))
-        self.assertEqual(brief['sibling_quotes'], ['跟读要求有调整：Unit 4第1到8个短语今晚只需跟读一遍，仍然不用抄写'])
+        self.assertEqual(brief['sibling_quotes'], ['更正刚才的跟读：Unit 4第1到8个短语今晚只需跟读一遍，仍然不用抄写'])
 
     def test_multi_affair_notice_changing_or_adding_to_the_restated_affair_is_never_silently_same(self):
         friday = self._day(4)
