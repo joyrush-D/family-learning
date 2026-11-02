@@ -1120,7 +1120,7 @@ def school_task_output_budget_contract():
         body,wait=send(image,'family_school_task',responses)
         assert (body['model'],effort(body),body[field],wait)==('fictional-main','low',6000,45)
         body,wait=send(text,'family_school_task',responses,FAMILY_LLM_REASONING_EFFORT='medium',FAMILY_LLM_LIGHT_REASONING_EFFORT='minimal')
-        assert (body['model'],effort(body),body[field],wait)==('fictional-light','medium',6000,45)
+        assert (body['model'],effort(body),body[field],wait)==('fictional-light','minimal',6000,45)  # the explicit light override
         for task,limit in others.items():
             body,wait=send(text,task,responses)
             assert (tokens(body),wait)==(limit,45),task
