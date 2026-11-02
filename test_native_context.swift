@@ -167,6 +167,29 @@ import Foundation
         snapshot("child_one_today")
         expect(store.childName == "示例甲" && ids() == ["FICTION-A1"] && wrongSummary().hasPrefix("错题 1"), "回到原来的甲和原来那一天，内容与首次一致")
 
+        // P4 家庭复习卡片的提交状态（纯状态，不发请求）：提示只按与这次提交一致的服务端回执写；冻结的原请求不随新输入变；草稿按编号保留。
+        let sent: [String: Any] = ["id": String(repeating: "a", count: 32), "version": 1, "day": "2026-11-06", "start_time": "", "end_time": "", "status": "confirmed"]
+        let echo: [String: Any] = ["event": sent.merging(["version": 2, "review": ["record_id": 7]]) { $1 }]
+        expect(WorkspaceStore.reviewSaved(sent, echo) == "家庭复习已改到 2026-11-06。", "回执与这次提交一致：提示写回执里的日期")
+        expect(WorkspaceStore.reviewSaved(sent.merging(["day": "2026-11-09"]) { $1 }, echo) == nil, "回执日期与提交不同：不当保存成功")
+        expect(WorkspaceStore.reviewSaved(sent, ["event": sent.merging(["review": ["record_id": 7]]) { $1 }]) == nil, "版本没有恰好加一：不当保存成功")
+        expect(WorkspaceStore.reviewSaved(sent, ["ok": true]) == nil, "回执缺少安排：按回执不明处理")
+        let plan = PlanItem(id: String(repeating: "a", count: 32), title: "虚构家庭复习", start_time: "", end_time: "", location: "", note: "", status: "confirmed",
+                            source: "", repeat: false, shared: false, task_id: "", unmerged: nil, review: PlanReview(child_id: "child-1", record_id: 7, topic_id: "", task_id: "", basis_state: "current"), version: 2)
+        let shown: [String: Any] = ["version": 2, "day": "2026-11-05", "start_time": "18:00", "end_time": "", "status": "confirmed"]
+        expect(WorkspaceStore.reviewSnapshotMatches(day: "2026-11-05", start: "18:00", end: "", status: "confirmed", version: 2, shown), "读回仍是卡片显示的那一版：按它保存")
+        expect(!WorkspaceStore.reviewSnapshotMatches(day: "2026-11-05", start: "18:00", end: "", status: "confirmed", version: 2, shown.merging(["version": 3, "start_time": "15:00"]) { $1 }),
+               "另一位家长已把18:00改成15:00（新版本）：不借用新版本、不写回旧的18:00，按冲突保留草稿")
+        expect(!WorkspaceStore.reviewSnapshotMatches(day: "2026-11-05", start: "18:00", end: "", status: "confirmed", version: nil, shown.merging(["start_time": "15:00"]) { $1 }),
+               "没有版本的旧回执：内容不同也按冲突")
+        let draft = store.reviewDraft(plan, day: "2026-11-05")
+        draft.editing = true; draft.save.body = sent; draft.save.unknown = true; draft.day = reviewDayFormat.date(from: "2026-11-08")!
+        expect(draft.locked && draft.dirty && (draft.save.body?["day"] as? String) == "2026-11-06", "回执不明：锁住输入，冻结的原请求不随新日期改变")
+        draft.editing = false
+        let again = store.reviewDraft(plan, day: "2026-11-07")
+        expect(again === draft && again.save.unknown && again.save.body != nil && reviewDayFormat.string(from: again.day) == "2026-11-08", "收起或换日后回来：同一份草稿、回执不明的原请求和改动都还在")
+        store.reviewDrafts = [:]
+
         let counts = await backend("")
         expect(counts["posts"] == 0, "整个过程没有任何写入")
         let report: [String: Any] = ["all_fictional": true, "windows_opened": 0, "failures": failures, "observed": seen, "backend": counts]

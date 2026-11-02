@@ -89,6 +89,7 @@ struct PlanItem: Decodable, Hashable, Identifiable {
     let id: String; let title: String; let start_time: String; let end_time: String; let location: String; let note: String
     let status: String; let source: String; let `repeat`: Bool; let shared: Bool; let task_id: String; let unmerged: String?
     let review: PlanReview?  // a family review: its own plan; review.task_id is provenance only, never joined to the teacher task
+    let version: Int?        // a family review's saved version as shown (ordinary plans: absent)
 }
 /// 家庭复习的原错题关联（服务端只读核对 basis_state：current / basis_changed / missing）。
 struct PlanReview: Decodable, Hashable { let child_id: String; let record_id: Int; let topic_id: String; let task_id: String; let basis_state: String? }

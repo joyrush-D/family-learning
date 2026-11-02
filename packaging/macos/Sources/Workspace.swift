@@ -73,6 +73,8 @@ final class WorkspaceStore: ObservableObject {
     /// 知识点与练习：同一道原错题（记录编号、孩子编号）的知识点面板。
     var openTopic: (Int, String) -> Void = { _, _ in }
     var sheetDirty = false
+    /// 家庭复习卡片的改期草稿与这次提交（按安排编号）：收起、换日/换孩子、列表复用都不丢；只是界面状态，不另存安排。
+    var reviewDrafts: [String: ReviewDraft] = [:]
     let client: WorkspaceClient
     var openDocument: (URL, String) -> Void = { _, _ in }
     /// 次级网页：同一份原作业，带明确意图（print-original / print-reference / check / original / history），由网页原流程接着做。
@@ -696,8 +698,10 @@ struct SubjectList: View {
         } else if let s = store.current?.schedule, !(s.lessons.isEmpty && s.plans.isEmpty) {
             Section {
                 ForEach(s.lessons) { t in LessonCard(table: t).listRowSeparator(.hidden) }
-                ForEach(s.plans) { p in PlanRow(plan: p, openReview: { r in store.openTopic(r.record_id, r.child_id) }, day: store.day,
-                                                edit: { day, start, end, status, save in await store.saveReview(p.id, from: store.day, day: day, start: start, end: end, status: status, save) })
+                ForEach(s.plans) { p in PlanRow(plan: p, openReview: { r in store.openTopic(r.record_id, r.child_id) },
+                                                draft: p.review == nil ? nil : store.reviewDraft(p, day: store.day),
+                                                edit: { d, status in await store.saveReview(p.id, from: store.day, draft: d, status: status) },
+                                                restart: { store.reviewDrafts[p.id] = nil; Task { await store.load() } })
                     .listRowSeparator(.hidden) }
                 if s.cancelled > 0 { Text("另有 \(s.cancelled) 项安排已取消，未列出。").font(Palette.small).foregroundStyle(Palette.ink2).listRowSeparator(.hidden) }
             } header: {
@@ -1102,20 +1106,10 @@ struct PlanRow: View {
     let plan: PlanItem
     /// A family review opens the same original wrong record and topic through the existing route (store.openTopic).
     var openReview: (PlanReview) -> Void = { _ in }
-    /// 这张复习卡片所在的日子，以及在卡片里只改这条复习的日期/时间或状态（原保存规则；孩子/原错题/知识点/原作业不变）。
-    var day: String = ""
-    var edit: (String, String, String, String, SaveState) async -> Void = { _, _, _, _, _ in }
-    @State var editing = false
-    @State var newDay = Date()
-    @State var start = ""
-    @State var end = ""
-    @State var lastStatus = "confirmed"
-    @StateObject var save = SaveState()
-    func act(_ status: String) {
-        lastStatus = status
-        let target = reviewDayFormat.string(from: newDay), from = start.trimmingCharacters(in: .whitespaces), to = end.trimmingCharacters(in: .whitespaces)
-        Task { await edit(target, from, to, status, save) }
-    }
+    /// 家庭复习：工作台按编号保存的卡片草稿（收起、换日/换孩子、列表复用都不丢）与改期/取消/完成（原保存规则）。
+    var draft: ReviewDraft? = nil
+    var edit: (ReviewDraft, String) async -> Void = { _, _ in }
+    var restart: () -> Void = {}
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(planClock(plan.start_time, plan.end_time)).font(.system(size: 13, weight: .semibold))
@@ -1127,41 +1121,8 @@ struct PlanRow: View {
                             plan.source.isEmpty ? "" : "学校来源"].filter { !$0.isEmpty }.joined(separator: " · ")
                 if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
                 if let text = plan.unmerged { Text(text).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
-                if let review = plan.review {
-                    HStack(spacing: 14) {
-                        Button { openReview(review) } label: { Label("打开原错题与知识点", systemImage: "leaf") }
-                            .probe("plan-review-open-" + plan.id, text: "打开原错题与知识点")
-                        Button {
-                            editing.toggle()
-                            if editing { newDay = reviewDayFormat.date(from: day) ?? Date(); start = plan.start_time; end = plan.end_time; save.message = "" }
-                        } label: { Label(editing ? "收起" : "改期 / 取消 / 完成", systemImage: "calendar") }
-                            .probe("plan-review-edit-" + plan.id, text: editing ? "收起" : "改期 / 取消 / 完成")
-                    }
-                    .buttonStyle(.borderless).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.leafInk)
-                    if editing {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text("原错题、知识点和原作业固定不变；完成只记这条复习，不改老师作业，也不算掌握。")
-                                .font(.system(size: 12)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
-                            HStack(spacing: 8) {
-                                DatePicker("日期", selection: $newDay, displayedComponents: .date).labelsHidden()
-                                    .probe("plan-review-day-" + plan.id, text: reviewDayFormat.string(from: newDay))
-                                TextField("开始，如 19:00", text: $start).frame(width: 104).probe("plan-review-start-" + plan.id, text: start)
-                                TextField("结束", text: $end).frame(width: 72).probe("plan-review-end-" + plan.id, text: end)
-                            }
-                            HStack(spacing: 10) {
-                                Button("保存改期") { act(plan.status == "tentative" ? "tentative" : "confirmed") }.probe("plan-review-move-" + plan.id, text: "保存改期")
-                                Button("取消这次复习") { act("cancelled") }.probe("plan-review-cancel-" + plan.id, text: "取消这次复习")
-                                Button("完成这次复习") { act("completed") }.probe("plan-review-complete-" + plan.id, text: "完成这次复习")
-                            }
-                            .disabled(save.busy)
-                            if !save.message.isEmpty {
-                                Text(save.message).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
-                                    .probe("plan-review-message-" + plan.id, text: save.message)
-                            }
-                            if save.unknown { Button("用同一次提交重试") { act(lastStatus) }.probe("plan-review-retry-" + plan.id, text: "用同一次提交重试") }
-                        }
-                        .font(.system(size: 12.5))
-                    }
+                if let review = plan.review, let draft {
+                    ReviewEditor(plan: plan, review: review, draft: draft, save: draft.save, openReview: openReview, edit: edit, restart: restart)
                 }
             }
             Spacer(minLength: 0)
@@ -1172,6 +1133,73 @@ struct PlanRow: View {
         .padding(.vertical, 3)
         .accessibilityElement(children: .combine)
         .probe("plan-" + plan.id, text: planClock(plan.start_time, plan.end_time) + " " + plan.title)
+    }
+}
+
+/// 家庭复习卡片里的改期/取消/完成：只改这条复习的日期/时间或状态；孩子、原错题、知识点与原作业固定。保存中或回执不明时，
+/// 输入、收起和打开原错题都锁住，只能“用同一次提交重试”原样核对；完成提示只按服务端回执写。
+struct ReviewEditor: View {
+    let plan: PlanItem
+    let review: PlanReview
+    @ObservedObject var draft: ReviewDraft
+    @ObservedObject var save: SaveState
+    var openReview: (PlanReview) -> Void
+    var edit: (ReviewDraft, String) async -> Void
+    var restart: () -> Void
+    var state: String { save.busy ? "busy" : save.unknown ? "unknown" : save.conflict ? "conflict" : draft.dirty ? "dirty" : "idle" }
+    /// 回执不明时冻结的那次提交：它的日期与操作（不是卡片里后来改的值）。
+    var frozen: String {
+        guard let b = save.body else { return "" }
+        let action = ["completed": "完成", "cancelled": "取消"][b["status"] as? String ?? ""] ?? "改期"
+        return (b["day"] as? String ?? "") + " · " + action
+    }
+    func act(_ status: String) { Task { await edit(draft, status) } }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 14) {
+                Button { openReview(review) } label: { Label("打开原错题与知识点", systemImage: "leaf") }
+                    .probe("plan-review-open-" + plan.id, text: "打开原错题与知识点")
+                Button { draft.editing.toggle() } label: { Label(draft.editing ? "收起" : "改期 / 取消 / 完成", systemImage: "calendar") }
+                    .probe("plan-review-edit-" + plan.id, text: draft.editing ? "收起" : "改期 / 取消 / 完成")
+            }
+            .disabled(draft.locked)
+            .buttonStyle(.borderless).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.leafInk)
+            if draft.editing {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("原错题、知识点和原作业固定不变；完成只记这条复习，不改老师作业，也不算掌握。")
+                        .font(.system(size: 12)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        DatePicker("日期", selection: $draft.day, displayedComponents: .date).labelsHidden()
+                            .probe("plan-review-day-" + plan.id, text: reviewDayFormat.string(from: draft.day))
+                        TextField("开始，如 19:00", text: $draft.start).frame(width: 104).probe("plan-review-start-" + plan.id, text: draft.start)
+                        TextField("结束", text: $draft.end).frame(width: 72).probe("plan-review-end-" + plan.id, text: draft.end)
+                    }
+                    .disabled(draft.locked)
+                    if save.unknown {
+                        Text("上次提交（\(frozen)）还不确定是否已保存；这次提交原样保留，不能改日期或换操作，请先用同一次提交核对。")
+                            .font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                            .probe("plan-review-frozen-" + plan.id, text: frozen)
+                        Button("用同一次提交重试") { act("") }.disabled(save.busy).probe("plan-review-retry-" + plan.id, text: "用同一次提交重试")
+                    } else {
+                        HStack(spacing: 10) {
+                            Button("保存改期") { act(plan.status == "tentative" ? "tentative" : "confirmed") }.probe("plan-review-move-" + plan.id, text: "保存改期")
+                            Button("取消这次复习") { act("cancelled") }.probe("plan-review-cancel-" + plan.id, text: "取消这次复习")
+                            Button("完成这次复习") { act("completed") }.probe("plan-review-complete-" + plan.id, text: "完成这次复习")
+                        }
+                        .disabled(save.busy)
+                    }
+                    if !save.message.isEmpty {
+                        Text(save.message).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                            .probe("plan-review-message-" + plan.id, text: save.message)
+                    }
+                    if save.conflict && !draft.locked {
+                        Button("按最新的安排重新开始（放弃这里的改动）") { restart() }.probe("plan-review-restart-" + plan.id, text: "按最新的安排重新开始")
+                    }
+                }
+                .font(.system(size: 12.5))
+            }
+        }
+        .probe("plan-review-state-" + plan.id, text: state)
     }
 }
 
@@ -1556,6 +1584,26 @@ final class SaveState: ObservableObject {
     var body: [String: Any]?
 }
 
+/// 一条家庭复习在卡片里的改期草稿（工作台按安排编号保存）：日期/时间与这次提交状态；save.body 是回执不明时冻结的原请求。
+@MainActor
+final class ReviewDraft: ObservableObject {
+    @Published var editing = false
+    @Published var day: Date
+    @Published var start: String
+    @Published var end: String
+    let save = SaveState()
+    /// 打开卡片时显示的那一版（日期/时间/状态与版本）：保存只按它写，读回已是别人改过的新版就算冲突，不借用新版本。
+    let origin: (day: String, start: String, end: String, status: String)
+    let version: Int?
+    init(day: String, start: String, end: String, status: String = "confirmed", version: Int? = nil) {
+        self.day = reviewDayFormat.date(from: day) ?? Date(); self.start = start; self.end = end; origin = (day, start, end, status); self.version = version
+    }
+    /// 和已存的这条复习不同（还没保存的改动）。
+    var dirty: Bool { reviewDayFormat.string(from: day) != origin.day || start != origin.start || end != origin.end }
+    /// 保存中或回执不明：输入、收起和离开都锁住，只能用同一次提交核对。
+    var locked: Bool { save.busy || save.unknown }
+}
+
 struct SheetFrame<Fields: View>: View {
     @ObservedObject var store: WorkspaceStore
     @ObservedObject var save: SaveState
@@ -1608,8 +1656,11 @@ extension WorkspaceStore {
     /// 一次写入的统一结果处理：成功后重读同一天并保持同一项选中（保存后重开）。
     /// 家庭复习改期/取消/完成：按原读取口径读回这天同一编号的已存安排（全部原字段与版本），只换日期/时间/状态，走原
     /// /api/calendar/save（同编号同版本核对；不带 review，服务端保持原错题/知识点/原作业关联不变）。回执不明时原样重发同一请求。
-    func saveReview(_ id: String, from: String, day: String, start: String, end: String, status: String, _ save: SaveState) async {
-        save.busy = true; save.message = ""; save.unknown = false
+    /// 一个新请求才用卡片里的日期/时间与所选状态；回执不明时 save.body 冻结，只原样重发它（卡片此时不给别的操作）。
+    func saveReview(_ id: String, from: String, draft: ReviewDraft, status: String) async {
+        let save = draft.save
+        guard !save.busy else { return }
+        save.busy = true; save.message = ""; save.conflict = false
         if save.body == nil {
             do {
                 let data = try await client.get("/api/calendar", ["start": from, "end": from])
@@ -1617,18 +1668,56 @@ extension WorkspaceStore {
                 guard let e = events.first(where: { $0["id"] as? String == id && $0["editable"] as? Bool == true && $0["review"] != nil }) else {
                     save.busy = false; save.message = "这条家庭复习在 \(from) 读不到（可能已改期或删除）；没有改动任何记录，请刷新后核对。"; return
                 }
+                let o = draft.origin
+                guard WorkspaceStore.reviewSnapshotMatches(day: o.day, start: o.start, end: o.end, status: o.status, version: draft.version, e) else {
+                    save.busy = false; save.conflict = true
+                    save.message = "这条复习已在别处改过（现在是 \(e["day"] as? String ?? "") \(e["start_time"] as? String ?? "")），这里的改动没有保存、仍保留；请核对后按最新的重新开始。"
+                    return
+                }
                 var body: [String: Any] = [:]
                 for k in ["id", "version", "child_ids", "title", "category", "location", "note", "repeat", "until", "repeat_days", "extra_times"] { body[k] = e[k] }
-                body["day"] = day; body["start_time"] = start; body["end_time"] = end; body["status"] = status
+                if let shown = draft.version { body["version"] = shown }  // the version the card showed, never a newer one read just now
+                body["day"] = reviewDayFormat.string(from: draft.day); body["status"] = status
+                body["start_time"] = draft.start.trimmingCharacters(in: .whitespaces); body["end_time"] = draft.end.trimmingCharacters(in: .whitespaces)
                 save.body = body
             } catch {
                 save.busy = false; save.message = (error as? WorkspaceError)?.text ?? "日历暂时读不到；没有改动任何记录，请重试。"; return
             }
         }
-        let outcome = await client.post("/api/calendar/save", save.body ?? [:])
+        let body = save.body ?? [:]
+        var outcome = await client.post("/api/calendar/save", body)
+        var done = ""
+        if case .saved(let object) = outcome {
+            if let text = WorkspaceStore.reviewSaved(body, object) { done = text }
+            else { outcome = .unknown("服务端的保存回执对不上这次提交（编号、版本、日期、时间或状态），不确定是否已按它保存；这次提交原样保留，请用同一次提交核对。") }
+        }
         if case .unknown = outcome {} else { save.body = nil }
-        await finish(outcome, save, done: status == "completed" ? "这次家庭复习已记为完成；只记这条复习，不改老师作业，也不算掌握。"
-                     : status == "cancelled" ? "这次家庭复习已取消；原错题和老师作业不变。" : "家庭复习已改到 \(day)。")
+        if case .saved = outcome { reviewDrafts[id] = nil }
+        await finish(outcome, save, done: done)
+        if case .refused(let status, _, _) = outcome, status == 409 { save.conflict = true }  // newer saved version: draft kept, explicit restart
+    }
+
+    /// 读回的这条复习是否还是卡片显示的那一版：有版本就比版本，并且日期/时间/状态都一致；不一致就是别处改过（冲突，不借用新版本）。
+    nonisolated static func reviewSnapshotMatches(day: String, start: String, end: String, status: String, version: Int?, _ e: [String: Any]) -> Bool {
+        if let version, (e["version"] as? NSNumber)?.intValue != version { return false }
+        return e["day"] as? String == day && e["start_time"] as? String == start && e["end_time"] as? String == end && e["status"] as? String == status
+    }
+
+    /// 这条复习的卡片草稿：第一次取已存的日期/时间；之后收起、换日或换孩子再回来仍是同一份（含回执不明的原请求与提示）。
+    func reviewDraft(_ plan: PlanItem, day: String) -> ReviewDraft {
+        if let d = reviewDrafts[plan.id] { return d }
+        let d = ReviewDraft(day: day, start: plan.start_time, end: plan.end_time, status: plan.status, version: plan.version); reviewDrafts[plan.id] = d; return d
+    }
+
+    /// 家庭复习保存回执：只认同一编号、版本恰好+1、日期/时间/状态与这次提交一致且仍带原关联的回执，并按回执写提示；否则 nil（按回执不明处理）。
+    nonisolated static func reviewSaved(_ body: [String: Any], _ object: [String: Any]) -> String? {
+        guard let e = object["event"] as? [String: Any], let id = e["id"] as? String, id == body["id"] as? String,
+              let version = (e["version"] as? NSNumber)?.intValue, let sent = (body["version"] as? NSNumber)?.intValue, version == sent + 1,
+              let day = e["day"] as? String, day == body["day"] as? String, let status = e["status"] as? String, status == body["status"] as? String,
+              e["start_time"] as? String == body["start_time"] as? String, e["end_time"] as? String == body["end_time"] as? String,
+              e["review"] is [String: Any] else { return nil }
+        return status == "completed" ? "\(day) 的这次家庭复习已记为完成；只记这条复习，不改老师作业，也不算掌握。"
+            : status == "cancelled" ? "\(day) 的这次家庭复习已取消；原错题和老师作业不变。" : "家庭复习已改到 \(day)。"
     }
 
     func finish(_ outcome: PostOutcome, _ save: SaveState, done: String) async {
