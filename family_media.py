@@ -758,7 +758,9 @@ def _scope_supplement(c, source, message, value, old):
     ref='message:'+source['id']+':'+message['id']
     rows=[r for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'",(source['child_id'],))
           if any(q.get('ref')==ref for q in json.loads(r['evidence']))]
-    if not rows or any(r['state']!='pending' or r['task_id'] or any(json.loads(r['plan']).get(k) for k in _DECIDED_PLAN) for r in rows):return None
+    # A record or care link is a dependency like a task (the same refusal as the original-day review's own check).
+    if not rows or any(r['state']!='pending' or r['task_id'] or r['record_id'] is not None or r['care_id']
+                       or any(json.loads(r['plan']).get(k) for k in _DECIDED_PLAN) for r in rows):return None
     return _hash(old['payload'])
 
 

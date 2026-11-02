@@ -364,8 +364,8 @@ def _scope_undecided(c, source, message):
     ref='message:'+source['id']+':'+message['id']
     rows=[r for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'",(source['child_id'],))
           if any(q.get('ref')==ref for q in json.loads(r['evidence']))]
-    return bool(rows) and not any(r['state']!='pending' or r['task_id'] or any(json.loads(r['plan']).get(k) for k in family_media._DECIDED_PLAN)
-                                  for r in rows)
+    return bool(rows) and not any(r['state']!='pending' or r['task_id'] or r['record_id'] is not None or r['care_id']
+                                  or any(json.loads(r['plan']).get(k) for k in family_media._DECIDED_PLAN) for r in rows)
 
 
 def _scope_gap(batches, rows):
