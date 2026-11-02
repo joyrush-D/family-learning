@@ -302,6 +302,15 @@ class UncertaintyScopeValidatorTests(unittest.TestCase):
             with self.subTest(doubt=doubt):self.assertEqual(agent._school_doubt_kind(doubt,'resource'),'reading')
         self.assertEqual(agent._school_doubt_kind(U_RES,'reading'),'reading')
 
+    def test_an_unattached_forms_own_extra_fields_are_a_resource_but_the_teachers_unknowns_stay_reading(self):
+        kind=agent._school_doubt_kind;line='家长事务：请家长在表单上签字并勾选同意，周五交回班主任。'
+        self.assertEqual(kind('表单没有附，无法核验表单本身是否另有填写项目。','resource',[line]),'resource')
+        for doubt,lines in (('表单要填哪几项不清楚。',[line]),('表单未附，交回日期未注明。',[line]),
+                            ('表单没有附，无法核验表单本身是否另有填写项目。',['完成附件所列练习题。']),
+                            ('表单没有附，无法核验表单本身是否另有填写项目。',['请阅读安全须知。']),
+                            ('表单本身是否另有填写项目无法核验，几份不确定。',[line])):
+            with self.subTest(doubt=doubt,line=lines[0]):self.assertEqual(kind(doubt,'resource',lines),'reading')
+
     def test_a_line_stating_its_work_is_not_held_by_a_missing_question_text_but_an_unknown_range_is(self):
         kind=agent._school_doubt_kind;line='数学：完成练习册第7页第2至4题，每题写步骤，11月5日交。'
         for doubt in ('练习册第7页电子题面未上传，无法核对题目内容。','参考答案未上传，之后无法核对。'):
@@ -707,6 +716,46 @@ class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
                 result,read=self._read(5,[self.receipt()])
                 self.assertEqual((result['used'],read.call_count,self.group_payload()),(0,0,old))
 
+
+class PointerRecoveryPdfTests(ScopedDoubtPdfTests):
+    """The mapper names no existing id: an untouched default candidate keeps its id on the original's first requirement's
+    action (the original's order, not the reply's); an edited candidate keeps the old refusal (fictional, 0 API)."""
+
+    def _blank(self,edit=False):
+        keys=self.native_notice('p1b-pdf-pointer');day=self.now.date()
+        lines=dict(数学='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤。'%(day.month,day.day),
+                   语文='语文：%d月%d日晚朗读第3课课文三遍。'%(day.month,day.day),英语='英语：%d月%d日晚完成练习纸第二部分。'%(day.month,day.day))
+        self.seed_groups(keys=keys,note='题面背景',uncertainties=[],requirements=list(lines.values()))
+        ident=self.candidate(keys=keys,ident='p1b-pdf-pointer')
+        if edit:
+            with self.store._db() as c:c.execute("UPDATE agent_items SET title='家长改过的标题' WHERE id=?",(ident,))
+        def mapping(messages):
+            context=json.loads(messages[-1]['content']);self.prompt=''.join(m['content'] for m in messages[:-1] if isinstance(m.get('content'),str))
+            parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
+            return {'actions':[dict(pdf_evidence.draft(goal=t),title=s+'：'+t[t.index('晚')+1:][:14],learning_subject=s,due=day.isoformat(),
+                                    existing_item_id='',basis=[dict(part=parts[t],text=t)]) for s,t in reversed(list(lines.items()))]}
+        self.refresh(mapping)
+        with self.store._db() as c:
+            rows={(json.loads(r['plan']).get('school_original_action') or {}).get('requirements',[{}])[0].get('text',''):dict(r)
+                  for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")}
+        return ident,lines,rows
+
+    def test_an_untouched_default_candidate_keeps_its_id_on_the_first_requirement(self):
+        ident,lines,rows=self._blank()
+        self.assertIn(agent._SCHOOL_POINTER_PROMPT.strip(),self.prompt)
+        self.assertEqual(rows[lines['数学']]['id'],ident)  # the original's first line, though the reply listed it last
+        self.assertEqual({rows[t]['state'] for t in lines.values()},{'accepted'})
+        self.assertEqual(len({rows[t]['id'] for t in lines.values()}),3)
+
+    def test_an_edited_candidate_is_never_taken_by_a_reply_naming_no_id(self):
+        ident,lines,rows=self._blank(edit=True)
+        self.assertFalse([t for t in lines.values() if t in rows])  # no action saved; the whole group waits as before
+        with self.store._db() as c:
+            row=c.execute('SELECT title,state FROM agent_items WHERE id=?',(ident,)).fetchone()
+            error=c.execute("SELECT error FROM agent_jobs WHERE id=?",('school-task:'+ident,)).fetchone()
+        self.assertEqual(tuple(row),('家长改过的标题','pending'));self.assertIn('原候选',error['error'])
+
+
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
@@ -729,6 +778,8 @@ def load_tests(loader,tests,pattern):
         suite.addTest(ScopedDoubtImageChainTests(name))
     for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
         suite.addTest(ScopedDoubtPdfTests(name))
+    for name in ('test_an_untouched_default_candidate_keeps_its_id_on_the_first_requirement','test_an_edited_candidate_is_never_taken_by_a_reply_naming_no_id'):
+        suite.addTest(PointerRecoveryPdfTests(name))
     for name in ('test_an_old_undecided_pdf_group_is_read_once_more_and_remapped_on_its_own_budgets','test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group'):
         suite.addTest(PdfScopeSupplementTests(name))
     return suite
