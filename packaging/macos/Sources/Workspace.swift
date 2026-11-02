@@ -175,23 +175,26 @@ final class WorkspaceStore: ObservableObject {
 
     enum PhotoStop { case unreadable, noID, outcome(PostOutcome) }
 
-    /// 选好的照片按顺序逐张上传，上传过的（同一文件路径）沿用原编号：同一次填写里再按保存不重传。读不到文件或某张没保存成功就停下，
-    /// 已得到的编号留在 cached 里、填写原样保留，下次只补那一张。某张上传的回执丢了就没有编号，重试只重传那一张，
-    /// 先前可能已落库的那份不挂到任何记录上。反馈与口头补录共用；归属由保存接口按孩子核对，这里不挂别的孩子的原件。
-    static func uploadPhotos(_ photos: [URL], cached: [String: String], read: (URL) -> Data?,
-                             send: (Data, String) async -> PostOutcome) async -> (ids: [String], cached: [String: String], stop: PhotoStop?) {
-        var cached = cached, ids: [String] = []
+    /// 选好的照片按顺序逐张上传，上传过的（同一文件路径）沿用原编号：同一次填写里再按保存不重传。每张照片在第一次发送前定下
+    /// 自己的上传标识并一直沿用：回执丢失后再按保存，用同一标识重传，服务端读回已存的那份原件、不另存；换了文件内容或名字会被拒绝。
+    /// 读不到文件或某张没保存成功就停下，已得到的编号和标识留着、填写原样保留，不自动重传。反馈、补录与记错题共用；照片上传和
+    /// 保存事项是两步，未挂上的原件不算事项；归属由保存接口按孩子核对，这里不挂别的孩子的原件。
+    static func uploadPhotos(_ photos: [URL], cached: [String: String], keys: [String: String], read: (URL) -> Data?,
+                             send: (Data, String, String) async -> PostOutcome) async
+        -> (ids: [String], cached: [String: String], keys: [String: String], stop: PhotoStop?) {
+        var cached = cached, keys = keys, ids: [String] = []
         for url in photos {
             if let id = cached[url.path] { ids.append(id); continue }
-            guard let data = read(url) else { return (ids, cached, .unreadable) }
-            switch await send(data, url.lastPathComponent) {
+            guard let data = read(url) else { return (ids, cached, keys, .unreadable) }
+            let key = keys[url.path] ?? requestKey(); keys[url.path] = key
+            switch await send(data, url.lastPathComponent, key) {
             case .saved(let reply):
-                guard let id = (reply["attachment"] as? [String: Any])?["id"] as? String else { return (ids, cached, .noID) }
+                guard let id = (reply["attachment"] as? [String: Any])?["id"] as? String else { return (ids, cached, keys, .noID) }
                 cached[url.path] = id; ids.append(id)
-            case let other: return (ids, cached, .outcome(other))
+            case let other: return (ids, cached, keys, .outcome(other))
             }
         }
-        return (ids, cached, nil)
+        return (ids, cached, keys, nil)
     }
 
     nonisolated static func readPicked(_ url: URL) -> Data? {
@@ -1537,6 +1540,7 @@ struct FeedbackSheet: View {
     @State var note = ""
     @State var photos: [URL] = []
     @State var uploaded: [String: String] = [:]
+    @State var uploadKeys: [String: String] = [:]
     @State var picking = false
 
     var body: some View {
@@ -1581,8 +1585,10 @@ struct FeedbackSheet: View {
     func submit() {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         Task {
-            let sent = await WorkspaceStore.uploadPhotos(photos, cached: uploaded, read: WorkspaceStore.readPicked) { await store.client.upload($0, name: $1) }
-            uploaded = sent.cached
+            let sent = await WorkspaceStore.uploadPhotos(photos, cached: uploaded, keys: uploadKeys, read: WorkspaceStore.readPicked) {
+                await store.client.upload($0, name: $1, key: $2)
+            }
+            uploaded = sent.cached; uploadKeys = sent.keys
             switch sent.stop {
             case .unreadable?: save.busy = false; save.message = "读不到所选文件，未保存；输入已保留。"; return
             case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存反馈；可以重试。"; return
@@ -1667,6 +1673,7 @@ struct WrongAddSheet: View {
     @State var correction = ""
     @State var photos: [URL] = []
     @State var uploaded: [String: String] = [:]
+    @State var uploadKeys: [String: String] = [:]
     @State var picking = false
 
     var body: some View {
@@ -1703,17 +1710,17 @@ struct WrongAddSheet: View {
         save.busy = true; save.message = ""; save.conflict = false; save.login = false
         Task {
             guard let url = photos.first else { save.busy = false; return }
-            var id = uploaded[url.path] ?? ""
-            if id.isEmpty {
-                let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }
-                guard let data = try? Data(contentsOf: url) else { save.busy = false; save.message = "读不到所选照片，未保存；输入已保留。"; return }
-                switch await store.client.upload(data, name: url.lastPathComponent) {
-                case .saved(let reply):
-                    guard let got = (reply["attachment"] as? [String: Any])?["id"] as? String else { save.busy = false; save.message = "照片没有保存成功，未保存错题；可以重试。"; return }
-                    uploaded[url.path] = got; id = got
-                case let other: await store.finish(other, save, done: ""); return
-                }
+            let sent = await WorkspaceStore.uploadPhotos([url], cached: uploaded, keys: uploadKeys, read: WorkspaceStore.readPicked) {
+                await store.client.upload($0, name: $1, key: $2)
             }
+            uploaded = sent.cached; uploadKeys = sent.keys
+            switch sent.stop {
+            case .unreadable?: save.busy = false; save.message = "读不到所选照片，未保存；输入已保留。"; return
+            case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存错题；可以重试。"; return
+            case .outcome(let other)?: await store.finish(other, save, done: ""); return
+            case nil: break
+            }
+            let id = sent.ids.first ?? ""
             let today = store.view?.today ?? store.day
             let day = store.day.isEmpty || store.day > today ? today : store.day
             let body: [String: Any] = ["child": store.childName, "day": day, "subject": subject.trimmingCharacters(in: .whitespaces), "request_key": save.key,
@@ -1731,6 +1738,7 @@ struct OralSheet: View {
     @State var tomorrow = false
     @State var photos: [URL] = []
     @State var uploaded: [String: String] = [:]
+    @State var uploadKeys: [String: String] = [:]
     @State var picking = false
     @State var complete = "unknown"
     @State var completeDay = Date()
@@ -1792,8 +1800,10 @@ struct OralSheet: View {
         let completeOn = complete == "day" ? WorkspaceStore.text(completeDay) : "", handbackOn = handback == "day" ? WorkspaceStore.text(handbackDay) : ""
         Task {
             // 先传照片：失败就不保存补录，填写和已传的编号都留着；重试只补没传成功的那张，同一提交标识与内容不变。
-            let sent = await WorkspaceStore.uploadPhotos(photos, cached: uploaded, read: WorkspaceStore.readPicked) { await store.client.upload($0, name: $1) }
-            uploaded = sent.cached
+            let sent = await WorkspaceStore.uploadPhotos(photos, cached: uploaded, keys: uploadKeys, read: WorkspaceStore.readPicked) {
+                await store.client.upload($0, name: $1, key: $2)
+            }
+            uploaded = sent.cached; uploadKeys = sent.keys
             switch sent.stop {
             case .unreadable?: save.busy = false; save.message = "读不到所选文件，未保存；输入已保留。"; return
             case .noID?: save.busy = false; save.message = "照片没有保存成功，未保存补录；可以重试。"; return

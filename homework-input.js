@@ -42,7 +42,7 @@
  }
  function status(message){current.message=message;paint()}
  async function upload(entry){
-  try{if(!entry.file?.size||entry.file.size>20*1024*1024)throw Error('文件为空或超过20MB');const r=await ctx.upload(entry.file);if(!/^[a-f0-9]{32}$/.test(r?.attachment?.id))throw Error('上传回执无法核对');Object.assign(entry,r.attachment,{error:''});entry.file=null}
+  try{if(!entry.file?.size||entry.file.size>20*1024*1024)throw Error('文件为空或超过20MB');entry.key||=uuid();const r=await ctx.upload(entry.file,entry.key);if(!/^[a-f0-9]{32}$/.test(r?.attachment?.id))throw Error('上传回执无法核对');Object.assign(entry,r.attachment,{error:''});entry.file=null}
   catch(e){entry.error=e.message||'上传未完成'}
  }
  async function addFiles(files){

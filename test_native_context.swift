@@ -128,19 +128,28 @@ import Foundation
                && oral["request_key"] as? String == "synthetic-oral-key-0001" && oral["version"] as? Int == 3, "完成日与交回日分开，未知留空，做的日子不当老师日期")
         // 9 补录/反馈共用的照片上传：已传的沿用原编号不重传；回执丢失或失败只停在那一张、已传编号留着；读不到文件不发送。全在内存里，不连后台。
         let a = URL(fileURLWithPath: "/synthetic/oral-a.png"), b = URL(fileURLWithPath: "/synthetic/oral-b.png"), gone = URL(fileURLWithPath: "/synthetic/gone.png")
-        var sends: [String] = [], replies: [PostOutcome] = [.saved(["attachment": ["id": String(repeating: "a", count: 32)]]), .unknown("虚构回执丢失")]
-        let fake: (Data, String) async -> PostOutcome = { _, name in sends.append(name); return replies.isEmpty ? .saved(["attachment": ["id": String(repeating: "b", count: 32)]]) : replies.removeFirst() }
-        let first = await WorkspaceStore.uploadPhotos([a, b], cached: [:], read: { _ in Data([1]) }, send: fake)
+        var sends: [String] = [], sentKeys: [String] = [], replies: [PostOutcome] = [.saved(["attachment": ["id": String(repeating: "a", count: 32)]]), .unknown("虚构回执丢失")]
+        let fake: (Data, String, String) async -> PostOutcome = { _, name, key in
+            sends.append(name); sentKeys.append(key)
+            return replies.isEmpty ? .saved(["attachment": ["id": String(repeating: "b", count: 32)]]) : replies.removeFirst()
+        }
+        let first = await WorkspaceStore.uploadPhotos([a, b], cached: [:], keys: [:], read: { _ in Data([1]) }, send: fake)
         let stoppedOnLostReceipt: Bool = { if case .outcome(.unknown)? = first.stop { return true }; return false }()
         expect(stoppedOnLostReceipt && first.cached == [a.path: String(repeating: "a", count: 32)] && sends == ["oral-a.png", "oral-b.png"], "回执丢失停在那一张，已传的编号留着")
-        let second = await WorkspaceStore.uploadPhotos([a, b], cached: first.cached, read: { _ in Data([1]) }, send: fake)
+        expect(first.keys.count == 2 && first.keys[a.path] != first.keys[b.path] && sentKeys == [first.keys[a.path] ?? "", first.keys[b.path] ?? ""],
+               "每张照片各有自己的上传标识，回执丢失的那张标识也留着")
+        let second = await WorkspaceStore.uploadPhotos([a, b], cached: first.cached, keys: first.keys, read: { _ in Data([1]) }, send: fake)
+        expect(sentKeys.count == 3 && sentKeys[2] == sentKeys[1], "回执丢失后重传沿用同一上传标识：服务端按标识读回原件，不另存一份")
         expect(second.stop == nil && second.ids == [String(repeating: "a", count: 32), String(repeating: "b", count: 32)] && sends == ["oral-a.png", "oral-b.png", "oral-b.png"],
                "重试只补没传成功的那张，已传的不重传")
-        let third = await WorkspaceStore.uploadPhotos([a, b], cached: second.cached, read: { _ in Data([1]) }, send: fake)
+        let third = await WorkspaceStore.uploadPhotos([a, b], cached: second.cached, keys: second.keys, read: { _ in Data([1]) }, send: fake)
         expect(third.stop == nil && third.ids == second.ids && sends.count == 3, "保存回执丢失后再按保存：照片一张都不重传，编号与内容不变")
-        let unreadable = await WorkspaceStore.uploadPhotos([gone], cached: [:], read: { _ in nil }, send: fake)
+        let unreadable = await WorkspaceStore.uploadPhotos([gone], cached: [:], keys: [:], read: { _ in nil }, send: fake)
         let stoppedUnreadable: Bool = { if case .unreadable? = unreadable.stop { return true }; return false }()
-        expect(stoppedUnreadable && unreadable.ids.isEmpty && sends.count == 3, "读不到所选文件不发送、不保存")
+        expect(stoppedUnreadable && unreadable.ids.isEmpty && unreadable.keys.isEmpty && sends.count == 3, "读不到所选文件不发送、不保存")
+        let other = await WorkspaceStore.uploadPhotos([gone], cached: [:], keys: [:], read: { _ in Data([1]) }, send: fake)
+        expect(other.keys[gone.path] != nil && other.keys[gone.path] != first.keys[a.path] && other.keys[gone.path] != first.keys[b.path] && sentKeys.last == other.keys[gone.path],
+               "另一次选取用新的上传标识：同名同内容也是另一份原件")
         let withPhotos = WorkspaceStore.oralBody(child: "child-2", day: today, key: "synthetic-oral-key-0002", version: 3, subject: "", what: "读课文",
                                                  completeOn: "", handbackOn: "", attachments: second.ids)
         expect((withPhotos["report"] as? [String: Any])?["attachments"] as? [String] == second.ids, "照片编号进同一份补录的原件列表")

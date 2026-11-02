@@ -163,6 +163,13 @@ def connect():
                 c.close(); raise
     c.execute("CREATE UNIQUE INDEX IF NOT EXISTS record_request_key ON records(request_key) WHERE request_key<>''")
     c.execute('CREATE TABLE IF NOT EXISTS uploads (id TEXT PRIMARY KEY, name TEXT NOT NULL, size INTEGER NOT NULL, mime TEXT NOT NULL, created TEXT NOT NULL)')
+    # The client's own upload request key (optional; old uploads have none): a retry after a lost receipt reads the same original back.
+    if 'request_key' not in [r['name'] for r in c.execute('PRAGMA table_info(uploads)')]:
+        try: c.execute('ALTER TABLE uploads ADD COLUMN request_key TEXT')
+        except sqlite3.OperationalError:
+            if 'request_key' not in [r['name'] for r in c.execute('PRAGMA table_info(uploads)')]:
+                c.close(); raise
+    c.execute('CREATE UNIQUE INDEX IF NOT EXISTS upload_request_key ON uploads(request_key) WHERE request_key IS NOT NULL')
     c.execute('CREATE TABLE IF NOT EXISTS revisions (id INTEGER PRIMARY KEY, record_id INTEGER, previous TEXT, changed TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS task_updates (id TEXT PRIMARY KEY, status TEXT, note TEXT, updated TEXT)')
     c.execute('CREATE TABLE IF NOT EXISTS task_history (id INTEGER PRIMARY KEY, task_id TEXT, status TEXT, note TEXT, updated TEXT)')
@@ -1149,7 +1156,28 @@ def upload_mime(path, name):
     if not mime: raise ValueError('文件类型不支持或内容与扩展名不符')
     return mime
 
-def save_upload(stream, size, encoded_name):
+UPLOAD_KEY=re.compile(r'[A-Za-z0-9_-]{16,64}')
+
+class UploadKeyConflict(Exception):
+    """The upload request key already names another file (other name, size or bytes); nothing of this request is stored."""
+
+def keyed_upload(c,key,name,size,digest):
+    """The original an earlier request with this same key stored, when it is the same file; another file under the key is a
+    conflict. Only the client's own key identifies a retry: a name or hash alone never makes two selections one original."""
+    row=c.execute('SELECT * FROM uploads WHERE request_key=?',(key,)).fetchone()
+    if row is None: return None
+    try:
+        stored=hashlib.sha256()
+        with open(DATA/'uploads'/row['id'],'rb') as f:
+            for block in iter(lambda:f.read(65536),b''): stored.update(block)
+        same=row['name']==name and row['size']==size and stored.hexdigest()==digest
+    except OSError: same=False
+    if not same: raise UploadKeyConflict()
+    return upload_info(row)|dict(sha256=digest,replayed=True)
+
+def save_upload(stream, size, encoded_name, request_key=None):
+    """A new original, or with a request key the original that key already stored (same name and bytes) without a second copy."""
+    if request_key is not None and not UPLOAD_KEY.fullmatch(request_key): raise ValueError('上传标识不正确')
     if not 0<size<=MAX_UPLOAD: raise ValueError('每个文件须在20MB以内且不能为空')
     name=unquote(encoded_name,encoding='utf-8',errors='strict').strip()
     if not name or len(name)>200 or '/' in name or '\\' in name or any(ord(c)<32 or ord(c)==127 for c in name):
@@ -1166,10 +1194,19 @@ def save_upload(stream, size, encoded_name):
                 f.write(block);digest.update(block);left-=len(block)
         mime=upload_mime(temporary,name)
         with connect() as c:
-            c.execute('INSERT INTO uploads (id,name,size,mime,created) VALUES (?,?,?,?,?)',(ident,name,size,mime,dt.datetime.now().isoformat()))
+            if request_key is not None:
+                same=keyed_upload(c,request_key,name,size,digest.hexdigest())
+                if same is not None: return same
+            try: c.execute('INSERT INTO uploads (id,name,size,mime,created,request_key) VALUES (?,?,?,?,?,?)',(ident,name,size,mime,dt.datetime.now().isoformat(),request_key))
+            except sqlite3.IntegrityError:
+                # A concurrent request with the same key stored first: its original, or a refusal for another file.
+                if request_key is None: raise
+                c.rollback();same=keyed_upload(c,request_key,name,size,digest.hexdigest())
+                if same is None: raise
+                return same
             os.replace(temporary,target)
             stored=True
-        return upload_info(dict(id=ident,name=name,size=size,mime=mime))|dict(sha256=digest.hexdigest())
+        return upload_info(dict(id=ident,name=name,size=size,mime=mime))|dict(sha256=digest.hexdigest(),replayed=False)
     except Exception:
         if stored: target.unlink(missing_ok=True)
         raise
@@ -2776,7 +2813,8 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get('Transfer-Encoding'): return self.reply(400,{'error':'上传请求格式不正确'})
                 if n>MAX_UPLOAD: return self.reply(413,{'error':'每个文件最多20MB'})
                 self.connection.settimeout(30)
-                try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''))
+                try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''),self.headers.get('X-Request-Key'))
+                except UploadKeyConflict: return self.reply(409,{'error':'这个上传标识已对应另一份文件，本次没有保存；请重新选择文件后再传。','code':'upload_key_conflict'})
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
             max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback','/api/print/homework/draft','/api/topic/diagnosis/answer') else 20000

@@ -291,11 +291,13 @@ final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
         return await send(request)
     }
 
-    func upload(_ data: Data, name: String) async -> PostOutcome {
+    /// key：这张照片这次选取的上传标识。回执丢失后用同一标识重传，服务端读回已存的原件，不另存一份；另一次选取用新标识。
+    func upload(_ data: Data, name: String, key: String) async -> PostOutcome {
         var request = URLRequest(url: url("/api/upload"))
         request.httpMethod = "POST"
         request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
         request.setValue(name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? "photo", forHTTPHeaderField: "X-File-Name")
+        request.setValue(key, forHTTPHeaderField: "X-Request-Key")
         request.httpBody = data
         return await send(request)
     }
