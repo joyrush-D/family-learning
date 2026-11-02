@@ -565,6 +565,96 @@ class ScopedDoubtPdfTests(pdf_evidence.SchoolPdfEvidenceTests):
         self.assertEqual(set(map(str,self.sent_doubts().values())),{str(([],[],[self.RES,U_READ]))})
         for r in rows.values():self.assertIn(U_READ,json.loads(r['plan'])['school_task']['reason'])
 
+
+class PdfScopeSupplementTests(pdf_evidence.SchoolPdfEvidenceTests):
+    """D on the PDF worker: an old undecided page group without scopes -> pdfm.prepare (real page rendering stand-in, reader
+    stubbed, 0 API) -> one bounded re-read on the document job's own attempts -> re-map on its own job -> same ids (fictional)."""
+    RES='朗读示范音频未随资料附上，需家长另行获取。'
+
+    def _old(self):
+        import family_pdf_material as pdfm
+        self.keys=keys=self.native_notice('p1b-pdf-d');self.day=day=self.now.date()
+        self.lines=lines=dict(数学='数学：%d月%d日晚完成练习册第7页第2至4题，每题写步骤。'%(day.month,day.day),
+                             语文='语文：%d月%d日晚朗读第3课课文三遍。'%(day.month,day.day),英语='英语：%d月%d日晚完成练习纸第二部分。'%(day.month,day.day))
+        fp=self.seed_groups(keys=keys,note='题面背景',uncertainties=[self.RES,U_READ],requirements=list(lines.values()))
+        with self.store._db() as c:  # only the first group holds the doubts, as read before uncertainty_scopes
+            for r in c.execute('SELECT first_page,payload FROM agent_pdf_material WHERE fingerprint=? AND first_page>1',(fp,)).fetchall():
+                payload=json.loads(r['payload']);payload['originals'][0]['uncertainties']=[]
+                c.execute('UPDATE agent_pdf_material SET payload=? WHERE fingerprint=? AND first_page=?',(json.dumps(payload,ensure_ascii=False),fp,r['first_page']))
+            source,message=self.store._message_context(c,keys);value=pdfm.pdf_input(self.store,c,source,message)
+            self.doc_key=pdfm._document_key(source,message,value)
+            done={p for b in pdfm._batches(pdfm._rows(c,source,message,value['fingerprint']),value['upload_id'])[0] for p in b['pages']}
+            c.execute('INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts,done) VALUES(?,?,1,1)',(self.doc_key,agent._hash(pdfm._job_value(value['fingerprint'],done))))
+            self.upload_id=value['upload_id'];self.fp=fp
+        self.ident=self.candidate(keys=keys,ident='p1b-pdf-d')
+        self.refresh(self._mapping(first=True))
+        return self.rows()
+
+    def _mapping(self,first=False):
+        def reply(messages):
+            context=json.loads(messages[-1]['content']);parts={p['text']:p['id'] for p in context['original_parts'] if p.get('requirement')}
+            known={} if first else {text:r['id'] for text,r in self.rows().items()}
+            return {'actions':[dict(pdf_evidence.draft(goal=t),title=s+'：'+t[t.index('晚')+1:][:14],learning_subject=s,due=self.day.isoformat(),
+                                    existing_item_id=(self.ident if s=='数学' else '') if first else known[t],basis=[dict(part=parts[t],text=t)])
+                               for s,t in self.lines.items()]}
+        return reply
+
+    def rows(self):
+        with self.store._db() as c:
+            return {json.loads(r['plan'])['school_original_action']['requirements'][0]['text']:dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school'")
+                    if (json.loads(r['plan']).get('school_original_action') or {}).get('requirements')}
+
+    def job(self,key):
+        with self.store._db() as c:return dict(c.execute('SELECT * FROM agent_jobs WHERE id=?',(key,)).fetchone())
+
+    def group(self):
+        with self.store._db() as c:return json.loads(c.execute('SELECT payload FROM agent_pdf_material WHERE fingerprint=? AND first_page=1',(self.fp,)).fetchone()['payload'])
+
+    def _read(self,minutes,reply):
+        import family_pdf_material as pdfm
+        import test_pdf_material
+        with test_pdf_material.renderer(11),patch.object(agent.family_llm,'extract_draft',side_effect=reply) as read:
+            result=pdfm.prepare(self.store,self.now+dt.timedelta(minutes=minutes),budget=1)
+        return result,read
+
+    def receipt(self):
+        return dict(originals=[dict(upload_id=self.upload_id,title='第1-3页组',note='题面背景',uncertainties=[self.RES,U_READ],
+            requirements=list(self.lines.values()),deferred_contexts=[],uncertainty_scopes=[dict(uncertainty=self.RES,requirements=[self.lines['语文']],kind='resource'),
+            dict(uncertainty=U_READ,requirements=[self.lines['英语']],kind='reading')])])
+
+    def test_an_old_undecided_pdf_group_is_read_once_more_and_remapped_on_its_own_budgets(self):
+        before=self._old();ids={t:r['id'] for t,r in before.items()};old=self.group()
+        self.assertEqual({r['state'] for r in before.values()},{'pending'})  # unscoped old doubts hold every line
+        task_key='school-task:'+self.ident;mapper=self.job(task_key)
+        result,read=self._read(5,[self.receipt()])
+        self.assertEqual((result,read.call_count),(dict(used=1,failed=0),1))
+        self.assertEqual((read.call_args.kwargs['original_pages'],read.call_args.kwargs['previous_requirements']),([1,2,3],list(self.lines.values())))
+        group=self.group();doc=self.job(self.doc_key)
+        self.assertEqual(group['originals'][0]['uncertainty_scopes'],self.receipt()['originals'][0]['uncertainty_scopes'])
+        self.assertEqual((group['previous_group']['payload'],group['previous_group']['scope_supplement']),(old,True))
+        self.assertEqual((doc['attempts'],doc['done']),(2,1))  # the read job's own count, one more
+        _,calls=self.refresh(self._mapping(),minutes=6)
+        rows=self.rows();self.assertEqual(len(calls),1)
+        self.assertEqual({t:r['id'] for t,r in rows.items()},ids)
+        self.assertEqual([rows[self.lines[s]]['state'] for s in ('数学','语文','英语')],['accepted','accepted','pending'])
+        self.assertEqual(self.job(task_key)['attempts'],mapper['attempts']+1)  # the mapping job's own count, never a new budget
+        made=(self.rows(),self.group(),self.job(self.doc_key),self.job(task_key))
+        result,read=self._read(7,AssertionError('no second read'))
+        _,calls=self.refresh(self._mapping(),minutes=8)
+        self.assertEqual((result['used'],read.call_count,len(calls)),(0,0,0))
+        self.assertEqual((self.rows(),self.group(),self.job(self.doc_key),self.job(task_key)),made)
+
+    def test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group(self):
+        for case in ('decided','exhausted'):
+            with self.subTest(case=case):
+                if case=='exhausted':self.setUp()
+                rows=self._old();old=self.group()
+                with self.store._db() as c:
+                    if case=='decided':c.execute("UPDATE agent_items SET state='dismissed' WHERE id=?",(rows[self.lines['英语']]['id'],))
+                    else:c.execute('UPDATE agent_jobs SET attempts=? WHERE id=?',(agent.MAX_ATTEMPTS,self.doc_key))
+                result,read=self._read(5,[self.receipt()])
+                self.assertEqual((result['used'],read.call_count,self.group()),(0,0,old))
+
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
@@ -586,6 +676,8 @@ def load_tests(loader,tests,pattern):
         suite.addTest(ScopedDoubtImageChainTests(name))
     for name in ('test_each_scoped_doubt_holds_only_its_own_pdf_line','test_old_pdf_receipts_without_scopes_hold_every_line'):
         suite.addTest(ScopedDoubtPdfTests(name))
+    for name in ('test_an_old_undecided_pdf_group_is_read_once_more_and_remapped_on_its_own_budgets','test_a_decided_item_or_an_exhausted_read_job_keeps_the_old_group'):
+        suite.addTest(PdfScopeSupplementTests(name))
     return suite
 
 
