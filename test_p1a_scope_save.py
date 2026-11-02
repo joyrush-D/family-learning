@@ -36,14 +36,15 @@ def proposal(ref, quote, title, goal, *, state='ready', change='new', target='',
 
 
 def form_request(case, item, task_id):
-    """The confirm form's own default payload (app.js schoolChangeForm): the candidate's title, summary and day."""
+    """The confirm form's own default payload (app.js schoolChangeForm): the candidate's title, summary and day; an update whose
+    candidate states no day of its own keeps the original's day (app.js: !item.due -> t.agenda.due_on), never a cleared one."""
     with case.app.connect() as c:
         task = next(t for t in case.app.tasks(c) if t['id'] == task_id)
         update = c.execute('SELECT updated FROM task_updates WHERE id=?', (task_id,)).fetchone()
         row = c.execute('SELECT updated,due FROM agent_items WHERE id=?', (item['id'],)).fetchone()
     brief = item['plan']['school_task']
     return dict(action='school_change', id=item['id'], target_id=task_id, change='update', title=brief['title'], body=brief['goal'],
-                due=row['due'] or '', expected_updated=row['updated'], target_version=task['focus']['version'],
+                due=row['due'] or task['agenda'].get('due_on') or '', expected_updated=row['updated'], target_version=task['focus']['version'],
                 target_updated=update['updated'] if update else '')
 
 
