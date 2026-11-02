@@ -1285,7 +1285,12 @@ struct Inspector: View {
             if !m.summary.isEmpty {
                 Text(m.summary).font(.system(size: 14)).foregroundStyle(Palette.ink).lineSpacing(2).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             }
+            if !m.scope.isEmpty { Text(m.scope).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("material-scope-" + m.id, text: m.scope) }
             if !m.unclear.isEmpty { Text("看不清：" + m.unclear.joined(separator: "；") + "。请看原件。").font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
+            if !m.missing.isEmpty {
+                Text("要求已读到，执行还缺：" + m.missing.joined(separator: "；") + "。").font(Palette.small).foregroundStyle(Palette.woodInk).fixedSize(horizontal: false, vertical: true)
+                    .probe("material-missing-" + m.id, text: m.missing.joined(separator: "；"))
+            }
             if m.state != "ready", m.state != "saved", !m.explanation.isEmpty {
                 Text(m.explanation).font(Palette.small).foregroundStyle(m.state == "pending" ? Palette.ink2 : Palette.coralInk).fixedSize(horizontal: false, vertical: true)
             }
@@ -1296,13 +1301,13 @@ struct Inspector: View {
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(unread ? Palette.paper : Palette.card).shadow(color: unread ? Color.clear : Palette.cardShadow, radius: 6, x: 0, y: 3))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(unread ? Palette.line2 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
         .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).inset(by: 5).strokeBorder(m.state == "ready" ? Palette.leaf100 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])).allowsHitTesting(false))
-        .probe("material-" + m.id, text: m.stateLabel + " " + m.name + " " + m.summary)
+        .probe("material-" + m.id, text: [m.stateLabel, m.name, m.scope, m.summary].filter { !$0.isEmpty }.joined(separator: " "))
     }
 
     func materials(_ item: DayItem) -> some View {
         let state = store.materials[item.task_id] ?? MaterialState()
         return VStack(alignment: .leading, spacing: 10) {
-            header("资料与打印", "doc.text")
+            header(item.category == "homework" ? "资料与打印" : "资料", "doc.text")
             if !state.loaded { Text("正在读取资料…").font(Palette.body).foregroundStyle(Palette.ink2) }
             if !state.error.isEmpty {
                 card {
