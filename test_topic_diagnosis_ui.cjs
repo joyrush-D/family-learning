@@ -101,4 +101,11 @@ ok(!/上游判题|DeepTutor判定|两个判题器|上游：|DeepTutor：/.test(p
   const ss = T.restore(E, pg, { topic_id: P, opts: popts, items: [held] });
   ok(ss && ss.answers.length === 1 && ss.answers[0].result === 'skip' && !!E.nextItem(pg, ss), 'one held item: replays as 未答对 (skip) and the round continues');
 }
+// P4 family review display title: an original wrong-record title at its own 200 limit still gives a calendar title within the
+// calendar's existing 200 (code points), cut on a whole character (the combining accent is not split off) with an explicit "…".
+{
+  const cp = s => Array.from(s).length, long = '虚'.repeat(193) + 'é' + '\u{1F468}‍\u{1F469}‍\u{1F467}';
+  ok(cp(long) === 200 && T.reviewTitle(long) === '家庭复习：' + '虚'.repeat(193) + '…' && cp(T.reviewTitle(long)) === 199, 'a 200-code-point original title gives a bounded review title with an explicit ellipsis, no split character');
+  ok(T.reviewTitle('虚构错题') === '家庭复习：虚构错题' && T.reviewTitle('') === '家庭复习：原错题' && cp(T.reviewTitle('虚'.repeat(195))) === 200, 'shorter titles are kept whole up to exactly 200');
+}
 say(passed + ' passed');

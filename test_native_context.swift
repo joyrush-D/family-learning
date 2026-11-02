@@ -188,7 +188,16 @@ import Foundation
         draft.editing = false
         let again = store.reviewDraft(plan, day: "2026-11-07")
         expect(again === draft && again.save.unknown && again.save.body != nil && reviewDayFormat.string(from: again.day) == "2026-11-08", "收起或换日后回来：同一份草稿、回执不明的原请求和改动都还在")
+        // 关闭/退出与换孩子/日期/重读：回执不明的复习卡片算未保存，并锁住换孩子/日期与重读，原卡片和同一次提交的重试留在原处。
+        let shownChild = store.childID, shownDay = store.day
+        expect(store.hasUnsavedInput && store.reviewLocked, "回执不明的复习卡片：关闭/退出要先确认（hasUnsavedInput）")
+        store.change(child: "child-2"); store.change(day: "2026-11-09"); await store.load()
+        expect(store.childID == shownChild && store.day == shownDay && store.reviewDrafts[plan.id] === draft && draft.save.body != nil,
+               "回执不明时换孩子/日期和重读都被拦下：标题不变，原卡片与冻结的原请求都在")
+        draft.save.unknown = false; draft.save.body = nil
+        expect(store.hasUnsavedInput && !store.reviewLocked, "只是有改动的复习草稿：关闭前仍要确认，但不锁换孩子/日期（草稿按编号保留）")
         store.reviewDrafts = [:]
+        expect(!store.hasUnsavedInput, "没有改动的复习：不算未保存")
 
         let counts = await backend("")
         expect(counts["posts"] == 0, "整个过程没有任何写入")

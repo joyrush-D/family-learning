@@ -86,7 +86,16 @@ final class WorkspaceStore: ObservableObject {
 
     init(client: WorkspaceClient) { self.client = client }
 
-    var hasUnsavedInput: Bool { sheet != nil && sheetDirty }
+    /// 未保存的填写：打开着的表单有改动，或家庭复习卡片有改动/保存中/回执不明（关闭窗口、退出与打开网页都先确认）。
+    var hasUnsavedInput: Bool { (sheet != nil && sheetDirty) || reviewDrafts.values.contains { $0.dirty || $0.locked } }
+    /// 有家庭复习的保存还在进行或回执不明。
+    var reviewLocked: Bool { reviewDrafts.values.contains { $0.locked } }
+    /// 这时不换孩子、日期，不重读也不换成网页：原卡片和“用同一次提交重试”留在原处（只是有改动的草稿按编号保留，可以照常切换）。
+    func reviewHold() -> Bool {
+        guard reviewLocked else { return false }
+        notice = "有一条家庭复习的保存还没确认：请先在原卡片上“用同一次提交重试”核对，再换孩子、日期或刷新。"
+        return true
+    }
     /// 正在显示、可以操作的这一天：只有读回的正是所选孩子、所选日期才算。切换后还没读到或读失败时为 nil——
     /// 上一个孩子/上一天的读取结果只留作缓存（已知孩子仍可切回、重试），不在新选中的孩子/日期下显示、选中、计数或写入。
     var current: DayView? {
@@ -133,6 +142,7 @@ final class WorkspaceStore: ObservableObject {
     }
 
     func load(keepSelection: Bool = true) async {
+        if reviewHold() { return }  // no reload may replace the locked review card (a saved move/cancel/complete would remove it)
         sequence += 1
         let mine = sequence, child = childID, wanted = day
         loading = true
@@ -216,6 +226,7 @@ final class WorkspaceStore: ObservableObject {
 
     /// 切换孩子/日期：弹出层有未保存内容时默认留下；不带着上一个孩子的提示。
     func change(child: String? = nil, day newDay: String? = nil) {
+        if reviewHold() { return }  // before the header changes: the shown child/day stay what the locked card belongs to
         guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; materials = [:]; record = nil; pendingTask = nil }
