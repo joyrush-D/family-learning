@@ -1453,7 +1453,7 @@ extension AppDelegate {
                                       context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) { NSApp.postEvent(e, atStart: false) }
     }
 
-    func click(_ id: String, contains: String = "") async -> [String: Any] {
+    func click(_ id: String, contains: String = "", fraction: [Double]? = nil) async -> [String: Any] {
         let unbuilt = TestTargets.live(id) == nil, scrolled = await reveal(id)
         guard let node = find(id, contains: contains) else { return ["ok": false, "error": "control not found", "id": id, "unbuilt_row": unbuilt] }
         var center = NSPoint(x: node.frame.midX, y: node.frame.midY), row = -1
@@ -1470,8 +1470,15 @@ extension AppDelegate {
         }
         // 带标签的复合控件（Picker、DatePicker 整行）：探针框住整行时点在容器空白处打不开控件。探针范围内恰有一个系统弹出/日期控件时，
         // 改点那个控件自己的中心——仍是真实鼠标事件，不设值、不调用动作；其他控件和列表行照旧。
-        var redirected = false, sampled: [String] = []
-        if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY); redirected = true }
+        var redirected = false, sampled: [String] = [], explicit: NSPoint?
+        if let fraction {
+            // 步骤明确给出的探针内归一化点（x 从左、y 从上，各在 0…1，按截图上可见控件的位置）：就点这里，不再自动改走。
+            guard fraction.count == 2, fraction.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 1 }), node.frame.width > 0, node.frame.height > 0 else {
+                return ["ok": false, "error": "invalid fraction", "id": id, "fraction": fraction]
+            }
+            let point = NSPoint(x: node.frame.minX + node.frame.width * CGFloat(fraction[0]), y: node.frame.maxY - node.frame.height * CGFloat(fraction[1]))
+            explicit = point; center = point
+        } else if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY); redirected = true }
         else if rowTable == nil, id.hasPrefix("oral-") || id.hasPrefix("feedback-") || id.hasPrefix("wrong-add") {
             // 只作诊断、不改点击位置：实测 SwiftUI 菜单式 Picker 整行命中同一个 PlatformGroupContainer，按命中找不到单独的控件点。
             sampled = controlPoint(in: node.frame).hits
@@ -1548,7 +1555,8 @@ extension AppDelegate {
             }
         }
         return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
-                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "probe_roles": Array(Set(probeRoles)).sorted(), "probe_hits": sampled, "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
+                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "fraction_point": explicit.map { [Double($0.x), Double($0.y)] } ?? [Double](),
+                "probe_frame": [Double(node.frame.minX), Double(node.frame.minY), Double(node.frame.width), Double(node.frame.height)], "probe_roles": Array(Set(probeRoles)).sorted(), "probe_hits": sampled, "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
     }
 
     func key(_ chars: String, _ modifiers: [String], code: UInt16 = 0) async {
@@ -1579,7 +1587,11 @@ extension AppDelegate {
             let files = (pick as? [String])?.map { URL(fileURLWithPath: $0) }
             workspaceTestPicks.append(files); return ["ok": true, "pick": files?.map(\.lastPathComponent) ?? ["cancel"]]
         }
-        if let id = step["click"] as? String { return await click(id, contains: step["contains"] as? String ?? "") }
+        if let id = step["click"] as? String {
+            // fraction 只在步骤明确给出时使用；没有就照旧点中心或原有控件定位。
+            let fraction = step["fraction"].map { ($0 as? [NSNumber])?.map(\.doubleValue) ?? [Double.nan] }
+            return await click(id, contains: step["contains"] as? String ?? "", fraction: fraction)
+        }
         if let prefix = step["click_prefix"] as? String {
             let id = nodes().first(where: { $0.id.hasPrefix(prefix) && $0.frame.width > 0 })?.id ?? TestTargets.anchors.keys.sorted().first { $0.hasPrefix(prefix) && TestTargets.live($0) != nil }
             guard let id else { return ["ok": false, "error": "control not found", "prefix": prefix] }
