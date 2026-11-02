@@ -107,10 +107,48 @@ class SameHomeworkFlowTests(test_agent.AgentTests):
         for words in ('每轮先听示范','三轮','末轮录音上传作业栏目'):self.assertIn(words,actions[0])
 
 
+import json
+import test_image_original_date_scope as scope
+import test_daily_list_whole_day as whole
+_ScopeBase=next(v for v in vars(scope).values() if isinstance(v,type) and issubclass(v,unittest.TestCase) and hasattr(v,'_chain'))
+ROLE_OLD='2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍；不用抄写。'
+ROLE_NEW='2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，2026年11月5日早上交。'
+
+
+class OriginalRoleChainTests(_ScopeBase):
+    """The real image-original chain (save_upload -> message_attachment -> reader -> original actions -> Store -> list -> reopen)
+    with a fictional requirement holding its own completion and handback days beside a same-page dictation of its own day."""
+
+    def test_completion_and_handback_roles_reach_the_day_view_and_reopen(self):
+        fix=json.loads(json.dumps(scope.FIX,ensure_ascii=False).replace(ROLE_OLD,ROLE_NEW))
+        real=agent._school_original_actions
+        def cite(store,row,result,parts,*args,**kwargs):
+            # The controlled model stub cites each read part by the id this run's reader gave it (ids follow the read text).
+            ids={p['text']:p['id'] for p in parts}
+            for action in result.get('actions',[]):
+                for quote in action.get('basis',[]):quote['part']=ids.get(quote.get('text'),quote.get('part'))
+            return real(store,row,result,parts,*args,**kwargs)
+        with patch.object(scope,'FIX',fix),patch.object(agent,'_school_original_actions',cite):self._chain()
+        follow=self._follow(self._db()[0])
+        self.assertEqual((follow['state'],follow['due'],json.loads(follow['plan'])['school_task']['state']),('accepted','2026-11-05','ready'))
+        def agenda():
+            mine,_=whole.WholeDayTests._list(self)
+            items={('follow' if '跟读' in i['title']+i['body'] else 'dictation'):i['agenda'] for i in mine
+                   if [p['ref'] for p in i['agenda'].get('publications',[])]==[self.ref]}
+            return items
+        first=agenda()
+        self.assertEqual((first['follow']['complete_on'],first['follow']['due_on']),(scope.DAY,'2026-11-05'),first['follow'])
+        self.assertEqual((first['dictation']['due_on'],first['dictation'].get('due_kind')),('2026-11-05','inspection'))
+        made=self._db();agent.run_once(self.app,self.now+dt.timedelta(minutes=2))  # reopen: no call, write or duplicate
+        self.assertEqual(self._db(),made)
+        self.assertEqual(agenda(),first)
+
+
 def load_tests(loader,tests,pattern):
     suite=unittest.TestSuite()
     for case in (OriginalDateRoleTests,SameHomeworkSubmissionTests,OwnSubmissionStepSpanTests):suite.addTests(loader.loadTestsFromTestCase(case))
     suite.addTest(SameHomeworkFlowTests('test_quoted_recording_step_keeps_the_whole_method_through_save_and_reopen'))
+    suite.addTest(OriginalRoleChainTests('test_completion_and_handback_roles_reach_the_day_view_and_reopen'))
     return suite
 
 
