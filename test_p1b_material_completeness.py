@@ -52,6 +52,20 @@ class OriginalDateRoleTests(unittest.TestCase):
         self.assertEqual(roles('今晚做练习册第7页第2–4题，每题写步骤；周一（11月9日）交。'),({'2026-11-08'},'2026-11-09'))
         self.assertIsNone(roles('今晚做练习册第7页第2–4题，每题写步骤；周一（11月10日）交。'))
 
+    def test_a_day_head_before_a_comma_or_an_ordered_work_keeps_its_own_day(self):
+        j=agent._school_date_head_joined
+        self.assertEqual(j('周五，请孩子把回执交给老师。'),'周五请孩子把回执交给老师。')
+        self.assertEqual(j('数学已完成。周四，请孩子带一个容器。'),'数学已完成。周四请孩子带一个容器。')
+        self.assertEqual(j('2026年11月4日晚先听示范音频，再朗读《春》第2段两遍，末遍录音上传平台。'),
+                         '2026年11月4日晚先听示范音频再朗读《春》第2段两遍，末遍录音上传平台。')
+        for text in ('周五，不用交回执。','周五，如需请孩子带容器。','周五，请孩子周四带容器。','周五，学校开放日。','先听音频，再朗读第2段。',
+                     '2026年11月4日晚先听音频，再视情况朗读。','2026年11月4日晚先听音频，再于11月5日朗读。'):
+            with self.subTest(text=text):self.assertEqual(j(text),text)  # negation, condition, another day, no executor or no day: as written
+        sent=dict(ref=REF,time=SENT,text='')
+        self.assertEqual(agent._school_original_roles([dict(ref=REF,quote=j('周五，请孩子把回执交给老师。'))],[sent],[]),(set(),'2026-11-13'))
+        import family_agenda
+        self.assertEqual(family_agenda.deadlines(j('2026年11月8日晚先听示范音频，再朗读《春》第2段两遍，末遍录音上传平台。'),'2026-11-08'),{'2026-11-08'})
+
     def test_by_the_child_leads_an_action_as_by_the_parent_or_please_does(self):
         import family_agenda
         for lead in ('由孩子','由学生','请孩子','由家长'):
