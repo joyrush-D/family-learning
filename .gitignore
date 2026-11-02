@@ -111,6 +111,7 @@
 !/test_homework_text_batches_ui.cjs
 !/test_homework_context_ui.cjs
 !/test_homework_print_scope.py
+!/test_task_materials.py
 !/test_homework_print_change_basis.py
 !/test_homework_print_basis_ui.cjs
 

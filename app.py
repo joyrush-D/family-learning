@@ -638,18 +638,65 @@ def homework_material_state(view,ident):
     if state=='pending': return dict(MATERIAL_SAVED,state='pending',label='等待后台整理',explanation=explanation)
     return dict(MATERIAL_SAVED)
 
+def material_page_words(pages):
+    """[1,2,3,5] -> '1–3、5'; page numbers only as the code computed them."""
+    runs=[]
+    for page in pages:
+        if runs and page==runs[-1][1]+1: runs[-1][1]=page
+        else: runs.append([page,page])
+    return '、'.join(str(a) if a==b else '%d–%d'%(a,b) for a,b in runs)
+
+def pdf_material_state(document):
+    """One page-path original's saved page groups (family_pdf_material.view) on the existing material card: covered and
+    pending pages exactly as the code computed them, the saved note only as a bounded reference, and a doubt its reader
+    scoped as a missing execution resource (an audio, an unattached sheet) kept apart from an unclear reading. Unscoped
+    doubts stay original-wide. Nothing is read again; no page beyond a saved group is claimed."""
+    count=document.get('page_count');done=list(document.get('processed_pages') or []);pending=list(document.get('pending_pages') or [])
+    entries=[]
+    for batch in document.get('batches') or []:
+        draft=batch.get('draft') if isinstance(batch,dict) and isinstance(batch.get('draft'),dict) else {}
+        entries+=[o for o in draft['originals'] if isinstance(o,dict) and o.get('upload_id')==document.get('upload_id')] if 'originals' in draft else [draft]
+    unclear,missing=[],[]
+    for entry in entries:
+        kinds={str(s.get('uncertainty') or '').strip():s.get('kind') for s in entry.get('uncertainty_scopes') or [] if isinstance(s,dict)}
+        for doubt in entry.get('uncertainties') or []:
+            text=str(doubt).strip()
+            if text: (missing if kinds.get(text)=='resource' else unclear).append(text)
+    unclear,missing=list(dict.fromkeys(unclear))[:3],list(dict.fromkeys(missing))[:3]
+    summary='\n'.join(n for n in (str(e.get('note') or e.get('title') or '').strip() for e in entries) if n)
+    scope=('共%d页，'%count if count else '')+('已整理第%s页'%material_page_words(done) if done else '尚未整理任何页')+('，第%s页未整理'%material_page_words(pending) if pending else '')
+    if document.get('state')=='error': state,label='error','整理没有成功'
+    elif document.get('complete') and document.get('requirements_complete'):
+        state,label=('partial','已整理全部%d页，有看不清的地方'%count) if unclear else ('ready','已整理全部%d页'%count)
+    elif document.get('complete'): state,label='partial','已读全部%d页，行动要求待整理'%count
+    elif done: state,label='partial','已整理%d/%d页'%(len(done),count)
+    else: state,label='pending','等待后台整理'
+    updated=max((str(b.get('updated') or '') for b in document.get('batches') or [] if isinstance(b,dict)),default='')
+    return dict(state=state,label=label,summary=summary[:240],summary_truncated=len(summary)>240,unclear=unclear,missing=missing,scope=scope,
+                explanation=str(document.get('explanation') or ''),updated=updated)
+
 def homework_material_states(c,context):
-    """Read only: no model, job or collector is started; an unreadable interpretation leaves the file as a saved original."""
+    """Read only: no model, job, conversion, render or collector is started; an unreadable interpretation leaves the file
+    as a saved original. A PDF/DOCX/PPTX/XLSX original shows its own saved page groups (family_pdf_material.view, same
+    source/child/message/authorization/hash checks) and an image its saved draft (family_media.draft_view)."""
     states={}
     if not context.get('school'): return states
     try:
-        import family_media
+        import family_media,family_pdf_material
         store=agent_store(read_only=True)
     except Exception: return states
     for source,message,ids in context['school']:
         try: view=family_media.draft_view(store,c,source,message)
         except Exception: view=None
-        for ident in ids: states[ident]=homework_material_state(view,ident)
+        try: pdf=family_pdf_material.view(store,c,source,message)
+        except Exception: pdf=None
+        documents={d['upload_id']:d for d in (pdf.get('documents') or [pdf]) if isinstance(d,dict) and d.get('upload_id')} if isinstance(pdf,dict) else {}
+        for ident in ids:
+            mime=str((context.get('allowed',{}).get(ident) or {}).get('mime') or '')
+            if ident in documents: states[ident]=pdf_material_state(documents[ident])
+            elif isinstance(pdf,dict) and pdf.get('state')=='unavailable' and mime in family_pdf_material.ORIGINALS:
+                states[ident]=dict(MATERIAL_SAVED,state='unread',label='尚未读清',explanation=str(pdf.get('explanation') or ''))
+            else: states[ident]=homework_material_state(view,ident)
     return states
 
 def connect_read_only():
@@ -1236,14 +1283,17 @@ def homework_review_result_bindings(c,child,names):
     return {upload_id:[ident,current[ident]['created']] for upload_id,ident in first.items() if ident is not None}
 
 
-def homework_material_context(c,task_id,*,answer=None):
-    """Current homework's explicit bindings; caller supplies an existing read transaction."""
+def homework_material_context(c,task_id,*,answer=None,listing=False):
+    """Current homework's explicit bindings; caller supplies an existing read transaction.
+    listing=True only lists one task's own originals read-only for its own child whatever its category (a notice, a form
+    to sign, things to bring): the same source/message/upload/child checks. Printing, checking and the parent reference
+    keep the homework-only gate; a todo is never treated as homework."""
     if not isinstance(task_id,str) or not task_id or len(task_id)>30:
         raise family_print.PrintError('请从原作业打开资料')
     task=next((t for t in tasks(c) if t['id']==task_id),None)
     if task is None:
         raise family_print.PrintError('作业事项不存在，请刷新后核对','task_missing',404)
-    if task.get('agenda',{}).get('category')!='homework':
+    if not listing and task.get('agenda',{}).get('category')!='homework':
         raise family_print.PrintError('请从当前孩子的原作业打开资料','review_source_not_allowed',403)
     names=child_names(c)
     if answer is not None and (names.get(answer['child'],answer['child'])!=task['child']
@@ -2619,14 +2669,16 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     with connect_read_only() as c:
                         c.execute('BEGIN')
-                        context=homework_material_context(c,query['task_id'][0]);basis=homework_print_basis(c,context['task'])
+                        context=homework_material_context(c,query['task_id'][0],listing=True)
+                        category=context['task'].get('agenda',{}).get('category')
+                        basis=homework_print_basis(c,context['task']) if category=='homework' else None
                         states=homework_material_states(c,context)
                 except sqlite3.OperationalError:
                     return self.reply(503,dict(error='作业资料暂时无法读取；本次读取未更改任何资料',code='storage_unavailable'))
                 files=[dict(source=dict(type='upload',id=ident),name=value['name'],origin=value['origin'],**({'owner_task_id':value['owner_task_id']} if value.get('owner_task_id') else {}),
                             role_label=MATERIAL_ROLES.get(value['origin'],'原件（用途未注明）'),**states.get(ident,MATERIAL_SAVED))
                        for ident,value in context['allowed'].items() if value['origin']!='review_result']
-                return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},files=files,school_error=context['school_error'],print_basis=basis,task_title=context['task']['title']))
+                return self.reply(200,dict(task={key:context['task'][key] for key in ('id','child')},category=category,files=files,school_error=context['school_error'],print_basis=basis,task_title=context['task']['title']))
             if path=='/api/print/homework/sources':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if (set(query)!={'task_id','record_id'} or any(len(v)!=1 for v in query.values())

@@ -139,6 +139,8 @@ struct Material: Hashable, Identifiable {
     let summary: String
     let unclear: [String]
     let explanation: String
+    var scope = ""          // 服务端按已保存页组算出的范围（共几页、已整理哪几页、哪几页未整理）；图片原件为空
+    var missing: [String] = []  // 要求已读到、但执行资源（音频、未附的表）没随附；不当作原件看不清
 }
 
 struct MaterialState: Equatable {
@@ -244,7 +246,8 @@ final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
                 return Material(id: id, name: f["name"] as? String ?? "原件", origin: f["origin"] as? String ?? "",
                                 roleLabel: f["role_label"] as? String ?? "原件（用途未注明）", state: f["state"] as? String ?? "saved",
                                 stateLabel: f["label"] as? String ?? "原件已保存", summary: f["summary"] as? String ?? "",
-                                unclear: f["unclear"] as? [String] ?? [], explanation: f["explanation"] as? String ?? "")
+                                unclear: f["unclear"] as? [String] ?? [], explanation: f["explanation"] as? String ?? "",
+                                scope: f["scope"] as? String ?? "", missing: f["missing"] as? [String] ?? [])
             }
             var gap = ""
             if let text = object["school_error"] as? String { gap = text }

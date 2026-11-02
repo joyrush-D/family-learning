@@ -290,7 +290,9 @@ function groveMaterialHTML(f){
   +`<p class="grove-material-head"><span class="grove-chip${tone}">${esc(f.label||'原件已保存')}</span><strong>${esc(f.name)}</strong></p>`
   +`<p class="small muted">${esc(f.role_label||'原件（用途未注明）')}</p>`
   +`${f.summary?`<p class="grove-material-summary">${esc(f.summary)}</p>`:''}`
+  +`${f.scope?`<p class="small muted" data-material-scope>${esc(f.scope)}</p>`:''}`
   +`${f.unclear?.length?`<p class="grove-unclear">看不清：${esc(f.unclear.join('；'))}。请看原件。</p>`:''}`
+  +`${f.missing?.length?`<p class="small" data-material-missing>要求已读到，执行还缺：${esc(f.missing.join('；'))}。</p>`:''}`
   +`${!['ready','saved'].includes(f.state)&&f.explanation?`<p class="small">${esc(f.explanation)}</p>`:''}`
   +`<a class="grove-link" href="./upload/${encodeURIComponent(f.source?.id||'')}" target="_blank" rel="noopener">打开原件</a></div>`;
 }
@@ -334,7 +336,8 @@ function groveDetailHTML(r){
   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
   +groveVersionHTML(r.version)
   +`<div class="grove-facts">${facts}</div>`
-  +(homework?`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section><div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
+  +`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section>`
+  +(homework?`<div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
   +`<section class="grove-card"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted">还没有反馈。照片可以不交，只写几句文字也行；没有反馈不等于没做。</p>'}<div class="grove-actions">${primary}</div></section>`
   +`<details class="grove-more"><summary>更多操作</summary><div class="tasktools">${more}</div></details>`;
 }
@@ -365,7 +368,7 @@ function todayTasksHTML(){
  const rows=groveRows(view);
  if(!rows.some(x=>x.id===groveSelected)){groveSelected=groveWide()?(rows[0]?.id||''):'';groveDetailOpen=false}
  const selected=rows.find(x=>x.id===groveSelected),c=view.counts||{};
- setTimeout(()=>{revealTaskLink();revealRecordTopic();if(selected?.task_id&&selected.category==='homework')groveLoadMaterials(selected.task_id)});
+ setTimeout(()=>{revealTaskLink();revealRecordTopic();if(selected?.task_id)groveLoadMaterials(selected.task_id)});
  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
