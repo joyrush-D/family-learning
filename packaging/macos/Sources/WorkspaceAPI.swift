@@ -2,6 +2,8 @@
 // 写入沿用原接口与原守卫（X-Family-Token、request_key 幂等、409 冲突）。只连 DesktopPolicy 的同一本机 origin，不跟随重定向。
 import Foundation
 
+struct SchoolReadGap: Decodable, Hashable { let name: String; let status: String }
+
 struct DayFact: Decodable, Hashable {
     let role: String
     let label: String
@@ -117,6 +119,8 @@ struct DayView: Decodable {
     let token: String
     let source_error: String?
     let school_pending: Int?   // 这个孩子已收到、尚未整理的学校消息条数（与网页清单同一规则）；读不到时缺省，不猜
+    let school_read_gaps: [SchoolReadGap]?  // 这个孩子的来源里最近没读成功/待核对的（0 条新消息的成功读取不算）
+    let school_unknown: Bool?  // 来源状态本身读不到：如实说无法核对，不当作完整
     let groups: [ItemGroup]
     let closed: [ItemGroup]
     let wrong: [WrongGroup]

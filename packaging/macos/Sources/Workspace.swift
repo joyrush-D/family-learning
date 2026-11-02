@@ -635,6 +635,19 @@ struct SubjectList: View {
                 }
                 .padding(.horizontal, 18).padding(.vertical, 6)
             }
+            // 与网页同一规则：这个孩子的来源最近没读成功或待核对时清单可能缺项（读成功但 0 条新消息不算缺口）；状态本身读不到就如实说无法核对。
+            if let gaps = store.current?.school_read_gaps, !gaps.isEmpty {
+                let words = "消息读取有缺口，清单可能缺项：" + gaps.map { $0.name + " " + $0.status }.joined(separator: "；") + "。"
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).probe("school-read-gap", text: words)
+                    Button("在网页版检查最新消息") { store.openWebTools("", "") }.buttonStyle(.borderless).controlSize(.small).probe("school-read-gap-open")
+                }
+                .padding(.horizontal, 18).padding(.vertical, 6)
+            } else if store.current?.school_unknown == true {
+                let words = "学校消息的读取状态暂时无法核对，清单可能不完整。"
+                Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 18).padding(.vertical, 6).probe("school-read-unknown", text: words)
+            }
             switch store.mode {
             case .calendar: itemList
             case .wrong: WrongList(store: store)

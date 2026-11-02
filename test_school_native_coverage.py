@@ -942,6 +942,31 @@ class SchoolNativeCoverageTests(unittest.TestCase):
         for other in [c['id'] for c in view['children'] if c['id']!=mine]:
             self.assertEqual(self.app.day_view(other,day)['school_pending'],0,'another child never carries this warning')
 
+    def test_the_day_view_says_this_childs_read_gap_even_with_nothing_pending(self):
+        # A failed latest read with 0 messages waiting is still a gap; another child never carries it; an unreadable snapshot is unknown.
+        self._two_actions()
+        with self.store._db() as c:
+            c.execute('UPDATE agent_messages SET processed=1 WHERE source_id=?',(self.source['id'],))
+            c.execute('UPDATE agent_sources SET error=? WHERE id=?',('虚构：最近一次读取未成功',self.source['id']))
+        day=self.now.date().isoformat();mine=self.source['child_id'];view=self.app.day_view(mine,day)
+        self.assertEqual((view['school_pending'],[g['status'] for g in view['school_read_gaps']]),(0,['最近读取未成功']))
+        self.assertNotIn('school_unknown',view)
+        for other in [c['id'] for c in view['children'] if c['id']!=mine]:
+            self.assertEqual(self.app.day_view(other,day)['school_read_gaps'],[],'another child never carries this warning')
+        with patch.object(self.app,'agent_store',side_effect=RuntimeError('synthetic unreadable snapshot')):
+            unknown=self.app.day_view(mine,day)
+        self.assertEqual((unknown.get('school_unknown'),'school_pending' in unknown,'school_read_gaps' in unknown),(True,False,False))
+
+    def test_a_recent_successful_read_with_nothing_new_is_no_gap(self):
+        self._two_actions()
+        with self.store._db() as c:
+            c.execute('UPDATE agent_messages SET processed=1 WHERE source_id=?',(self.source['id'],))
+            c.execute("UPDATE agent_sources SET error='',last_success=?,last_attempt=? WHERE id=?",(self.now.isoformat(),self.now.isoformat(),self.source['id']))
+        coverage=self.app.school_coverage(self.source['child_id'],now=self.now+agent.dt.timedelta(minutes=1))
+        self.assertEqual(coverage,dict(school_pending=0,school_read_gaps=[]))
+        late=self.app.school_coverage(self.source['child_id'],now=self.now+agent.dt.timedelta(days=2))
+        self.assertEqual([g['status'] for g in late['school_read_gaps']],['读取待核对'],'an overdue next read stays to be checked')
+
     def test_pending_message_counts_are_source_scoped_and_reject_stale_bindings(self):
         self.assertEqual(self.store.snapshot()['sources'][0]['pending_message_count'], 0)
         self._two_actions()
