@@ -7,6 +7,34 @@ const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 
+// The home entry is the grove list: a row (article.grove-row, same data-query-target) shows its date roles as first-layer
+// chips and opens #groveDetail with the title (h2.grove-h), each condition (ul.grove-standards li) and each date as its
+// own label + value. Dates are read as "label：value" (a 今天 value marked before the label, as the old line wrote it), so
+// the same saved-date assertions hold. The all-tasks list (pass 'list') keeps its article.task card.
+async function itemView(p,card,grove){
+ if(!grove)return {title:await card.locator('h3').innerText(),lines:await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),
+  text:await card.innerText(),listed:'',dates:await card.locator('.agenda-dates').innerText(),roles:[]};
+ await card.waitFor();
+ const title=(await card.locator('.grove-title').innerText()).trim(),listed=await card.innerText();
+ const roles=await card.locator('.grove-chips [data-fact]').evaluateAll(xs=>xs.map(x=>x.dataset.fact));
+ await card.locator('[data-grove-open]').click();
+ const d=p.locator('#groveDetail');await d.locator('h2.grove-h').filter({hasText:title}).first().waitFor();
+ const lines=await d.locator('ul.grove-standards li').allInnerTexts();
+ const dates=await d.locator('.grove-fact').evaluateAll(xs=>xs.map(x=>{const l=(x.querySelector('span')?.innerText||'').trim(),v=(x.querySelector('strong')?.innerText||'').trim();
+  return (v.startsWith('今天 ')?'今天':'')+l+'：'+v.replace(/^今天 /,'')}).join('\n'));
+ const text=await d.innerText(),shownTitle=(await d.locator('h2.grove-h').first().innerText()).trim();
+ const back=p.locator('[data-grove-back]').first();if(await back.isVisible().catch(()=>false)){await back.click();await card.waitFor()}
+ return {title:shownTitle,lines,text,listed,dates,roles};
+}
+async function groveCards(p){
+ const rows=p.locator('#task-groups article.grove-row'),out=[];
+ for(let i=0;i<await rows.count();i++){
+  const row=rows.nth(i);if(!await row.isVisible())continue;
+  const group=await row.evaluate(x=>x.closest('.grove-subject')?.querySelector('h2')?.innerText||'');
+  const item=await itemView(p,row,true);out.push({card:item.listed+'\n'+item.text,dates:item.dates,group});
+ }
+ return out;
+}
 async function eventually(check,label,timeout=10000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await delay(40)}throw Error('Timed out: '+label)}
 async function demoServer(){
  const socket=net.createServer();socket.listen(0,'127.0.0.1');await once(socket,'listening');
@@ -44,7 +72,7 @@ async function demoServer(){
        if(pass!=='calendar')await eventually(async()=>await p.locator('#content').getAttribute('data-ready')==='true','T02 '+pass+' ready');
        if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'T02 all homework and todo')}
        if(pass==='calendar')await p.locator('nav [data-page="calendar"]').click();
-       const cards=async()=>p.locator('.agenda-dates').evaluateAll(xs=>xs.filter(x=>x.offsetParent!==null).map(x=>{const c=x.closest('[data-query-target]')||x.parentElement;return {card:c.innerText,dates:x.innerText,group:x.closest('.subject-group')?.querySelector('.task-group-heading h2')?.innerText||''}}));
+       const cards=async()=>pass==='open'||pass==='reopen'?await groveCards(p):p.locator('.agenda-dates').evaluateAll(xs=>xs.filter(x=>x.offsetParent!==null).map(x=>{const c=x.closest('[data-query-target]')||x.parentElement;return {card:c.innerText,dates:x.innerText,group:x.closest('.subject-group')?.querySelector('.task-group-heading h2')?.innerText||''}}));
        let all=[],rope=[],english=[],sheet=[];
        await eventually(async()=>{all=await cards();rope=all.filter(c=>/跳绳/.test(c.card));english=all.filter(c=>/Unit 5/.test(c.card));sheet=all.filter(c=>/实验观察表/.test(c.card));return rope.length>0&&sheet.length>0&&(pass==='calendar'||english.length>0)},'T02 '+pass+' '+width+' cards');
        if(pass!=='calendar')assert.equal(sheet.length,1,pass+' '+width+' one T06 sheet card');
@@ -89,15 +117,15 @@ async function demoServer(){
     for(const pass of ['open','reopen']){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
      await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready');
-     const todayGroup=p.locator('#task-groups .subject-item[data-category="homework"][data-today]'),card=(scope,id)=>scope.locator('[data-query-target="task:'+id+'"]');
+     const todayGroup=p.locator('#task-groups article.grove-row[data-category="homework"][data-today]'),card=(scope,id)=>scope===todayGroup?p.locator('#task-groups article.grove-row[data-category="homework"][data-today][data-query-target="task:'+id+'"]'):scope.locator('[data-query-target="task:'+id+'"]');
      assert.equal(await todayGroup.evaluateAll(xs=>xs.filter(x=>x.dataset.kind!=='school').length),2,'today and tonight work is counted once each');
      for(const id of ['RECITE','COPY']){
       assert.equal(await card(p,id).count(),1,id+' appears once');assert.equal(await card(todayGroup,id).isVisible(),true,id+' is directly in Today');
-      assert.match(await card(todayGroup,id).locator('.agenda-dates').innerText(),/今天完成：2026-10-07[\s\S]*截止：2026-10-08/,id+' shows both roles in the first layer');
+      {const shown=await itemView(p,card(todayGroup,id),true);assert.match(shown.dates,/今天完成：2026-10-07[\s\S]*截止：2026-10-08/,id+' shows both roles');assert.ok(['complete','due'].every(r=>shown.roles.includes(r)),id+' both roles in the first layer')}
      }
      assert.equal(await card(todayGroup,'ORAL').count(),0,'only a handback day is not guessed as today');
-     assert.match(await p.locator('#task-groups .subject-item[data-category="homework"]:not([data-today])').filter({hasText:'数学：完成口算本第8页'}).innerText(),/截止：2026-10-08/);
-     assert.doesNotMatch(await card(p,'ORAL').locator('.agenda-dates').innerText(),/完成：/);
+     assert.match((await itemView(p,p.locator('#task-groups article.grove-row[data-category="homework"]:not([data-today])').filter({hasText:'数学：完成口算本第8页'}).first(),true)).dates,/截止：2026-10-08/);
+     assert.doesNotMatch((await itemView(p,card(p,'ORAL'),true)).dates,/完成：/);
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     }
     if(process.env.TODAY_UI_PROOF_DIR){const fs=require('node:fs/promises'),path=require('node:path');await fs.mkdir(process.env.TODAY_UI_PROOF_DIR,{recursive:true});await p.screenshot({path:path.join(process.env.TODAY_UI_PROOF_DIR,'completion-today-'+width+'.png'),fullPage:true})}
@@ -120,9 +148,9 @@ async function demoServer(){
     await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Today ready '+day);
     const card=scope=>scope.locator('[data-query-target="task:'+h01.id+'"]');
     assert.equal(await card(p).count(),1,day+' the saved task appears once');
-    assert.equal(await card(p.locator('#task-groups .subject-item[data-category="homework"][data-today]')).count(),inToday?1:0,day+' first-layer Today only on its work and handback days');
+    assert.equal(await p.locator('#task-groups article.grove-row[data-category="homework"][data-today][data-query-target="task:'+h01.id+'"]').count(),inToday?1:0,day+' first-layer Today only on its work and handback days');
     // H01: “2026年10月20日早读交回语文老师” names handing it back that day, so 10/20 is the teacher's handback, not a deadline.
-    const h01Dates=await card(p).locator('.agenda-dates').innerText();assert.match(h01Dates,label,day+' both roles with the original handback due');
+    const h01Dates=(await itemView(p,card(p),true)).dates;assert.match(h01Dates,label,day+' both roles with the original handback due');
     assert.doesNotMatch(h01Dates,/截止|计划：/,day+' no deadline or made-up plan');
     assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     assert.deepEqual(errors,[]);
@@ -152,20 +180,20 @@ async function demoServer(){
      await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','Flash27 Today ready');
      if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
      else{
-      assert.equal(await p.locator('#task-groups .subject-item[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups .subject-item[data-category="todo"]:not([data-kind="school"])').count(),2);
+      assert.equal(await p.locator('#task-groups article.grove-row[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups article.grove-row[data-category="todo"]:not([data-kind="school"])').count(),2);
       assert.match(await p.locator('#today-courses').innerText(),/当天课表尚未提供/,'the missing timetable stays said');
      }
      for(const [key,want] of Object.entries(lines)){
       const card=p.locator('[data-query-target="task:'+ids[key]+'"]'),saved=flash.tasks.find(t=>t.id===ids[key]);
       assert.equal(await card.count(),1,key+' one card');
-      assert.equal(await card.locator('h3').innerText(),saved.title,key+' title as saved');
-      assert.deepEqual(await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),want,pass+' '+width+' '+key+' each own condition once');
-      const text=await card.innerText();
+      const item=await itemView(p,card,pass!=='list');assert.equal(item.title,saved.title,key+' title as saved');
+      assert.deepEqual(item.lines,want,pass+' '+width+' '+key+' each own condition once');
+      const text=item.text;
       assert.doesNotMatch(text,/提交要求/,key+' no restated handback line');
       // Only where the first saved line is the title itself; the bottle's line overlaps its title in part and stays whole.
       if(['星芽','数格'].includes(key))assert.equal(text.split(saved.title.replace(/^[^：]+：/,'')).length-1,1,key+' the title words appear once');
       assert.match(text,new RegExp(teacher[key]),key+' teacher kept by the originals');
-      const dates=await card.locator('.agenda-dates').innerText();
+      const dates=item.dates;
       assert.match(dates,/发布：2026-10-19 1\d:\d\d/,key+' publication time');
       if(key==='塑料瓶')assert.doesNotMatch(dates,/完成：/,'the bottle borrows no completion day');else assert.match(dates,/完成：2026-10-19[\s\S]*2026-10-20/,key+' completion day before its 10/20');
       assert.doesNotMatch(dates,/计划：/,key+' no made-up parent plan');roleOf('Flash27 '+pass+' '+width,key,dates);
@@ -196,13 +224,13 @@ async function demoServer(){
      if(pass==='open')await p.goto(server.url,{waitUntil:'load'});else await p.reload({waitUntil:'load'});
      await eventually(async()=>await p.locator('body[data-page="home"] #task-groups').isVisible()&&await p.locator('#content').getAttribute('data-ready')==='true','recovered Today ready');
      if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
-     else{assert.equal(await p.locator('#task-groups .subject-item[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups .subject-item[data-category="todo"]:not([data-kind="school"])').count(),2)}
+     else{assert.equal(await p.locator('#task-groups article.grove-row[data-category="homework"][data-today]:not([data-kind="school"])').count(),3);assert.equal(await p.locator('#task-groups article.grove-row[data-category="todo"]:not([data-kind="school"])').count(),2)}
      for(const [key,want] of Object.entries(recoveredLines)){
       const card=p.locator('[data-query-target="task:'+rid[key]+'"]'),saved=recovered.tasks.find(t=>t.id===rid[key]);
-      assert.equal(await card.count(),1,key+' one card');assert.equal(await card.locator('h3').innerText(),saved.title);
-      assert.deepEqual(await card.locator('.task-requirement li, p.task-requirement').allInnerTexts(),want,pass+' '+width+' '+key+' recovered card lines');
-      const text=await card.innerText();assert.match(text,new RegExp(teacher[key]));
-      if(key==='Unit 4'){assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');const dates=await card.locator('.agenda-dates').innerText();assert.match(dates,/完成：2026-10-19[\s\S]*2026-10-20/);roleOf('recovered '+pass+' '+width,key,dates)}
+      assert.equal(await card.count(),1,key+' one card');const item=await itemView(p,card,pass!=='list');assert.equal(item.title,saved.title);
+      assert.deepEqual(item.lines,want,pass+' '+width+' '+key+' recovered card lines');
+      const text=item.text;assert.match(text,new RegExp(teacher[key]));
+      if(key==='Unit 4'){assert.equal(text.split('英语：').length-1,1,'the subject label only in the heading');const dates=item.dates;assert.match(dates,/完成：2026-10-19[\s\S]*2026-10-20/);roleOf('recovered '+pass+' '+width,key,dates)}
      }
      assert.equal(await p.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,'page has no horizontal overflow');
     }
