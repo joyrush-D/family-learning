@@ -7600,7 +7600,16 @@ def _school_date_head_joined(text):
         if (re.search(r'不用|不必|无需|不需|免|别|勿|如果|若|如需|假如|视情况|是否',clause) or re.search(_SCHOOL_DAY_HEAD,clause)
                 or not re.match(r'(?:请|由家长|由孩子|由学生|家长|孩子|学生)',clause)):return m[0]
         return m[1]+m[2]+clause
-    return re.sub(r'(^|[。；;！!？?\n])\s*('+_SCHOOL_DAY_HEAD+r')\s*[，,]\s*([^。；;！!？?\n，,]+)',join,text or '')
+    text=re.sub(r'(^|[。；;！!？?\n])\s*('+_SCHOOL_DAY_HEAD+r')\s*[，,]\s*([^。；;！!？?\n，,]+)',join,text or '')
+    def ordered(m):
+        # One ordered work after its own day (2026年11月4日晚先听示范音频，再朗读…): the comma before 再/然后/接着/随后 is not a
+        # new action's boundary, as the same words written together already read; never with negation, condition or another day.
+        head=re.match(r'\s*'+_SCHOOL_DAY_HEAD,m[0])
+        if not head:return m[0]
+        rest=m[0][head.end():];joined=re.sub(r'[，,]\s*(?=(?:再|然后|接着|随后))','',rest)
+        if joined==rest or re.search(r'不用|不必|无需|不需|免|勿|如果|若|如需|假如|视情况|是否',joined) or re.search(_SCHOOL_DAY_HEAD,joined):return m[0]
+        return m[0][:head.end()]+joined
+    return re.sub(r'[^。；;！!？?\n]+',ordered,text)
 
 
 def _school_resource_time_free(text):
