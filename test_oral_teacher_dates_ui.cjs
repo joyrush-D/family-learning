@@ -119,7 +119,19 @@ async function saveThroughFailures(page,dialog,form,count){
      assert.deepEqual([again.agenda.complete_on,again.agenda.due_on,again.agenda.due_kind,again.agenda.scheduled_on,again.focus.due_on,again.focus.next_action],[next.complete_on,next.handback_on,next.handback_on?'handback':'',day,'','另一台设备 '+width]);
      // Reopened Today reads the same saved days: after the clear no handback/deadline is left from the task-form copy.
      await p.goto(host.url);const shown=await groveShown(title);
-     if(next.handback_on)assert.match(shown,new RegExp(later));else{assert.doesNotMatch(shown,new RegExp(handback+'|交回'));assert.match(shown,/截止待核对|日期未写明/);assert.match(shown,new RegExp('完成[：\\s]*(今天 )?'+later))}
+     // Each date is read by its own role fact (row chip and detail), never by matching any date in the whole text.
+     const groveFacts=async t=>{const row=p.locator('article.grove-row').filter({hasText:t}).first();await row.waitFor({state:'attached'});
+      const listed=await row.locator('.grove-chips [data-fact]').evaluateAll(xs=>xs.map(x=>({role:x.dataset.fact,text:x.innerText.trim()})));
+      const d=await groveDetail(t);return {row:listed,detail:await d.locator('.grove-fact').evaluateAll(xs=>xs.map(x=>({role:x.dataset.fact,
+       label:(x.querySelector('span')?.innerText||'').trim(),value:(x.querySelector('strong')?.innerText||'').trim()})))}};
+     const facts=await groveFacts(title),of=(list,role)=>list.filter(f=>f.role===role);
+     if(next.handback_on){assert.match(shown,new RegExp(later));
+      assert.deepEqual(of(facts.detail,'due').map(f=>[f.label,f.value.replace(/^今天 /,'')]),[['交回',next.handback_on]],'the corrected handback is the handback fact')}
+     else{assert.doesNotMatch(shown,new RegExp(handback),'the cleared handback day is not shown anywhere');
+      assert.deepEqual(of(facts.detail,'due').map(f=>[f.label,f.value]),[['交回','日期未写明，不猜']],'detail: the handback stays an explicit unknown without a date');
+      assert.deepEqual(of(facts.row,'due').map(f=>f.text),['交回 日期未写明'],'first layer: the handback stays an explicit unknown');
+      assert.deepEqual(of(facts.detail,'complete').map(f=>f.value.replace(/^今天 /,'')),[later],'the completion day is kept');
+      assert.deepEqual(of(facts.detail,'scheduled').map(f=>f.value),[day],'the plan stays the original day')}
      await fit(p);await proof(p,'parent-after-correct-'+width);
      assert.equal((await study()).filter(i=>i.title===title).length,1,'same one item after correction');
     }
