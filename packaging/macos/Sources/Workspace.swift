@@ -709,11 +709,16 @@ struct SubjectList: View {
         } else if let s = store.current?.schedule, !(s.lessons.isEmpty && s.plans.isEmpty) {
             Section {
                 ForEach(s.lessons) { t in LessonCard(table: t).listRowSeparator(.hidden) }
-                ForEach(s.plans) { p in PlanRow(plan: p, openReview: { r in store.openTopic(r.record_id, r.child_id) },
-                                                draft: p.review == nil ? nil : store.reviewDraft(p, day: store.day),
-                                                edit: { d, status in await store.saveReview(p.id, from: store.day, draft: d, status: status) },
-                                                restart: { store.reviewDrafts[p.id] = nil; Task { await store.load() } })
-                    .listRowSeparator(.hidden) }
+                // 家庭复习卡片不参加任务列表的选中（行键不是 String、也不加 tag）：点日期/时间直接交给控件，列表不选中这条复习、不抢焦点；
+                // 其他日程行仍按原编号 tag，选中照旧。
+                ForEach(s.plans, id: \.listKey) { p in
+                    let row = PlanRow(plan: p, openReview: { r in store.openTopic(r.record_id, r.child_id) },
+                                      draft: p.review == nil ? nil : store.reviewDraft(p, day: store.day),
+                                      edit: { d, status in await store.saveReview(p.id, from: store.day, draft: d, status: status) },
+                                      restart: { store.reviewDrafts[p.id] = nil; Task { await store.load() } })
+                        .listRowSeparator(.hidden)
+                    if p.review == nil { row.tag(p.id) } else { row }
+                }
                 if s.cancelled > 0 { Text("另有 \(s.cancelled) 项安排已取消，未列出。").font(Palette.small).foregroundStyle(Palette.ink2).listRowSeparator(.hidden) }
             } header: {
                 WoodTag(text: "课表与日程", count: "\(s.lessons.reduce(0) { $0 + $1.sessions.count } + s.plans.count) 项").padding(.top, 8).padding(.bottom, 2)
@@ -1112,6 +1117,10 @@ let reviewDayFormat: DateFormatter = {
     let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX")
     f.timeZone = .current; f.dateFormat = "yyyy-MM-dd"; return f
 }()
+
+/// 任务列表里日程行的行键：类型不是 String，ForEach 就不会按编号把这一行默认当成可选中的任务（只有显式 tag 的行可选）。
+struct PlanListKey: Hashable { let id: String }
+extension PlanItem { var listKey: PlanListKey { PlanListKey(id: id) } }
 
 struct PlanRow: View {
     let plan: PlanItem
