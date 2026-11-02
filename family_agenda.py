@@ -756,8 +756,8 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
                             for m in messages):
         # Read as the original action's own date check reads them (a labelled or comma day head, an ordered 先…，再… work);
         # this in-memory reading copy only, the saved requirement words stay as written.
-        import family_agent
-        read=lambda o:family_agent._school_date_head_joined(o['text'])
+        from family_agent import _school_date_head_joined as joined  # a local name: metadata's own family_agent use stays global
+        read=lambda o:joined(o['text'])
         for o in attached:messages=[dict(m,text=m.get('text','')+'\n'+read(o)) if m['ref']==o['ref'] else m for m in messages]
         date_quote='\n'.join(read(o) for o in attached)
     # Only words found in this child's own originals of this item can tell what its day means.
