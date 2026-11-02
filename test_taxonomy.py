@@ -194,5 +194,41 @@ class UnitEvidenceTest(unittest.TestCase):
                 self.assertEqual(other[0], 'parent_check', other); self.assertIn('核对不了', other[1])
 
 
+from types import SimpleNamespace
+
+
+class ReadOnlyStateTest(unittest.TestCase):
+    """P4: opening a wrong record's topic panel only reads. A cold database gets no topic table; a corrected record's old
+    diagnosis reads as history, its DeepTutor verdicts as unsettled, with no void row written and no DeepTutor call."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); path = Path(self.tmp.name) / 'f.sqlite3'
+
+        def connect():
+            c = sqlite3.connect(path); c.row_factory = sqlite3.Row; return c
+        self.app = SimpleNamespace(connect=connect, profiles=lambda c=None: [dict(id='child-1', name='示例甲', grade='')])
+        with connect() as c:
+            c.execute('CREATE TABLE records(id INTEGER PRIMARY KEY, child TEXT, day TEXT, subject TEXT, title TEXT, note TEXT, source TEXT, attachments TEXT, created TEXT)')
+            c.execute("INSERT INTO records VALUES(1,'示例甲','2026-10-28','数学','虚构错题',?,?,'[]','2026-10-28T10:00:00+08:00')", ('题面：1+2=?\n学生原答：4', ft.WRONG_SOURCE))
+
+    def tables(self):
+        with self.app.connect() as c: return {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+    def test_cold_and_changed_basis_reads_write_nothing(self):
+        st = ft.state(self.app, dict(child_id='child-1', record_id=1))
+        self.assertEqual(self.tables(), {'records'}); self.assertEqual((st['links'], st['diagnoses']), ([], []))
+        with self.app.connect() as c:
+            ft.ensure_schema(c); rec = ft.wrong_record(self.app, c, 'child-1', 1)
+            c.execute("INSERT INTO topic_diagnoses(child_id,record_id,record_hash,topic_id,pack_sha,engine_sha256,opts,request_id,created_at,updated_at) "
+                      "VALUES('child-1','1',?,'t1',?,'e','{\"limit\":8}','r1',1,1)", (ft.record_hash(rec), 'x' * 40))
+            c.execute("INSERT INTO topic_retries(diagnosis_id,child_id,record_id,record_hash,topic_id,qid,answer,taxonomy_verdict,deeptutor,outcome,request_id,created_at) "
+                      "VALUES(1,'child-1','1',?,'t1','q1','3','correct','{\"is_correct\": true}','independent_correct','r2',2)", (ft.record_hash(rec),))
+            c.execute("UPDATE records SET note=note||'\n家长更正：原答是3' WHERE id=1")
+        with mock.patch.object(ft.family_deeptutor, 'call', side_effect=AssertionError('opening the panel must not call DeepTutor')):
+            st = ft.state(self.app, dict(child_id='child-1', record_id=1))
+        with self.app.connect() as c: voids = c.execute('SELECT count(*) FROM topic_basis_voids').fetchone()[0]
+        self.assertEqual(voids, 0)
+        self.assertEqual([(d['basis'], d['void']) for d in st['diagnoses']], [('basis_changed', {'state': 'unsettled', 'question_ids': ['q1']})])
+
+
 if __name__ == '__main__':
     unittest.main()
