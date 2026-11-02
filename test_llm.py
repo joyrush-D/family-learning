@@ -1113,7 +1113,7 @@ def school_task_output_budget_contract():
     for responses in (False,True):
         field='max_output_tokens' if responses else 'max_tokens'
         body,wait=send(text,'family_school_task',responses)
-        assert (body['model'],effort(body),body[field],wait)==('fictional-light','low',6000,45)
+        assert (body['model'],effort(body),body[field],wait)==('fictional-light','none',6000,45)  # its explicit light effort
         assert not {'max_tokens','max_output_tokens'}-{field}&body.keys()
         body,wait=send(text,'family_school_task',responses,FAMILY_LLM_LIGHT_MODEL='')
         assert (body['model'],effort(body),body[field],wait)==('fictional-main','low',6000,45)
