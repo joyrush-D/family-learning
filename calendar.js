@@ -238,11 +238,11 @@ function groveLearningHTML(v){
 }
 function groveRows(view){return [...(view?.groups||[]),...(view?.closed||[])].flatMap(g=>g.items||[])}
 function groveWide(){return matchMedia('(min-width: 900px)').matches}
-function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.label+' '+(f.known?f.value:'日期未写明')}
+function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.role==='submit'&&f.today?'今天先提交':f.role==='check'&&f.today?'今天先检查':f.label+' '+(f.known?f.value:'日期未写明')}
 function groveChipsHTML(r){
  const chips=[];if(groveWhen[r.when])chips.push(`<span class="grove-chip is-soft" data-when="${esc(r.when)}">${groveWhen[r.when]}</span>`);
  for(const t of r.times||[])chips.push(`<span class="grove-chip is-leaf" data-plan-time="${esc(t.id)}">日程 ${esc(groveClock(t))}</span>`);
- for(const f of (r.facts||[]).filter(f=>f.role==='due'||f.role==='complete'))
+ for(const f of (r.facts||[]).filter(f=>f.role==='due'||f.role==='complete'||f.role==='submit'||f.role==='check'))
   chips.push(`<span class="grove-chip${f.state==='next_morning'||f.state==='overdue'?' is-coral':f.known?'':' is-soft'}" data-fact="${esc(f.role)}">${esc(groveFactWords(f))}</span>`);
  if(r.pending_review)chips.push('<span class="grove-chip is-coral">待核对</span>');
  return chips.join('');
@@ -266,13 +266,22 @@ function groveCheckHTML(r){
  if(t.agenda?.category==='homework'&&t.homework_report?.needs_review)return '<span class="grove-mark" role="img" aria-label="作业要求待核对，暂不能确认完成">?</span>';
  return `<label class="checkhit grove-check"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`;
 }
+// One affair's newer school notice on its one card (server version): a clear same-publisher update shows its latest
+// requirement with one short change line; any other notice is named for review while the old requirement stays.
+function groveVersionLine(v){return v?`<span class="grove-${v.state==='latest'?'version':'unclear'}" role="note" data-version="${esc(v.state)}">${esc(v.state==='latest'?'学校要求已更新：'+(v.change||''):(v.note||'有新通知待核对'))}</span>`:''}
+function groveVersionHTML(v){if(!v)return '';const list=l=>`<ul class="grove-standards">${(l||[]).map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`;
+ const who=n=>(n.publications||[]).map(p=>[p.sender,p.source_name].filter(Boolean).join(' · ')).filter(Boolean).join('；');
+ return `<section class="grove-card" data-version-detail="${esc(v.state)}"><h3>${v.state==='latest'?'学校要求已更新':'新通知待核对'}</h3>`
+  +(v.state==='latest'?`<p class="small">${esc(v.change||'')}；以上显示老师后发的最新要求。</p><p class="small muted">原要求（${esc(v.previous?.title||'')}）：</p>${list(v.previous?.lines)}`:`<p class="grove-unclear" role="note">${esc(v.note||'')}</p>`)
+  +(v.notices||[]).map(n=>`<p class="small muted">${v.state==='latest'?'更新通知':'新通知（待在待核对里确认）'}：${esc(who(n))} ${esc((n.published_at||'').slice(0,16).replace('T',' '))}</p>${v.state==='latest'?'':list(n.lines)}`).join('')+'</section>'}
+function groveUpcomingHTML(view){const u=view.upcoming||[];return u.length?`<p class="grove-upcoming small muted" data-grove-upcoming>即将/待补：${u.map(x=>`${esc(x.day.slice(5))} ${esc(x.title)}${x.pending_review?'（待补）':''}${x.change?'（'+esc(x.change)+'）':''}`).join('；')}</p>`:''}
 function groveRowHTML(r){
  const on=r.id===groveSelected,meta=[groveSource(r),groveProgressWords(r.progress)].filter(Boolean).join(' · ');
  const task=r.task_id?` data-today-task="${esc(r.task_id)}" data-query-target="task:${esc(r.task_id)}"`:'';
  return `<article class="grove-row${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
   +`${groveCheckHTML(r)}<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
   +`<span class="grove-title">${esc(r.title)}</span><span class="grove-lines">${r.lines?.length?esc(r.lines.join('；')):'<em>完成标准未提供，待补充</em>'}</span>`
-  +`${r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:''}`
+  +`${r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:''}${groveVersionLine(r.version)}`
   +`<span class="grove-chips">${groveChipsHTML(r)}</span>${meta?`<span class="grove-meta">${esc(meta)}</span>`:''}</button></article>`;
 }
 function groveMaterialHTML(f){
@@ -323,6 +332,7 @@ function groveDetailHTML(r){
   +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
   +`<section class="grove-card"><h3>要做什么与完成标准</h3>${standards}${r.complete_words?`<p class="small muted">完成要求：${esc(r.complete_words)}</p>`:''}${!t.agenda?.due_on&&t.due&&t.due!=='无明确截止'?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}</section>`
   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
+  +groveVersionHTML(r.version)
   +`<div class="grove-facts">${facts}</div>`
   +(homework?`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section><div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
   +`<section class="grove-card"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted">还没有反馈。照片可以不交，只写几句文字也行；没有反馈不等于没做。</p>'}<div class="grove-actions">${primary}</div></section>`
@@ -360,10 +370,10 @@ function todayTasksHTML(){
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
  const originalGap=sources.some(s=>s.unread_count>0);
- const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
- const groups=view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${g.items.length} 项</span></h2>`
+ const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
+ const groups=(view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${g.items.length} 项</span></h2>`
   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
-  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>';
+  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view);
  const closed=(view.closed||[]).flatMap(g=>g.items||[]);
  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');

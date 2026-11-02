@@ -71,7 +71,7 @@ function loginProxy(appPort,user,password){
   const steps=[
    // Initial login from the workbench: the service's own login page in a login window; the window closes and the list reloads.
    {name:'login needed',until:'login-needed',timeout:20},{name:'login open',click:'login-open'},{name:'web login',native:'web_login'},
-   {name:'list',until:'list-summary',contains:'共',timeout:20},{name:'login state',native:'state'},
+   {name:'list',until:'list-summary',contains:'共',timeout:20},{name:'upcoming',until:'upcoming',contains:'即将/待补：'},{name:'login state',native:'state'},
    {name:'pick child',key:String(childIndex+1),modifiers:['command']},
    {name:'row',click:'row-'+item.id},{name:'detail',until:'detail-title',contains:item.title.slice(0,4)},
    {name:'wide',width:1440,native:'snapshot'},
@@ -138,7 +138,11 @@ function loginProxy(appPort,user,password){
   assert.equal(code,0,'the successful native test App must exit normally');
   const r=Object.fromEntries(final.steps.map(s=>[s.name,s.result]));
   assert.equal(r['still dirty'].dirty,true,'Esc on a dirty sheet keeps editing');
-  assert.match(r['list'].text,/以后安排 2/);assert.ok(!/以后交|明早/.test(r['list'].text),'no invented handback or morning in the summary: '+r['list'].text);
+  // The two later items (lesson-day dictation, a scope still pending) are named with their own day on one line, never today's work.
+  assert.match(r['list'].text,/即将\/待补 2/);assert.equal(mine.upcoming.length,2,'the frozen day names two later items');
+  for(const u of mine.upcoming){assert.ok(r['upcoming'].text.includes(u.day.slice(5)+' '+u.title),'upcoming line lists '+u.title+': '+r['upcoming'].text);
+   assert.ok(!mine.groups.flatMap(g=>g.items).some(i=>i.id===u.id),'a later item is not listed as this day\'s work');}
+assert.ok(!/以后交|明早/.test(r['list'].text),'no invented handback or morning in the summary: '+r['list'].text);
   assert.equal(r['login state'].login_required,false);assert.equal(r['login state'].login_window,false,'the login window closed itself after login');
   assert.equal(r['expired state'].login_required,true);assert.ok(r['expired state'].sheet.startsWith('feedback-'));assert.equal(r['expired state'].dirty,true);
   assert.equal(r['relogged state'].sheet,r['expired state'].sheet,'the same sheet stayed open through the login');assert.equal(r['relogged state'].dirty,true,'its draft stayed');

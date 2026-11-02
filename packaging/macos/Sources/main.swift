@@ -1321,7 +1321,8 @@ extension AppDelegate {
 
     /// 控件不在可见区域时，像滚轮一样让它所在的真实滚动视图滚到那里（不调用工作台自己的任何动作）。
     func reveal(_ id: String) async -> Bool {
-        if TestTargets.live(id) == nil, id.hasPrefix("row-") || id.hasPrefix("wrong-") { return await revealUnbuiltRow(id) }
+        // “即将”是清单最后一行、唯一稳定的 upcoming 锚点：同样可能还没建出来，按同一条公开逐行显露路径找，其他标识不放开。
+        if TestTargets.live(id) == nil, id.hasPrefix("row-") || id.hasPrefix("wrong-") || id == "upcoming" { return await revealUnbuiltRow(id) }
         guard let (view, _) = TestTargets.live(id), !onScreen(view) else { return false }
         var moved = view.scrollToVisible(view.bounds)
         if !moved, let scroll = view.enclosingScrollView, let doc = scroll.documentView {

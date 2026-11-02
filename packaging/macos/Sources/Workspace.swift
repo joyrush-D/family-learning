@@ -206,11 +206,19 @@ final class WorkspaceStore: ObservableObject {
         case .calendar:
             if showDone { return "已办 \(v.counts["closed"] ?? 0) 项" }
             var parts = ["共 \(v.counts["open"] ?? 0) 项", "今天要做 \(v.counts["today"] ?? 0)"]
-            for (key, label) in [("later", "以后安排"), ("overdue", "已过期限"), ("earlier", "之前安排"), ("unknown", "日期未写明")] {
+            for (key, label) in [("later", "以后安排"), ("overdue", "已过期限"), ("earlier", "之前安排"), ("unknown", "日期未写明"), ("upcoming", "即将/待补")] {
                 if let n = v.counts[key], n > 0 { parts.append("\(label) \(n)") }
             }
             return parts.joined(separator: " · ")
         }
+    }
+
+    /// 以后课堂/待补范围的事项（服务端 day_view 同一 upcoming，与网页同一行）：日期、标题、待补与变化；发生日完整列出，不算今天。
+    var upcomingLine: String? {
+        guard mode == .calendar, !showDone, let u = current?.upcoming, !u.isEmpty else { return nil }
+        return "即将/待补：" + u.map { x in
+            "\(x.day.dropFirst(5)) \(x.title)" + (x.pending_review ? "（待补）" : "") + ((x.change ?? "").isEmpty ? "" : "（\(x.change ?? "")）")
+        }.joined(separator: "；")
     }
 
     static func formatter() -> DateFormatter {
@@ -520,6 +528,8 @@ func factWords(_ f: DayFact) -> String {
     if f.state == "next_morning" { return f.label + " 明天" }  // 只知道日期是明天，不写“明早”
     if f.state == "overdue" { return "已逾期 · " + f.value }
     if f.role == "complete", f.today == true { return "今天完成" }
+    if f.role == "submit", f.today == true { return "今天先提交" }
+    if f.role == "check", f.today == true { return "今天先检查" }
     return f.label + " " + (f.known ? f.value : "日期未写明")
 }
 
@@ -665,6 +675,10 @@ struct SubjectList: View {
                 Text(store.showDone ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
                     .font(Palette.body).foregroundStyle(Palette.ink2).probe("list-empty")
             }
+            if let line = store.upcomingLine {
+                Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                    .listRowSeparator(.hidden).probe("upcoming", text: line)
+            }
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
@@ -686,10 +700,15 @@ struct ItemRow: View {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
                     Text(item.lines.joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
+                    if let v = item.version {
+                        // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
+                        let words = v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")
+                        Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version-" + item.id, text: words)
+                    }
                 } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
                 FlowRow(spacing: 6, lineSpacing: 4) {
                     if !item.whenLabel.isEmpty { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
-                    ForEach(item.facts.filter { $0.role == "due" || $0.role == "complete" }, id: \.self) { f in
+                    ForEach(item.facts.filter { $0.role == "due" || $0.role == "complete" || $0.role == "submit" || $0.role == "check" }, id: \.self) { f in
                         let (tone, ink) = factTone(f)
                         Badge(text: factWords(f), tone: tone, ink: ink)
                     }
@@ -1186,15 +1205,21 @@ struct Inspector: View {
                 if !item.actionFacts.isEmpty { facts(item) }
                 section("要做什么与完成标准", "checklist") {
                     if item.lines.isEmpty { Text("完成标准未提供，待补充").font(Palette.body).foregroundStyle(Palette.coralInk).probe("detail-no-standard") }
-                    ForEach(Array(item.lines.enumerated()), id: \.offset) { _, line in
+                    // 冒烟锚点：当前正文逐行、完成要求和待核对提示各给它自己显示的同一句话（不含历史或隐藏的正文）。
+                    ForEach(Array(item.lines.enumerated()), id: \.offset) { index, line in
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
                             Image(systemName: "leaf.fill").font(.system(size: 11)).foregroundStyle(Palette.leaf400).accessibilityHidden(true)
                             Text(line).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                .probe("detail-line-\(item.id)-\(index)", text: line)
                         }
                     }
-                    if !item.complete_words.isEmpty { Text("完成要求：" + item.complete_words).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                    if !item.complete_words.isEmpty {
+                        let complete = "完成要求：" + item.complete_words
+                        Text(complete).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("detail-complete-" + item.id, text: complete)
+                    }
                     if item.pending_review {
-                        Text("这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。").font(Palette.small).foregroundStyle(Palette.coralInk)
+                        let hint = "这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。"
+                        Text(hint).font(Palette.small).foregroundStyle(Palette.coralInk).probe("detail-pending-" + item.id, text: hint)
                     }
                 }
                 if !item.task_id.isEmpty { materials(item) }
