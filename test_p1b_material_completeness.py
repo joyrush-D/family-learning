@@ -42,6 +42,22 @@ class OriginalDateRoleTests(unittest.TestCase):
         self.assertEqual(agent._school_bracket_restated('今晚（11月8日）做第7页','2026-11-08'),'今晚做第7页')
         self.assertEqual(agent._school_bracket_restated('第7页第2–4题','2026-11-08'),'第7页第2–4题')
 
+    def test_a_weekday_with_its_matching_bracket_is_that_day_and_a_mismatch_is_none(self):
+        f=agent._school_bracket_restated  # sent on Sunday 2026-11-08: the sending day is the only anchor
+        self.assertEqual((f('周一（11月9日）交','2026-11-08'),f('下周一（11月9日）交','2026-11-08')),('11月9日交','11月9日交'))
+        self.assertEqual(f('周三（2026年11月11日）交回班主任','2026-11-08'),'2026年11月11日交回班主任')
+        for text in ('周三（11月12日）交','周日（11月15日）交','本周三（2026年11月11日）交回'):
+            with self.subTest(text=text):self.assertIsNone(f(text,'2026-11-08'))  # another, or no single such day: never guessed
+        self.assertIsNone(f('周一（11月9日）交',''))
+        self.assertEqual(roles('今晚做练习册第7页第2–4题，每题写步骤；周一（11月9日）交。'),({'2026-11-08'},'2026-11-09'))
+        self.assertIsNone(roles('今晚做练习册第7页第2–4题，每题写步骤；周一（11月10日）交。'))
+
+    def test_by_the_child_leads_an_action_as_by_the_parent_or_please_does(self):
+        import family_agenda
+        for lead in ('由孩子','由学生','请孩子','由家长'):
+            for text in ('11月9日{}把参观回执签字交回。','明天{}把数学练习册第4页完成'):
+                with self.subTest(lead=lead,text=text):self.assertEqual(family_agenda.deadlines(text.format(lead),'2026-11-08'),{'2026-11-09'})
+
     def test_another_actions_quote_within_the_range_makes_it_shared(self):
         self.assertIsNone(roles('今晚做练习册第7页第2–4题，每题写步骤；明早交。',['每题写步骤']))
 
