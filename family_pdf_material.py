@@ -342,7 +342,7 @@ def _claim_intact(store, c, source, message, value, key, fp):
     if current is None or current['fingerprint']!=value['fingerprint'] or job is None or job['fingerprint']!=fp:return False
     scope,undecided,mapped=_decision_scope(store,c,source,message,current)
     return (scope==value['decision_scope'] and (not value.get('upgrade_pages') or undecided)
-            and (not value.get('scope_pages') or undecided and not mapped)  # a supplement: every known item an undecided pending original
+            and (not value.get('scope_pages') or _scope_undecided(c,source,message))  # a supplement: every citing item still undecided
             and ('previous_requirements' not in value or mapped or bool(value.get('scope_pages'))))
 
 
@@ -355,6 +355,17 @@ def _void(c, key, fp, value=None):
         c.execute("UPDATE agent_jobs SET done=1,fingerprint=? WHERE id=? AND fingerprint=?", ('discarded:'+fp, key, fp))
     else:
         c.execute('DELETE FROM agent_jobs WHERE id=? AND fingerprint=?', (key, fp))
+
+
+def _scope_undecided(c, source, message):
+    """Every school item of this child citing the message is an undecided pending candidate (no task, decision, history or
+    dependency), as an image receipt's supplement requires (family_media._scope_supplement); legacy page-summary
+    eligibility (_school_pending_original) is a different rule and is not used here."""
+    ref='message:'+source['id']+':'+message['id']
+    rows=[r for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND child_id=? AND state!='superseded'",(source['child_id'],))
+          if any(q.get('ref')==ref for q in json.loads(r['evidence']))]
+    return bool(rows) and not any(r['state']!='pending' or r['task_id'] or any(json.loads(r['plan']).get(k) for k in family_media._DECIDED_PLAN)
+                                  for r in rows)
 
 
 def _scope_gap(batches, rows):
@@ -414,7 +425,7 @@ def prepare(store, now, budget=ROUND_CALLS):
                                 value['previous_requirements']=[text for original in legacy[0]['draft']['originals']
                                     for text in original['requirements']]
                         elif page_count is not None and not _pending(done,page_count):continue
-                    elif undecided and not mapped and page_count is not None and not _pending(done,page_count):
+                    elif page_count is not None and not _pending(done,page_count) and _scope_undecided(c,source,message):
                         # D: one complete document's first group read before uncertainty_scopes with unscoped doubts is read once
                         # more, bounded, keeping its exact requirement lines (and so its part ids) as the one-time source.
                         gap=_scope_gap(batches,_rows(c,source,message,value['fingerprint']))
