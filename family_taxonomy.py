@@ -499,7 +499,8 @@ def state(app, obj, root=None):
             shown, offers = [], []
             for qid, mode in (c.execute('SELECT qid,mode FROM topic_exposures WHERE diagnosis_id=? ORDER BY id', (d['id'],)) if 'topic_exposures' in have else ()):
                 (offers if mode == 'retry' else shown).append(qid)
-            done = {r['qid'] for r in retries}; offer = next((q for q in reversed(offers) if q not in done), '')
+            # 当前新题只看本次诊断最近一次出示的那道：它已提交就没有当前新题，不回退到更早出示、未作答的旧题（旧出示行原样保留）
+            done = {r['qid'] for r in retries}; offer = offers[-1] if offers and offers[-1] not in done else ''
             void = voids.get(d['id'])
             if void is None and d['record_hash'] != now:  # 还没作废：只读列出，不在打开时作废
                 graded = list(dict.fromkeys(r['qid'] for r in retries if r['deeptutor']))
