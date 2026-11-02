@@ -8,9 +8,11 @@ const net=require('node:net');
 const {setTimeout:delay}=require('node:timers/promises');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
 // The current home list: the visible Grove row opens its detail, whose own action opens the task (not a hidden old page).
-// The same task's current Grove detail (opened from its own visible row) without pressing its action.
-async function groveEntry(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().waitFor();return d}
-async function openFromGrove(p,id){const d=p.locator('#groveDetail');if(!await d.locator(`[data-task="${id}"]`).first().isVisible().catch(()=>false))await p.locator(`article.grove-row[data-query-target="task:${id}"] [data-grove-open]`).first().click();await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
+// On a narrow screen another task's detail covers the list, so its own visible “‹ 返回清单” is pressed first; a task already shown stays.
+async function groveShow(p,id){const d=p.locator('#groveDetail'),action=d.locator(`[data-task="${id}"]`).first();if(await action.isVisible().catch(()=>false))return d;const row=p.locator(`article.grove-row[data-query-target="task:${id}"]`).first();if(!await row.isVisible().catch(()=>false)){const back=p.locator('[data-grove-back]:visible').first();if(await back.count()){await back.click();await row.waitFor({state:'visible'})}}await row.locator('[data-grove-open]').click();await action.waitFor();return d}
+// The same task's current Grove detail without pressing its action.
+async function groveEntry(p,id){return groveShow(p,id)}
+async function openFromGrove(p,id){const d=await groveShow(p,id);await d.locator(`[data-task="${id}"]`).first().click();await p.locator('#taskDialog[open]').waitFor()}
 // The stage line under the count, the note under the fill button and the right-hand save status, read together with the count.
 const reviewStage=panel=>panel.evaluate(el=>{const result=el.querySelector('[data-homework-review-result]');return {stage:result.querySelector('.homework-review-stage')?.textContent??null,hint:result.querySelector('.homework-review-next>p')?.textContent??null,questions:!!result.querySelector('.homework-review-questions'),counts:result.querySelector('.homework-review-counts')?.textContent??null,status:document.querySelector('#taskFeedbackStatus').textContent}});
 // After filling, the unsaved note and the original save button must both be whole, at least 12px clear (outside the button's focus ring), where a parent can see them: the viewport, the modal task dialog and every clipping ancestor inside it, above its sticky close bar.
