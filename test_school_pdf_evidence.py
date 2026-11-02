@@ -1160,7 +1160,8 @@ class SchoolPdfEvidenceTests(test_pdf_material.Base):
             ('title/goal/advice留空且state=review；已读完整原件中只是名称/标题的requirement行是已读资料，用途unknown时也按下方规则state=reference，','title/goal/advice留空且state=review，'),
             ('当前candidate_id须恰好在一项的existing_item_id中返回一次，不默认将数组第一项当原候选；change=new只说明与已保存school_tasks的关系，不表示另建候选或清空编号。不对应任何existing_actions的另一独立行动existing_item_id留空。','当前candidate_id须恰好返回一次，不默认将数组第一项当原候选。新独立行动existing_item_id留空。')]
         # The one intended same-affair rule added since these replies (asserted present once below).
-        previous=previous+[(agent.SCHOOL_SAME_PROMPT,''),(agent._SCHOOL_PART_DOUBT_PROMPT,'')]  # later rules, undone like the others
+        previous=previous+[(agent.SCHOOL_SAME_PROMPT,''),(agent._SCHOOL_PART_DOUBT_PROMPT,''),  # later rules, undone like the others
+                           ('那一部分；original_parts要求行已标出疑点范围时按其规则。','那一部分。')]
         for case,text,expected,reply_sha,request_sha,v in self.ACTUAL_FLASH:
             with self.subTest(case):
                 probe=type(self)('runTest');probe.setUp()
