@@ -208,6 +208,8 @@ body[data-page=sources] .source-cards{grid-template-columns:1fr}
 [data-saved-review-text] .saved-review-question{scroll-margin-top:12px}[data-saved-review-text] .saved-review-question:focus{outline:2px solid var(--green);outline-offset:3px;border-radius:4px}
 /* Task dialog on a phone: the sticky close bar also covers the padding under it, so scrolled text never shows below the bar. */
 @media(max-width:850px){#taskDialog>form>.actions::after{content:"";position:absolute;left:0;right:0;top:100%;height:calc(26px + env(safe-area-inset-bottom));background:inherit}}
+/* ...and focus or scroll-into-view stops above that bar (as #recordDialog does), so a control is never left under it. */
+@media(max-width:850px){#taskDialog{scroll-padding-bottom:calc(112px + env(safe-area-inset-bottom))}}
 #recordForm.followup-mode>h2+.muted,#recordForm.followup-mode .record-child-field,#recordForm.followup-mode #recordKindRow,#recordForm.followup-mode #relationTitle{display:none}.followup-context{margin:6px 0 14px}.followup-context p{margin:0 0 6px}.followup-context p:last-child{margin:0}.followup-row{display:flex;gap:10px;align-items:baseline}.followup-row span{flex:none;width:4em;white-space:nowrap;font-size:13px;opacity:.75}.followup-row strong{min-width:0;overflow-wrap:anywhere}
 /* Record dialog: the cancel/save bar stays on the bottom edge at every width, fills the padding under it, and focus or scrolling keeps controls above it. */
 #recordDialog{scroll-padding-bottom:calc(112px + env(safe-area-inset-bottom))}#recordDialog .actions{position:sticky;bottom:0;z-index:1;background:#132136;padding:12px 0;margin-top:12px;box-shadow:0 -1px 0 var(--line)}#recordDialog .actions::after{content:"";position:absolute;left:0;right:0;top:100%;height:26px;background:inherit}
