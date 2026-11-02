@@ -508,7 +508,7 @@ class WrongReviewHTTPTest(unittest.TestCase):
     def test_direct_wrong_refuses_foreign_non_homework_missing_and_explicit_feedback_context(self):
         mine = app.new_task(dict(child='示例甲', title='虚构同名作业', category='homework'))
         theirs = app.new_task(dict(child='示例乙', title='虚构同名作业', category='homework'))
-        notice = app.new_task(dict(child='示例甲', title='虚构同名作业'))
+        notice = app.new_task(dict(child='示例甲', title='虚构同名作业', category='todo'))
         gone = app.new_task(dict(child='示例甲', title='虚构同名作业', category='homework'))
         with app.connect() as c:
             c.execute('DELETE FROM manual_tasks WHERE id=?', (gone['id'],))
