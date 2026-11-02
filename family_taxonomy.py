@@ -430,13 +430,17 @@ def state(app, obj, root=None):
                'links': links(c, record['child_id'], record), 'diagnoses': diags, 'seen_qids': sorted(ev)}
         # 同一道错题已保存的家庭复习、原作业（显式关联，独立错题没有）和家长核对时留下的知识点线索：只读。
         context = app.record_review_context(c, record) if hasattr(app, 'record_review_context') else {}
-        hint = context.pop('topic_hint', '')
+        hint, terms = context.pop('topic_hint', ''), context.pop('diagnosis_terms', [])
         out.update(context)
-        if hint and pack and (not record['subject'] or '数学' in record['subject']):
-            own = child_grades(next((p.get('grade') for p in app.profiles(c) if p['id'] == record['child_id']), ''))
-            found = search(pack['topics'], hint[:60], child_grades=own)  # 原知识包检索；候选不是确认，不自动关联
-            out['hint'] = {'text': hint, 'status': found['status'], 'candidates': found['candidates'][:5]}
-        elif hint: out['hint'] = {'text': hint, 'status': 'none', 'candidates': []}
+        math = bool(pack) and (not record['subject'] or '数学' in record['subject'])
+        own = child_grades(next((p.get('grade') for p in app.profiles(c) if p['id'] == record['child_id']), '')) if math else ()
+
+        def look(text):  # 原知识包检索；候选不是确认，不自动关联；非数学或没有知识包就没有候选
+            found = search(pack['topics'], text[:60], child_grades=own) if math else {'status': 'none', 'candidates': []}
+            return {'text': text, 'status': found['status'], 'candidates': found['candidates'][:5]}
+        if hint: out['hint'] = look(hint)
+        # 已保存的当前诊断引用了这道原错题（record:编号）时，它对这题提到的知识点名称，同样只读检索成候选
+        out['diagnosis_hints'] = [dict(look(t['name']), created=t['created'], subject=t['subject']) for t in terms]
     status = pack_status(root)
     out.update(pack=status, deeptutor=family_deeptutor.status())
     if status['installed']:
