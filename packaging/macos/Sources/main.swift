@@ -1395,6 +1395,23 @@ extension AppDelegate {
         return unique.count == 1 ? unique[0] : nil
     }
 
+    /// 探针整行里真实可点的控件位置：沿行的水平中线从右往左（表单行的控件在右侧）对窗口做真实命中测试，取第一个命中按钮、
+    /// 弹出菜单或日期控件（不是容器、不是文字框）的点；同时记下每个采样点命中的类名供核对。只找位置，不设值、不调用动作。
+    func controlPoint(in frame: NSRect) -> (point: NSPoint?, hits: [String]) {
+        var hits: [String] = []
+        for step in stride(from: 19, through: 1, by: -1) {
+            let point = NSPoint(x: frame.minX + frame.width * CGFloat(step) / 20, y: frame.midY)
+            guard let w = testWindows().first(where: { $0.frame.contains(point) }), let content = w.contentView else { continue }
+            let local = w.convertFromScreen(NSRect(origin: point, size: .zero)).origin
+            guard let hit = (content.superview ?? content).hitTest(local) else { continue }
+            let name = String(describing: type(of: hit)); hits.append(name)
+            let control = hit is NSPopUpButton || hit is NSDatePicker || name.contains("PopUp") || name.contains("DatePicker")
+                || name.contains("Button") || (hit is NSControl && !(hit is NSTextField))
+            if control { return (point, hits) }
+        }
+        return (nil, hits)
+    }
+
     func tables(in view: NSView?) -> [NSTableView] {
         guard let view, !view.isHidden else { return [] }
         if let table = view as? NSTableView { return [table] }
@@ -1442,8 +1459,13 @@ extension AppDelegate {
         }
         // 带标签的复合控件（Picker、DatePicker 整行）：探针框住整行时点在容器空白处打不开控件。探针范围内恰有一个系统弹出/日期控件时，
         // 改点那个控件自己的中心——仍是真实鼠标事件，不设值、不调用动作；其他控件和列表行照旧。
-        var redirected = false
+        var redirected = false, sampled: [String] = []
         if rowTable == nil, let real = soleControl(in: node.frame) { center = NSPoint(x: real.midX, y: real.midY); redirected = true }
+        else if rowTable == nil, id.hasPrefix("oral-") || id.hasPrefix("feedback-") || id.hasPrefix("wrong-add") {
+            // 弹出层里的复合控件（只限这些弹出层探针，清单与主界面照旧）：按真实命中找到控件所在的点。
+            let probe = controlPoint(in: node.frame); sampled = probe.hits
+            if let point = probe.point, sampled.last.map({ !$0.contains("TextField") }) == true { center = point; redirected = true }
+        }
         // 诊断：探针范围里能看到的可交互角色（只记录，供核对命中，不参与选择）。
         let probeRoles = nodes().filter { !$0.role.isEmpty && $0.frame.width > 0 && node.frame.contains(NSPoint(x: $0.frame.midX, y: $0.frame.midY)) }.map(\.role)
         guard let w = testWindows().first(where: { $0.frame.contains(center) }) else { return ["ok": false, "error": "control outside the test window", "id": id, "scrolled": scrolled, "has_scroll_view": TestTargets.live(id)?.0.enclosingScrollView != nil] }
@@ -1516,7 +1538,7 @@ extension AppDelegate {
             }
         }
         return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
-                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "probe_roles": Array(Set(probeRoles)).sorted(), "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
+                "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "probe_roles": Array(Set(probeRoles)).sorted(), "probe_hits": sampled, "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
     }
 
     func key(_ chars: String, _ modifiers: [String], code: UInt16 = 0) async {
