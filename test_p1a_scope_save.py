@@ -1161,8 +1161,9 @@ class NaturalCountCorrectionTests(ScopeSaveTests):
         lesson, = [i for i in self.items_for(self.R3) if '听写' in i['title']]
         return home['task_id'], lesson
 
-    def correct(self, notice, quote):
+    def correct(self, notice, quote, before=None):
         task, lesson = self.setup_original()
+        if before:before(task)
         def replies(targets, pending):
             return [dict(proposal(self.R7, quote, '英语：跟读Unit 9第1—6个单词两遍', '今晚跟读Unit 9第1到6个单词，共两遍。\n只做口头跟读，不用抄写。',
                                   state='review', change='update', target=task), task_advice='可先听音频再跟读，分两遍完成。'),
@@ -1226,3 +1227,17 @@ class NaturalCountCorrectionTests(ScopeSaveTests):
     def test_a_notice_adding_its_own_step_stays_under_review(self):
         self.assert_review_naming_no_replaced_count('更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，并把录音发给老师。',
                                                     'Unit 9第1到6个单词今晚只需跟读两遍，并把录音发给老师')
+
+    def test_a_family_touched_task_keeps_its_requirement_and_the_notice_under_review(self):
+        def touched(task):
+            with self.app.connect() as c:
+                c.execute("INSERT INTO task_updates(id,status,updated) VALUES(?,?,?)", (task, '进行中', DAY + 'T17:00:00+08:00'))
+        task, _ = self.correct('更正刚才的英语跟读：Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写；周五课堂听写的范围还没定，等明天另行通知。',
+                               'Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写', before=touched)
+        for view in self.views(DAY):
+            en, = self.row(view, task)
+            self.assertEqual(en['version']['state'], 'review')
+            self.assertIn('家庭已有完成、状态或修改', en['version']['reasons'])
+            self.assertIn('每词三遍', '\n'.join(en['lines']), 'the family-touched requirement is never rewritten')
+            self.assertEqual(en['status'], '进行中')
+            self.assertIn('两遍', '\n'.join(en['version']['notices'][0]['lines']), 'the notice stays readable on the same card')
