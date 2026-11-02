@@ -193,6 +193,9 @@ class OralWordsTests(unittest.TestCase):
     setUp=HomeworkPrintScopeTests.setUp
     tearDown=HomeworkPrintScopeTests.tearDown
     request=HomeworkPrintScopeTests.request
+    new_task=HomeworkPrintScopeTests.new_task
+    upload=HomeworkPrintScopeTests.upload
+    feedback=HomeworkPrintScopeTests.feedback
 
     def save(self,key,text,goal=''):
         status,value=self.request('GET','/api/study?child_id=child-1&day=2026-11-02');self.assertEqual(status,200,value)
