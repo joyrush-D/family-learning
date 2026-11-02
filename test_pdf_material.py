@@ -729,7 +729,8 @@ class PdfMaterialTests(Base):
             self.assertEqual(self.rows('SELECT COUNT(*) FROM agent_pdf_material'), [(0,)])
             self.assertEqual(pdfm.prepare(self.store, self.now + dt.timedelta(minutes=6)), dict(used=1, failed=0))
         saved = json.loads(self.rows('SELECT payload FROM agent_pdf_material')[0][0])
-        self.assertEqual(set(saved), {'kind', 'title', 'note', 'uncertainties', 'originals'})
+        # scope_requested only records the reader protocol of this reading (dropped on every read); no fact field is stored.
+        self.assertEqual(set(saved), {'kind', 'title', 'note', 'uncertainties', 'originals', 'scope_requested'})
         self.assertEqual(saved['originals'], [dict(upload_id='6' * 32, **DRAFT, requirements=[],deferred_contexts=[])])
         self.assertEqual((self.facts(), self.consumers()), (facts, consumers))
         self.assertEqual([r[0] for r in self.progress()], [1])
