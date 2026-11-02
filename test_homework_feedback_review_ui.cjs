@@ -604,7 +604,7 @@ async function splitPdfFlow(p,host,width){
    const tallTask=(await post('api/task/new',{child,title:'虚构长原件更正 '+width,category:'homework',action:'核对三份长文件名原件',due:state.today})).task,names=['甲','乙','丙'].map(k=>k+'-'+'虚构长文件名'.repeat(30)+'.png'),ids=[];
    for(const [i,name] of names.entries()){const response=await fetch(host.url+'api/upload',{method:'POST',headers:{'X-Family-Token':state.token,'Content-Type':'image/png','X-File-Name':encodeURIComponent(name)},body:i===1?png:answerSheet});assert.equal(response.status,200);ids.push((await response.json()).attachment.id)}
    const tallId=(await post('api/task/feedback',{task_id:tallTask.id,child,day:state.today,note:'虚构三份长原件作答',attachments:ids,request_key:'synthetic-tall-originals-'+width})).record_id,tallAnswer=(await(await fetch(host.url+'api/state')).json()).records.find(r=>r.id===tallId);
-   await p.keyboard.press('Escape');await p.reload();await p.locator('[data-query-target="task:'+tallTask.id+'"] [data-task="'+tallTask.id+'"]:visible').first().click();await p.locator('#taskFeedbackHistory [data-task-feedback-edit="'+tallId+'"]').waitFor();
+   await p.keyboard.press('Escape');await p.reload();await openFromGrove(p,tallTask.id);await p.locator('#taskFeedbackHistory [data-task-feedback-edit="'+tallId+'"]').waitFor();
    await correct(tallAnswer,names,true);
    await p.locator('nav [data-page=home]').click();await openFromGrove(p,id);await p.locator('#taskFeedbackHistory').getByText('孩子独立订正后仍需换题核对').waitFor();
   }
@@ -801,7 +801,7 @@ async function splitPdfFlow(p,host,width){
   {
    const readPair=async()=>await(await fetch(host.url+'api/state')).json();
    const pairTask=(await post('api/task/new',{child,title:'虚构参考与作答计数 '+width,category:'homework',action:'核对一份孩子原答与一份老师参考',due:state.today})).task,answerName='synthetic-pair-answer-'+width+'.png',referenceName='synthetic-pair-reference-'+width+'.txt';
-   const openPair=async()=>{await p.reload();await p.locator('[data-query-target="task:'+pairTask.id+'"] [data-task="'+pairTask.id+'"]:visible').first().click();await p.locator('#taskDialog[open]').waitFor()};
+   const openPair=async()=>{await p.reload();await openFromGrove(p,pairTask.id)};
    await openPair();
    await p.locator('#taskForm [name=note]').fill('虚构：孩子原答');await p.locator('#cameraInput').setInputFiles({name:answerName,mimeType:'image/png',buffer:answerSheet});await p.locator('#pendingUploads img').waitFor();
    await threeAttemptSave(p,'/api/task/feedback',p.locator('#saveTaskFeedback'),async()=>/虚构/.test(await p.locator('#taskError').innerText()),async()=>/反馈已保存/.test(await p.locator('#taskFeedbackStatus').innerText()),readPair);
