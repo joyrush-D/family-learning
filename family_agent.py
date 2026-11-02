@@ -618,21 +618,60 @@ def _school_outcome_objects(part):
     return found
 
 
-def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
-    """A lesson assessment its own original sets on its own day (周五课堂听写，范围由老师明天再说) that a reply merged into
-    another item's goal, or left out, is its own item from the original's words (Root run9).
+def _school_lesson_unit(sentence, published):
+    """A lesson sentence's own words: its lesson clause and each following clause of it stating no day of its own, or only the
+    day its scope is deferred to (范围由老师明天再说); a clause stating another own day (今晚先在家默写一遍) starts another unit."""
+    parts=re.split(r'([，,])',sentence);unit=parts[0]
+    for i in range(1,len(parts)-1,2):
+        days=_school_clause_days(parts[i+1],published)
+        if (days is None or days) and not re.search(_SCHOOL_SCOPE_DEFERRED+'|'+_SCHOOL_LATER_WORD,parts[i+1]):break
+        unit+=parts[i]+parts[i+1]
+    return unit.strip(' ，,')
 
-    Only a sentence of the item's one wholly read home original, outside the item's own quote and quoted by no proposal,
-    whose first clause is the assessment held at the lesson its one day heads (_school_lesson_assessment), on a day the
-    item's own quote does not hold. The merging item keeps only its own words: a goal line is dropped only when its own
-    first clause is that lesson on that day; a goal still naming the lesson elsewhere keeps the reply as it was. The run
-    forms one review item (its scope is the teacher's to give; nothing is borrowed from the merging item's own range) with
-    the message's own subject and the run's own day. When one pending item of this child is bound to it by the program's
-    own proof (_school_pending_link: same publisher and source, later, same object, same day), the run names that item as
-    its notice instead of a second card; a lesson already one of this child's tasks (same source, publisher, day and object)
-    forms nothing new. Returns the proposals and marks (index -> dict(formed) / dict(receipt, split))."""
+
+def _school_goal_without(goal, published, day, unit):
+    """(goal without that lesson's own words, whether any were taken), wherever its summary puts them: a line of its own, one
+    paragraph or after another clause. Each clause that is the lesson on that day goes, with the following clauses of its
+    sentence that are the lesson unit's own words or defer its scope; every other clause keeps its words and order, and a
+    kept clause the lesson's words followed in one sentence ends with that sentence's own mark."""
+    flat=lambda value:re.sub(r'[\s，,。；;！!？?]','',value)
+    out=[];dropping=removed=False
+    for token in re.findall(r'[^，,。；;！!？?\n]+[，,。；;！!？?\n]*|[，,。；;！!？?\n]+',goal):
+        body=re.sub(r'[，,。；;！!？?\n]+$','',token);mark=token[len(body):];clause=body.strip()
+        if clause and _school_lesson_held(clause) and _school_clause_days(clause,published)=={day}:dropping=True
+        elif not (dropping and clause and (flat(clause) in flat(unit) or re.search(_SCHOOL_SCOPE_DEFERRED+'|'+_SCHOOL_LATER_WORD,clause))):dropping=False
+        if not dropping:
+            out.append(token);continue
+        removed=True
+        if re.search(r'[。；;！!？?\n]',mark):
+            if out and re.search(r'[，,]\s*$',out[-1]):out[-1]=re.sub(r'[，,]\s*$','',out[-1])+mark.strip(' ')
+            dropping=False
+    kept=re.sub(r'\n\s*\n+','\n',''.join(out)).strip().lstrip('，,。；;！!？? ')
+    return kept,removed
+
+
+def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
+    """An activity its own original holds at a lesson on that lesson's own day (周五课堂听写，范围由老师明天再说；下周一英语课
+    进行课堂抽读考查) that a reply merged into another item's goal, or left out, is its own item from the original's words
+    (Root run9/run10), whatever the summary's layout.
+
+    Only a sentence of the item's one wholly read home original whose first clause is that lesson activity on its one day
+    (_school_lesson_held), quoted by no other proposal, on a day the item's own words do not hold. Its unit is that clause
+    and the clauses after it that state no other day of their own (_school_lesson_unit). The unit may stand outside the
+    item's quote, or wholly inside a quote spanning more than one action, wherever: the item's working quote is then the
+    contiguous part holding its own days (the reply's quote stays verbatim in the split receipt), when every other part
+    states only those days and stays in its summary; otherwise its quote stays as the reply gave it. A proposal that is only
+    the lesson is that lesson's own item already. The merging item keeps every other clause of its summary, whatever the
+    line breaks (_school_goal_without); a summary still stating that day elsewhere keeps the item under a specific review.
+    The run forms one item with the message's own subject and the run's own day; nothing is borrowed from the merging item's
+    range. A scope the teacher leaves for later (_SCHOOL_SCOPE_DEFERRED) keeps it waiting for the teacher; a lesson whose
+    words are complete is organized by the ordinary rule, the known action, day, role and scope kept apart in its mark.
+    When one pending item of this child is bound to it by the program's own proof (_school_pending_link: same publisher and
+    source, later, same object, same day), the run names that item as its notice instead of a second card; a lesson already
+    one of this child's tasks (same source, publisher, day and object) forms nothing new. Returns the proposals and marks
+    (index -> dict(formed) / dict(receipt, split))."""
     from family_agenda import sent_day
-    entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};taken=set()
+    entries={e['ref']:e for e in evidence};out=[dict(p) for p in proposals];marks={};taken=set();trim=' ，,；;。'
     quotes=[p['title_quote'].strip() if isinstance(p.get('title_quote'),str) else '' for p in proposals]
     for index,p in enumerate(proposals):
         if (not isinstance(p.get('task_goal'),str) or not isinstance(p.get('evidence'),list) or p.get('task_state')=='reference'
@@ -644,50 +683,59 @@ def _school_separate_lessons(proposals, evidence, pending=(), tasks=()):
         if not sent or home.get('kind','text')!='text' or home.get('unread') or home.get('content_incomplete') or home.get('attachments'):continue
         q0=text.index(quote);q1=q0+len(quote)
         for m in re.finditer(r'[^。；;！!？?\n]+',text):
-            run=m[0].strip(' ，,');start=m.start()+m[0].find(run) if run else m.start()
+            first=re.split(r'[，,]',m[0])[0].strip(' ，,')
+            role=_school_lesson_held(first) if first else ''
+            days=_school_clause_days(first,sent) if role else None
+            if not role or not days or len(days)!=1:continue
+            day=next(iter(days));run=_school_lesson_unit(m[0],sent)
+            start=m.start()+m[0].find(run)
             if not run or (home['ref'],run) in taken or text.count(run)!=1:continue
-            # A quote spanning the whole message is no proof of one action: a lesson sentence wholly inside it is read apart,
-            # and the item's own days are its quote's without that sentence. A sentence only partly quoted stays as it was;
-            # a proposal that is only the lesson (nothing dated of its own besides) is that lesson's own item already.
             inside=start<q1 and q0<start+len(run)
-            if inside and not (q0<=start and start+len(run)<=q1):continue
-            a,b=start-q0,start-q0+len(run)
-            rest=(quote[:a]+quote[b:]) if inside else quote
-            own=_school_clause_days(rest,sent) or set()
-            if inside and (not own or (a and b<len(quote.rstrip(' ，,；;。'))) ):continue
-            first=re.split(r'[，,]',run)[0].strip()
-            days=_school_clause_days(first,sent)
-            if not _school_lesson_assessment(first) or not days or len(days)!=1 or days<=own:continue
+            if inside and not (q0<=start and start+len(run)<=q1):continue  # a run only partly quoted stays as it was
+            pieces=[x for x in ((quote[:start-q0],quote[start-q0+len(run):]) if inside else (quote,)) if x.strip(trim)]
+            if not pieces:continue  # a proposal that is only the lesson is that lesson's own item already
+            own=[_school_clause_days(x,sent) or set() for x in pieces]
+            if any(day in d for d in own) or inside and not any(own):continue
             if any(quotes[i] and (quotes[i] in run or run in quotes[i]) for i in range(len(proposals)) if i!=index):continue
-            day=next(iter(days))
-            def lesson_line(line):
-                head=re.split(r'[，,；;。]',line.strip())[0].strip()
-                return bool(head) and _school_lesson_assessment(head) and _school_clause_days(head,sent)=={day}
-            lines=[l for l in p['task_goal'].splitlines() if l.strip()]
-            kept=[l for l in lines if not lesson_line(l)]
-            if any(_school_lesson_assessment(c.strip()) and _school_clause_days(c.strip(),sent)=={day} for l in kept for c in re.split(r'[，,；;。]',l) if c.strip()):continue
+            goal,removed=_school_goal_without(out[index]['task_goal'],sent,day,run)
+            if not goal:continue
             subjects=_school_native_subjects(text);subject=next(iter(subjects)) if len(subjects)==1 else ''
-            title=(subject+'：' if subject else '')+first;goal=run+'。'
-            brief=dict(title=title,goal=goal,state='review')
+            title=(subject+'：' if subject else '')+first;lesson_goal=run+'。'
+            deferred=re.search(_SCHOOL_SCOPE_DEFERRED,run)
+            brief=dict(title=title,goal=lesson_goal,state='review' if deferred else 'ready')
             bound=[t for t in pending if _school_pending_link(t,'same',brief,[home],day,run)]
             if len(bound)>1:continue
             source_id=home['ref'][8:].rsplit(':',1)[0]
             held=[t for t in tasks if t.get('due')==day and t.get('source_id')==source_id and t.get('publisher')==home.get('publisher')
-                  and _school_same_object(title+'\n'+goal,str(t.get('title') or '')+'\n'+str(t.get('goal') or ''))]
-            taken.add((home['ref'],run))
+                  and _school_same_object(title+'\n'+lesson_goal,str(t.get('title') or '')+'\n'+str(t.get('goal') or ''))]
+            taken.add((home['ref'],run));receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS}
             if inside:
-                # The item's own words are its quote without the lesson sentence (leading or trailing); the reply's quote stays
-                # verbatim in its receipt mark below.
-                out[index]=dict(out[index],title_quote=rest.strip(' ，,；;。'));marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run,quote=quote)))
-            if len(kept)!=len(lines):
-                out[index]=dict(out[index],task_goal='\n'.join(kept))
-                marks.setdefault(index,dict(receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},split=dict(lesson=run)))
-            if held:continue  # the lesson is already this child's own task: the merging item only loses the lesson line
-            marks[len(out)]=dict(formed=dict(index=index,receipt={k:p.get('task_'+k,'') for k in _SCHOOL_RECEIPT_KEYS},ref=home['ref'],quote=run,
-                                             **({} if len(kept)!=len(lines) else {'omitted':True})))
+                # The item's own words are the one contiguous part of its quote holding its own days, when every other part states
+                # only those days and stays in its summary; the reply's quote stays verbatim in the receipt mark below.
+                dated=[x for x,d in zip(pieces,own) if d];held_days=set().union(*own)
+                part=dated[0].strip(trim) if len(dated)==1 or all(d<=own[pieces.index(dated[0])] for d in own) else ''
+                others=[x.strip(trim) for x in pieces if x.strip(trim)!=part]
+                if part and all(_school_clause_kept(_school_own_sentences(x,text),goal) for x in others):
+                    out[index]=dict(out[index],title_quote=part)
+                    marks.setdefault(index,dict(receipt=receipt,split=dict(lesson=run,quote=quote,**({'kept':others} if others else {}))))
+                elif held_days:
+                    marks.setdefault(index,dict(receipt=receipt,split=dict(lesson=run,quote=quote,unnarrowed=True)))
+            if removed:
+                out[index]=dict(out[index],task_goal=goal)
+                marks.setdefault(index,dict(receipt=receipt,split=dict(lesson=run)))
+            if any(_school_clause_days(c,sent)=={day} for c in re.split(r'[，,。；;！!？?\n]',goal) if c.strip()):
+                # The summary still states the lesson's day in words the program cannot place: the lesson keeps its own item and
+                # this item names that one doubt, never the lesson's day as its own.
+                out[index]=dict(out[index],task_state='review' if out[index].get('task_state')!='reference' else 'reference',
+                                task_reason='本项摘要仍写有'+day[5:]+'（课堂安排日）的内容，课堂事项已按原文单列；请核对本项是否另含该日要求。')
+            if held:continue  # the lesson is already this child's own task: the merging item only loses the lesson's words
+            scope=dict(state='deferred',words=deferred[0]) if deferred else dict(state='stated' if re.search(
+                r'《[^》]+》|unit\s*\d|第\s*[一二三四五六七八九十百0-9]+|[0-9一二三四五六七八九十两]+\s*(?:个|篇|首|段|页|题|课|单元|句|词)',run,re.I) else 'unstated')
+            marks[len(out)]=dict(formed=dict(index=index,receipt=receipt,ref=home['ref'],quote=run,
+                                             lesson=dict(action=first,day=day,role=role,scope=scope),**({} if removed else {'omitted':True})))
+            reason=('老师尚未说明课堂考查范围，等待补充。' if role=='inspection' else '老师尚未说明课堂安排的具体范围，等待补充。') if deferred else ''
             out.append(dict(title_quote=run,focus='school',due=day,evidence=[dict(ref=home['ref'])],learning_subject=subject,learning_goal_id='',
-                task_title=title,task_goal=goal,task_advice='',task_state='review',
-                task_reason='老师尚未说明课堂考查范围，等待补充。',
+                task_title=title,task_goal=lesson_goal,task_advice='',task_state=brief['state'],task_reason=reason,
                 task_change='same' if bound else 'new',task_target_id=bound[0]['id'] if bound else '',
                 task_purpose='learning' if subject else 'admin',task_submission=''))
     return out,marks
@@ -4946,7 +4994,8 @@ def _school_clause_roles(clause):
 # The assessment a teacher holds at the lesson or 早读 its own day directly heads (明天英语课听写、周五数学课测验、下周一早读抽背
 # 《山野》) is read where its predicate stands, as _school_clause_roles reads one: a verb inside its object (带《单词听写本》、
 # 带单词听写本), at home (今晚在家听写) or after 前 (明天英语课前完成听写练习) is none.
-_SCHOOL_LESSON_ASSESSMENT=r'听写|默写|测验|测试|小测|抽背|抽查|抽测|考试'
+# Common classroom assessment compounds read the same (抽读、抽问、考查、口试、笔试、检测、测评); 检查 stays the check role.
+_SCHOOL_LESSON_ASSESSMENT=r'听写|默写|测验|测试|小测|抽背|抽查|抽测|抽读|抽问|考查|考试|口试|笔试|检测|测评'
 
 
 def _school_lesson_assessment(clause):
@@ -4954,8 +5003,35 @@ def _school_lesson_assessment(clause):
     from family_agenda import _titles_read_as_objects
     text=_titles_read_as_objects(clause)
     head=_SCHOOL_ROLE_DAY+r'(?:'+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?|\s*早读(?:时)?)'
-    # 参加听写 at that lesson (2026年11月5日英语课参加听写) is the same assessment as 英语课听写.
-    return any(re.match(_SCHOOL_ROLE_LEAD+r'(?:参加\s*)?(?:'+_SCHOOL_LESSON_ASSESSMENT+r')',text[m.end():]) for m in re.finditer(head,text))
+    # 参加听写 at that lesson (2026年11月5日英语课参加听写) is the same assessment as 英语课听写, and so is one the lesson holds
+    # (下周一英语课进行课堂抽读考查、周五数学课进行随堂测验): a holding verb and the lesson's own 课堂 are no other predicate.
+    return any(re.match(_SCHOOL_ROLE_LEAD+r'(?:参加\s*)?(?:(?:进行|开展|举行|组织|安排|有)\s*)?(?:(?:课堂|当堂|随堂)\s*)?(?:'
+                        +_SCHOOL_LESSON_ASSESSMENT+r')',text[m.end():]) for m in re.finditer(head,text))
+
+
+# A lesson clause's scope its teacher leaves for later (范围由老师明天再说、考查的篇目和范围另行通知、范围还没定、具体篇目仍等老师通知).
+_SCHOOL_SCOPE_DEFERRED=(r'(?:范围|篇目|内容|题目|单词|课文|哪些|哪几|具体)[^，,。；;！!？?\n]{0,10}?(?:另行(?:通知|告知|安排)'
+                        r'|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知|待定|待确定|尚未确定|未定|没有?定'
+                        r'|再(?:说|定|通知|告知)|等[^，,。；;！!？?\n]{0,8}?(?:通知|告知|说))')
+# A clause in a lesson's own sentence only saying more is told later (等明天另行通知、再说) still belongs to that lesson.
+_SCHOOL_LATER_WORD=(r'另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知|再(?:说|定|通知|告知)'
+                    r'|等[^，,。；;！!？?\n]{0,8}?(?:通知|告知)')
+
+
+def _school_lesson_held(clause):
+    """What one clause's own predicate does at the lesson its own day directly heads: 'inspection' for an assessment held there
+    (周五课堂听写Unit 4第1至6个单词、下周一英语课进行课堂抽读考查), 'arranged' for another activity done in that lesson (周五历史课用
+    时间轴讲述), '' for anything else. A home action for that lesson (带、交、完成、签字、准备好、…前), a check of home work (明天早读
+    检查登记本), a negated, changed, cancelled, deferred, optional, recurring or asked one is no lesson of its own."""
+    from family_agenda import _EVENT_STATE,_PREPARE,_titles_read_as_objects
+    text=_titles_read_as_objects(clause)
+    if (_school_clause_roles(clause) or _school_negated_day(clause) or re.search(r'[？?]|每\s*(?:周|星期|礼拜|天|晚)',text)
+            or re.search(r'(?:之前|以前|前)(?![一二两三四五六七八九十\d])|完成|做完|写完|读完|'+_SCHOOL_SIGN+'|'+_EVENT_STATE+'|'
+                         +_SCHOOL_CHANGE+'|'+_PREPARE,text)):return ''
+    if _school_lesson_assessment(clause):return 'inspection'
+    held=re.search(_SCHOOL_ROLE_DAY+_SCHOOL_LESSON_PLACE+r'(?:上|时|的时候)?',text)
+    rest=text[held.end():].strip(' ，,') if held else ''
+    return 'arranged' if rest and not re.search(_SCHOOL_ARRANGEMENT,rest) else ''
 
 
 def _school_clause_day(clause,published):
