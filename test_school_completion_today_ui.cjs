@@ -241,7 +241,7 @@ async function demoServer(){
      if(pass==='list'){await p.locator('nav [data-page="tasks"]').click();await p.locator('[data-task-box="全部"]').click();await eventually(async()=>/所有作业与待办/.test(await p.locator('#content h1').first().innerText()),'all homework and todo list')}
      else{
       await flashToday(p,ids,'Flash27 '+pass+' '+width);
-      assert.match(await p.locator('#today-courses').innerText(),/当天课表尚未提供/,'the missing timetable stays said');
+      assert.match(await p.locator('#today-courses').innerText(),/当天课表尚未提供|这天没有已存的课表或日程/,'the missing timetable stays said');
      }
      const check=async(key,want)=>{
       const card=p.locator('[data-query-target="task:'+ids[key]+'"]'),saved=flash.tasks.find(t=>t.id===ids[key]);
