@@ -1460,13 +1460,15 @@ extension AppDelegate {
         return ids
     }
 
-    func post(_ type: NSEvent.EventType, at screen: NSPoint, in w: NSWindow) {
+    func post(_ type: NSEvent.EventType, at screen: NSPoint, in w: NSWindow, clickCount: Int = 1) {
         let p = w.convertFromScreen(NSRect(origin: screen, size: .zero)).origin
         if let e = NSEvent.mouseEvent(with: type, location: p, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: w.windowNumber,
-                                      context: nil, eventNumber: 0, clickCount: 1, pressure: type == .leftMouseDown ? 1 : 0) { NSApp.postEvent(e, atStart: false) }
+                                      context: nil, eventNumber: 0, clickCount: clickCount, pressure: type == .leftMouseDown ? 1 : 0) { NSApp.postEvent(e, atStart: false) }
     }
 
-    func click(_ id: String, contains: String = "", fraction: [Double]? = nil) async -> [String: Any] {
+    /// clickCount（仅smoke测试步骤 click_count）：1 = 原来的单击；2 = 同一已核对位置的真实双击（第二对按下/抬起带 clickCount 2）。
+    func click(_ id: String, contains: String = "", fraction: [Double]? = nil, clickCount: Int = 1) async -> [String: Any] {
+        guard clickCount == 1 || clickCount == 2 else { return ["ok": false, "error": "invalid click_count", "id": id, "click_count": clickCount] }
         let unbuilt = TestTargets.live(id) == nil, scrolled = await reveal(id)
         guard let node = find(id, contains: contains) else { return ["ok": false, "error": "control not found", "id": id, "unbuilt_row": unbuilt] }
         var center = NSPoint(x: node.frame.midX, y: node.frame.midY), row = -1
@@ -1525,12 +1527,18 @@ extension AppDelegate {
         }
         var observedMouse: [[String: Any]] = []
         let mouseWatch = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
-            observedMouse.append(["type": event.type.rawValue, "window": event.windowNumber,
+            observedMouse.append(["type": event.type.rawValue, "click_count": event.clickCount, "window": event.windowNumber,
                                   "location": NSStringFromPoint(event.locationInWindow), "event_window": event.window?.windowNumber ?? -1])
             return event
         }
         defer { NotificationCenter.default.removeObserver(watch); if let mouseWatch { NSEvent.removeMonitor(mouseWatch) } }
         post(.leftMouseDown, at: center, in: w); post(.leftMouseUp, at: center, in: w)
+        // click_count 2: the second down/up pair at the same hit-checked point carries clickCount 2 well inside the system
+        // double-click interval, so AppKit receives one genuine double-click; the default 1 sends exactly the old single click.
+        if clickCount == 2 {
+            await sleep(min(0.05, NSEvent.doubleClickInterval / 4))
+            post(.leftMouseDown, at: center, in: w, clickCount: 2); post(.leftMouseUp, at: center, in: w, clickCount: 2)
+        }
         await sleep(0.6)
         let target = String(id.dropFirst(4))
         if id.hasPrefix("row-") {
@@ -1567,7 +1575,9 @@ extension AppDelegate {
                         "key": w.isKeyWindow, "activated": activated, "first_responder": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none"]
             }
         }
-        return ["ok": true, "id": id, "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
+        return ["ok": true, "id": id, "click_count": clickCount, "mouse_dispatch": observedMouse,
+                "first_responder": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none",
+                "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
                 "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "fraction_point": explicit.map { [Double($0.x), Double($0.y)] } ?? [Double](),
                 "probe_frame": [Double(node.frame.minX), Double(node.frame.minY), Double(node.frame.width), Double(node.frame.height)], "probe_roles": Array(Set(probeRoles)).sorted(), "probe_hits": sampled, "scrolled": scrolled, "unbuilt_row": unbuilt, "row": row, "point_row": atRow, "selected": workspace?.selection ?? "", "key": w.isKeyWindow, "activated": activated]
     }
@@ -1603,7 +1613,9 @@ extension AppDelegate {
         if let id = step["click"] as? String {
             // fraction 只在步骤明确给出时使用；没有就照旧点中心或原有控件定位。
             let fraction = step["fraction"].map { ($0 as? [NSNumber])?.map(\.doubleValue) ?? [Double.nan] }
-            return await click(id, contains: step["contains"] as? String ?? "", fraction: fraction)
+            // click_count 只接受1或2（缺省1，原单击）；其他值由 click 拒绝，不发任何事件。
+            let count = step["click_count"].map { v -> Int in guard let n = (v as? NSNumber)?.doubleValue, n == 1 || n == 2 else { return 0 }; return Int(n) } ?? 1
+            return await click(id, contains: step["contains"] as? String ?? "", fraction: fraction, clickCount: count)
         }
         if let prefix = step["click_prefix"] as? String {
             let id = nodes().first(where: { $0.id.hasPrefix(prefix) && $0.frame.width > 0 })?.id ?? TestTargets.anchors.keys.sorted().first { $0.hasPrefix(prefix) && TestTargets.live($0) != nil }
