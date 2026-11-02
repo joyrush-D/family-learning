@@ -2814,7 +2814,7 @@ class Handler(BaseHTTPRequestHandler):
                 if n>MAX_UPLOAD: return self.reply(413,{'error':'每个文件最多20MB'})
                 self.connection.settimeout(30)
                 try: attachment=save_upload(self.rfile,n,self.headers.get('X-File-Name',''),self.headers.get('X-Request-Key'))
-                except UploadKeyConflict: return self.reply(409,{'error':'这个上传标识已对应另一份文件，本次没有保存；请重新选择文件后再传。','code':'upload_key_conflict'})
+                except UploadKeyConflict: return self.reply(409,{'error':'这个上传标识已对应另一份文件，本次没有保存，原来的原件不变。','code':'upload_key_conflict'})
                 except ValueError: return self.reply(400,{'error':'文件为空、文件名不正确或内容与支持的类型不符'})
                 return self.reply(200,dict(ok=True,attachment=attachment))
             max_json=2*1024*1024 if path in ('/api/agent/ingest','/api/agent/fragment') else 65536 if path in ('/api/guided/material','/api/goals/action','/api/task/feedback','/api/print/homework/draft','/api/topic/diagnosis/answer') else 20000
