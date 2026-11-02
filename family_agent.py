@@ -7608,9 +7608,13 @@ def _school_date_head_joined(text):
         # new action's boundary, as the same words written together already read; never with negation, condition or another day.
         head=re.match(r'\s*'+label+_SCHOOL_DAY_HEAD,m[0])
         if not head:return m[0]
-        rest=m[0][head.end():];joined=re.sub(r'[，,]\s*(?=(?:再|然后|接着|随后))','',rest)
-        if joined==rest or re.search(r'不用|不必|无需|不需|免|勿|如果|若|如需|假如|视情况|是否',joined) or re.search(_SCHOOL_DAY_HEAD,joined):return m[0]
-        return m[0][:head.end()]+joined
+        rest=m[0][head.end():];cut=[x.end() for x in re.finditer(r'[，,]\s*(?:再|然后|接着|随后)[^，,]*',rest)]
+        if not cut:return m[0]
+        # Only the head's own ordered work, up to its last 再… clause, is checked and joined; a later clause (its own hand-in
+        # day, 不用抄写) is neither joined nor read here.
+        span=rest[:cut[-1]]
+        if re.search(r'不用|不必|无需|不需|免|勿|如果|若|如需|假如|视情况|是否',span) or re.search(_SCHOOL_DAY_HEAD,span):return m[0]
+        return m[0][:head.end()]+re.sub(r'[，,]\s*(?=(?:再|然后|接着|随后))','',span)+rest[cut[-1]:]
     return re.sub(r'[^。；;！!？?\n]+',ordered,text)
 
 
