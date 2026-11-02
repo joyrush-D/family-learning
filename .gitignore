@@ -143,6 +143,7 @@
 !/test_school_saved_reread.py
 !/test_school_same_affair.py
 !/test_p1a_requirement_units.py
+!/test_p1b_material_completeness.py
 !/test_p1a_requirement_units.json
 !/test_p1a_pending_identity_snapshot.py
 !/test_p1a_scope_save.py
