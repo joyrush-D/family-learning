@@ -1004,6 +1004,7 @@ struct RecordDetail: View {
                                 Text(f.created.prefix(16).replacingOccurrences(of: "T", with: " ")).font(Palette.small).foregroundStyle(Palette.ink2)
                             }
                             Text(f.note.isEmpty ? f.title : f.note).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            if let line = f.evidenceLine { Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("followup-evidence-\(f.id)", text: line) }
                         }
                     }
                     Button("记订正") { store.sheet = .correction(r); store.sheetDirty = false }.buttonStyle(GroveButtonStyle()).probe("wrong-correct-\(r.id)")
@@ -1709,11 +1710,9 @@ struct WrongAddSheet: View {
     @ObservedObject var store: WorkspaceStore
     /// 有值时是当前原作业：孩子、作业和科目固定，不用先写反馈；题号/题面/原答/订正任一项即可，照片可不选，选了保整张原图。
     var item: DayItem? = nil
-    /// 直接错题的记录日：打开时定下的上海时间今天，显示出来并随同一提交标识重试；不是老师截止、原作答日或安排日，也不改作业。
-    @State var recordDay: String = {
-        let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "Asia/Shanghai"); f.dateFormat = "yyyy-MM-dd"; return f.string(from: Date())
-    }()
+    /// 直接错题的记录日：打开时取家庭服务端的今天（store.view.today）定下、显示，并随同一提交标识重试；读不到就待核、不能保存，
+    /// 不用所浏览的清单日或本机时钟猜。它不是老师截止、原作答日或安排日，也不改作业。
+    @State var recordDay = ""
     @StateObject var save = SaveState()
     @State var subject = ""
     @State var label = ""
@@ -1730,12 +1729,12 @@ struct WrongAddSheet: View {
                    context: item.map { "\(store.childName) · \($0.subject) · \($0.title)（不用先写反馈，不会新建作业）" } ?? "\(store.childName) · 没有原作业（不会新建作业或反馈）",
                    dirty: !(subject + label + text + answer + correction).isEmpty || !photos.isEmpty,
                    canSave: item == nil ? !label.trimmingCharacters(in: .whitespaces).isEmpty && !photos.isEmpty
-                       : [label, text, answer, correction].contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                       : !recordDay.isEmpty && [label, text, answer, correction].contains(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
                    saveTitle: "保存错题", onSave: submit) {
             Section {
                 if item == nil { TextField("科目（可不填）", text: $subject).probe("wrong-add-subject") }
                 else {
-                    LabeledContent("记录日") { Text("\(recordDay)（上海时间今天）").probe("wrong-add-record-day", text: recordDay) }
+                    LabeledContent("记录日") { Text(recordDay.isEmpty ? "待核：还没读到家庭服务的今天，请先刷新清单" : "\(recordDay)（家庭服务今天）").probe("wrong-add-record-day", text: recordDay) }
                     Text("这是记下这道错题的日期，不是老师截止或作业日期，也不会改这份作业。").font(.caption).foregroundStyle(Palette.ink2)
                 }
                 TextField(item == nil ? "哪一题（必填）" : "哪一题（可不填）", text: $label).probe("wrong-add-label")
@@ -1750,6 +1749,7 @@ struct WrongAddSheet: View {
             }
         }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.image], allowsMultipleSelection: false) { picked($0) }
+        .onAppear { if item != nil && recordDay.isEmpty { recordDay = store.view?.today ?? "" } }
     }
 
     func pick() {

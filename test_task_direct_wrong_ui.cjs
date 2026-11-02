@@ -61,6 +61,17 @@ async function proof(p, name) {
   await p.screenshot({path: path.join(process.env.DIRECT_WRONG_UI_PROOF_DIR, name + '.png'), fullPage: true});
 }
 
+// The current home list: the visible Grove row opens its detail, whose own action opens the task (no hidden old page, no direct calls).
+async function openFromGrove(p, title, id) {
+  const d = p.locator('#groveDetail');
+  if (!await d.getByRole('heading', {name: title}).first().isVisible().catch(() => false))
+    await p.locator('article.grove-row').filter({hasText: title}).first().locator('[data-grove-open]').click();
+  await d.getByRole('heading', {name: title}).first().waitFor();
+  await d.locator(`[data-task="${id}"]`).first().click();
+  await p.locator('#taskDialog[open]').waitFor();
+}
+const shiftDay = (day, n) => new Date(Date.parse(day + 'T12:00:00Z') + n * 86400000).toISOString().slice(0, 10);
+
 (async () => {
   let browser;
   try {
@@ -81,18 +92,20 @@ async function proof(p, name) {
             body: JSON.stringify({request_key: randomUUID(), child, title, category: 'homework', box: 'inbox', due: first.today, action: '完成虚构口算第1至5题'})});
           assert.equal(r.status, 200); return (await r.json()).task.id;
         };
-        const id = await make(a.name, `虚构同名口算 ${width}`), sibling = await make(b.name, `虚构同名口算 ${width}`);
+        const title = `虚构同名口算 ${width}`, id = await make(a.name, title), sibling = await make(b.name, title);
         const linked = async taskId => (await state()).records.filter(r => r.linked_task_id === taskId || r.source === '事项:' + taskId);
         const wrongOf = async () => (await linked(id)).filter(r => r.source === '错题照片核对');
         assert.deepEqual(await linked(id), [], 'the target homework has no pre-made feedback or other record');
         const taskBefore = (await state()).tasks.find(t => t.id === id);
-        const recordDay = new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'}).format(new Date());
+        const recordDay = first.today;  // the family server's today, never the browser clock
 
         await p.goto(host.url);
         const chip = p.locator(`[data-child-filter="${a.id}"]`);
         if (await chip.count() && await chip.first().getAttribute('aria-pressed') !== 'true') await chip.first().click();
-        await p.locator(`[data-task="${id}"]`).first().click();
-        await p.locator('#taskDialog[open]').waitFor();
+        // The browser's own clock now reads another day; the record day must still be the family server's today.
+        await p.clock.setFixedTime(new Date(`${shiftDay(first.today, 2)}T12:00:00+08:00`));
+        assert.notEqual(await p.evaluate(() => new Intl.DateTimeFormat('sv-SE', {timeZone: 'Asia/Shanghai'}).format(new Date())), recordDay);
+        await openFromGrove(p, title, id);
         let panel = p.locator('[data-task-wrong-form="direct"]');
         await panel.locator('summary').click();
         assert.ok((await panel.locator('[data-task-wrong-day]').innerText()).includes('记录日：' + recordDay), 'the record day is shown as Shanghai today');
@@ -137,6 +150,31 @@ async function proof(p, name) {
         // Correction from the same card inherits the original task.
         await p.locator(`#taskFeedbackHistory [data-followup="${textItem.id}"]`).first().click();
         await p.locator('#recordDialog[open]').waitFor();
+        // Shared uploadFiles on the correction form: the first reply is lost after the server saved the original.
+        const uploadKeys = [];
+        let uploadCalls = 0;
+        await p.route('**/api/upload', async route => {
+          uploadKeys.push(route.request().headers()['x-request-key'] || '');
+          if (uploadCalls++ === 0) { await route.fetch(); return route.abort('failed'); }
+          return route.continue();
+        });
+        const correctionPhoto = {name: 'synthetic-correction.png', mimeType: 'image/png', buffer: png};
+        await p.locator('#fileInput').setInputFiles(correctionPhoto);
+        await eventually(async () => await p.locator('#retryUpload').isVisible(), 'a lost upload reply offers a retry');
+        const savedOnce = (await state()).uploads.filter(u => u.name === 'synthetic-correction.png').map(u => u.id);
+        assert.equal(savedOnce.length, 1, 'the server saved the original once');
+        await p.locator('#retryUpload').click();
+        await eventually(async () => !(await p.locator('#retryUpload').isVisible()), 'the retry settles');
+        assert.deepEqual((await state()).uploads.filter(u => u.name === 'synthetic-correction.png').map(u => u.id), savedOnce, 'the retry returns the same original');
+        assert.equal(uploadKeys.length, 2);
+        assert.match(uploadKeys[0], /^[A-Za-z0-9_-]{16,64}$/);
+        assert.equal(uploadKeys[1], uploadKeys[0], 'the retry of the same failed file reuses its request key');
+        // A new, independent selection of the same name and bytes is a different original with a different key.
+        await p.locator('#fileInput').setInputFiles(correctionPhoto);
+        await eventually(async () => (await state()).uploads.filter(u => u.name === 'synthetic-correction.png').length === 2, 'a new selection is a new original');
+        assert.equal(uploadKeys.length, 3);
+        assert.notEqual(uploadKeys[2], uploadKeys[0]);
+        await p.unroute('**/api/upload');
         await p.locator('#recordForm [name=note]').fill('虚构：孩子订正为35。');
         await p.locator('#recordForm button[type=submit]').first().click();
         await eventually(async () => (await linked(id)).some(r => r.followup_kind === '订正' && r.related_record_id === textItem.id), 'the correction is saved');
@@ -144,9 +182,9 @@ async function proof(p, name) {
         assert.deepEqual([correction.related_record_id, correction.linked_task_id], [textItem.id, id]);
 
         // Reopen: same task, same records; the other child's same-named homework stays empty; demo records untouched.
+        await p.clock.setFixedTime(new Date());
         await p.reload();
-        await p.locator(`[data-task="${id}"]`).first().click();
-        await p.locator('#taskDialog[open]').waitFor();
+        await openFromGrove(p, title, id);
         const history = await p.locator('#taskFeedbackHistory').innerText();
         for (const text of ['第3题', '第5题', '虚构：孩子订正为35。']) assert.ok(history.includes(text), text);
         assert.deepEqual(await linked(sibling), []);
