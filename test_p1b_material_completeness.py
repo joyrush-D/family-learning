@@ -246,6 +246,9 @@ class OriginalRoleChainTests(_ScopeBase):
         # Its completion and handback days stay its roles; the day the audio was given out is information only.
         self._roles('2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，跟读音频已于2026年11月3日下发，2026年11月5日早上交。')
 
+    def test_a_comma_day_head_of_the_handback_keeps_both_roles(self):
+        self._roles('2026年11月4日晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写。2026年11月5日早上，请孩子交给英语老师。')
+
     def test_a_conflicting_bracket_is_never_a_due_or_role(self):
         self._roles('今晚听音频跟读Unit 7第3至10个单词，每个单词跟读3遍，不用抄写，明早（11月6日早上）交。',conflict=True)
 
@@ -837,7 +840,7 @@ def load_tests(loader,tests,pattern):
     suite.addTest(PdfOriginalRoleTests('test_a_pending_pdf_item_shows_its_proven_roles_whatever_day_is_selected'))
     suite.addTests(loader.loadTestsFromTestCase(ResourceTimeTests))
     for name in ('test_completion_and_handback_roles_reach_the_day_view_and_reopen','test_matching_brackets_give_the_same_roles','test_a_conflicting_bracket_is_never_a_due_or_role',
-                 'test_a_material_issue_day_in_the_same_line_is_no_role_or_due'):
+                 'test_a_material_issue_day_in_the_same_line_is_no_role_or_due','test_a_comma_day_head_of_the_handback_keeps_both_roles'):
         suite.addTest(OriginalRoleChainTests(name))
     suite.addTests(loader.loadTestsFromTestCase(UncertaintyScopeValidatorTests))
     suite.addTests(loader.loadTestsFromTestCase(DoubtViewTests))
