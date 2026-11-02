@@ -2368,7 +2368,7 @@ class Store:
                 if not claim: return fingerprint
                 c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
                 return fingerprint
-            if not row['done']: return None  # another unfinished request owns this key
+            # A finished job, or this key's own unfinished failed request of an older input: either way its count carries on.
             if not claim: return fingerprint
             c.execute('UPDATE agent_jobs SET fingerprint=?,attempts=attempts+1,done=0 WHERE id=?', (fingerprint, key))
             return fingerprint
@@ -8380,6 +8380,10 @@ def _discard_job(c, key, fp):
 SCHOOL_ORIGINAL_REVISION=2
 
 
+def _school_job_exists(store,key):
+    with store._db() as c:return c.execute('SELECT 1 FROM agent_jobs WHERE id=?',(key,)).fetchone() is not None
+
+
 def _school_scope_supplemented(store,row):
     """Whether a message this saved action cites now holds a receipt read once more for its doubts' scopes (D)."""
     with store._db() as c:
@@ -9487,15 +9491,17 @@ def _refresh_school(app, store, now, budget):
                     for doc in pdf_evidence['model']]
             key='school-task:'+row['id']
             # The claim's own decision without taking it; a lookup failure below still precedes the claim and spends no attempt.
-            # After a scope supplement the mapping keeps its own job's attempts, backoff and history (never a new budget).
-            if not (store._job_supplement(key,value,now,claim=False) if supplemented else
+            # After a scope supplement of a cited original, a mapping whose job already exists (mapped before, or an initial mapping
+            # that failed or waits) keeps that job's attempts, backoff and history: never a new budget. A first mapping has none.
+            inherit=_school_scope_supplemented(store,row) and _school_job_exists(store,key)
+            if not (store._job_supplement(key,value,now,claim=False) if inherit else
                     store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread),claim=False)): continue
             targets=school_targets(app,store,row['child_id'])
             from family_goals import Store as Goals
             school_goals=Goals(app,store).school_candidates(row['child_id'])
             context.update(school_tasks=[{k:v for k,v in t.items() if k not in ('facts','same_basis','same_complete','same_as')} for t in targets],learning_goals=school_goals)
             if saved_reread:_school_recovery_inherit(store,key,row['job_id'],row['child_id'])
-            fp=(store._job_supplement(key,value,now) if supplemented else
+            fp=(store._job_supplement(key,value,now) if inherit else
                 store._job(key,value,now,model=reference is None,keep_budget=bool(saved_reread)))
             if not fp: continue
             paged+=bool(page_changed or pdf_changed or material_changed or original_changed or saved_reread)
