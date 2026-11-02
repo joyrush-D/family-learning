@@ -230,5 +230,71 @@ class ReadOnlyStateTest(unittest.TestCase):
         self.assertEqual([(d['basis'], d['void']) for d in st['diagnoses']], [('basis_changed', {'state': 'unsettled', 'question_ids': ['q1']})])
 
 
+# P4 Root counterexample (fictional): the original wrong record already shows the complete fixed-pack cnm_p125_q3 prompt.
+Q3 = '一本笔记本 3.5 元，一块橡皮 0.8 元。一共多少元？计算：3.5＋0.8＝？（用小数作答）'
+NOTE = '题面：虚构家庭补充练习（不是对老师第18页题面的断言）：' + Q3 + '\n学生原答：4.2元\n家长从原作业直接记录，未对照已保存的作答反馈；这不是掌握程度结论。'
+
+
+class OriginalPromptMatchTest(unittest.TestCase):
+    """The narrow identity: the COMPLETE prompt as one whole field (NFKC widths, spaces only); never numbers or fragments."""
+    def test_complete_prompt_only(self):
+        self.assertTrue(ft.prompt_in(Q3, NOTE))
+        self.assertTrue(ft.prompt_in(Q3, '原题：一本笔记本3.5元，一块橡皮0.8元。一共多少元?计算:3.5+0.8=?(用小数作答)'))  # widths/spaces only
+        self.assertFalse(ft.prompt_in(Q3, NOTE.replace('0.8', '0.9')))  # same wording, different numbers
+        self.assertFalse(ft.prompt_in(Q3, '题面：一本笔记本 3.5 元，一块橡皮 0.8 元。一共多少元？'))  # only part of the prompt
+        self.assertFalse(ft.prompt_in(Q3, '像一本笔记本 3.5 元，一块橡皮 0.8 元。一共多少元？计算：3.5＋0.8＝？（用小数作答）这样的题'))  # mid-sentence
+        self.assertFalse(ft.prompt_in('计算：3+4', '题面：计算：3+4'))  # too short to identify a question on its own
+
+
+@unittest.skipUnless(ft.pack_status().get('installed'), 'needs the original fixed pack (FAMILY_TAXONOMY_DIR)')
+class OriginalQuestionSeenTest(unittest.TestCase):
+    """Root's counterexample end to end on the real pack and module Store functions: q4 answered wrong with help, then the
+    original q3 shown in the wrong record must not be offered or saved as an unseen independent new question."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup); path = Path(self.tmp.name) / 'f.sqlite3'
+
+        def connect():
+            c = sqlite3.connect(path); c.row_factory = sqlite3.Row; return c
+        self.app = SimpleNamespace(connect=connect, profiles=lambda c=None: [dict(id='child-1', name='示例甲', grade=''), dict(id='child-2', name='示例乙', grade='')])
+        with connect() as c:
+            c.execute('CREATE TABLE records(id INTEGER PRIMARY KEY, child TEXT, day TEXT, subject TEXT, title TEXT, note TEXT, source TEXT, attachments TEXT, created TEXT, related_record_id INTEGER)')
+            c.execute('CREATE TABLE revisions(id INTEGER PRIMARY KEY, record_id INTEGER, previous TEXT, changed TEXT)')
+            rows = [(1, '示例甲', NOTE, ft.WRONG_SOURCE, None), (2, '示例甲', '虚构同题订正：3.5元与0.8元合计4.3元。家长给过少量提示；这是原题订正，不是未见独立新题。', '家长', 1),
+                    (3, '示例乙', NOTE.replace('0.8', '0.9'), ft.WRONG_SOURCE, None), (4, '示例甲', '题面：别的虚构小数题\n学生原答：1', ft.WRONG_SOURCE, None)]
+            c.executemany("INSERT INTO records VALUES(?,?,'2026-11-03','数学','数学错题：虚构家庭补充小数题',?,?,'[]','2026-11-03T10:00:00+08:00',?)", rows)
+
+    def count(self, sql):
+        with self.app.connect() as c: return c.execute(sql).fetchone()[0]
+
+    def test_original_question_is_seen_for_selection_and_save(self):
+        A, base = self.app, dict(child_id='child-1', record_id=1)
+        ft.link_record(A, dict(base, topic_id='cnm_p125', state='confirmed', request_id='p4origlink00000001'))
+        did = ft.start(A, dict(base, topic_id='cnm_p125', request_id='p4origstart0000001'))['diagnoses'][0]['id']
+        ft.mark(A, dict(base, diagnosis_id=did, action='shown', mode='diagnosis', qid='cnm_p125_q4'))
+        ft.answer(A, dict(base, diagnosis_id=did, seq=1, topic_id='cnm_p125', qid='cnm_p125_q4', kind='answer', answer='A', verdict='wrong', engine_result='wrong',
+                          session={'answers': [{'qid': 'cnm_p125_q4', 'id': 'cnm_p125', 'result': 'wrong'}]}, summary={}))
+        ft.mark(A, dict(base, diagnosis_id=did, action='help_explanation', seq=1))
+        with A.connect() as c: raw = [tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')]
+        st = ft.state(A, base)
+        self.assertIn('cnm_p125_q3', st['seen_qids']); self.assertEqual(st['original_identity'], {'status': 'identified', 'qids': ['cnm_p125_q3']})
+        shown = self.count('SELECT count(*) FROM topic_exposures')
+        with self.assertRaises(ft.TaxonomyError) as e:
+            ft.mark(A, dict(base, diagnosis_id=did, action='shown', mode='retry', qid='cnm_p125_q3'))
+        self.assertEqual((e.exception.code, e.exception.status, self.count('SELECT count(*) FROM topic_exposures')), ('not_new', 409, shown))
+        unseen = next(q for q in ('cnm_p125_q1', 'cnm_p125_q2') if q not in st['seen_qids'])  # a genuinely unseen question stays possible
+        for _ in range(2): ft.mark(A, dict(base, diagnosis_id=did, action='shown', mode='retry', qid=unseen))
+        self.assertEqual(self.count('SELECT count(*) FROM topic_exposures'), shown + 1)
+        self.assertEqual(ft.state(A, base)['diagnoses'][0]['retry_offer'], {'qid': unseen, 'fresh': True})
+        with A.connect() as c:
+            self.assertEqual([tuple(r) for r in c.execute('SELECT * FROM records ORDER BY id')], raw)  # raw original/correction untouched
+            q3 = ft.question(ft.load_pack(), 'cnm_p125_q3')
+            other = ft.wrong_record(A, c, 'child-2', 3); unrelated = ft.wrong_record(A, c, 'child-1', 4)
+            self.assertEqual((ft.original_seen(A, c, other, [q3]), ft.original_seen(A, c, unrelated, [q3])), ({}, {}))  # other child / other record
+            # A later correction of the original does not wash the earlier shown prompt into unseen: its revision still counts.
+            c.execute("INSERT INTO revisions(record_id,previous,changed) VALUES(1,?,'2026-11-04')", (json.dumps(dict(c.execute('SELECT * FROM records WHERE id=1').fetchone()), ensure_ascii=False),))
+            c.execute("UPDATE records SET note='题面：（家长改写后的说明）\n学生原答：4.2元' WHERE id=1")
+            self.assertEqual(set(ft.original_seen(A, c, ft.wrong_record(A, c, 'child-1', 1), [q3])), {'cnm_p125_q3'})
+
+
 if __name__ == '__main__':
     unittest.main()

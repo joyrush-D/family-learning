@@ -352,6 +352,76 @@ def _fresh(ev, qid, diagnosis_id):
     return ev.get(qid) == {('offered', diagnosis_id)}
 
 
+# 原错题里已经给孩子看过的知识包原题：只认“完整题面作为一个整段”出现在这个孩子自己的错题记录（及其订正/复测记录）里。
+# 归一化很窄：NFKC（全角/半角）并去掉空格和制表符，换行保留；数字、算式、知识点都不做近似。整段的边界：前面是开头、换行、
+# 空格、冒号或开引号/开括号，后面是结尾、换行、空格或闭引号/闭括号。题面不足8个字符不单独作为身份。认不出就不声称“没见过”。
+_PROMPT_BEFORE = set('\n:“「『【[(\'"')
+_PROMPT_AFTER = set('\n”」』】])\'"')
+
+
+def _prompt_chars(text):
+    t = unicodedata.normalize('NFKC', str(text or '')); out, gap_before, gap_after, pending = [], [], [], True
+    for ch in t:
+        if ch in ' \t':
+            if gap_after: gap_after[-1] = True
+            pending = True; continue
+        out.append(ch); gap_before.append(pending); gap_after.append(False); pending = False
+    return ''.join(out), gap_before, gap_after
+
+
+def _prompt_at(p, text):
+    t, before, after = text
+    i = t.find(p)
+    while i >= 0:
+        j = i + len(p)
+        if (i == 0 or before[i] or t[i - 1] in _PROMPT_BEFORE) and (j == len(t) or after[j - 1] or t[j] in _PROMPT_AFTER): return True
+        i = t.find(p, i + 1)
+    return False
+
+
+def prompt_in(prompt, text):
+    """这道知识包题的完整题面是否作为一个整段出现在这段已保存的文字里（见上面的窄规则）。"""
+    p = _prompt_chars(prompt)[0].strip('\n')
+    return len(p) >= 8 and _prompt_at(p, _prompt_chars(text))
+
+
+def _original_texts(c, record):
+    """这道原错题给这个孩子看过的文字：它现在的标题/题面、它此前各版（revisions 里同一孩子的旧行），以及明确关联到它的订正/复测记录
+    （related_record_id）和它们同一孩子的旧版。只读，不建表；没有 revisions 表或关系列就少读那一部分。"""
+    rows = [dict(record)]
+    try: rows += [dict(r) for r in c.execute('SELECT * FROM records WHERE child=? AND related_record_id=?', (record['child'], record['id']))]
+    except sqlite3.OperationalError: pass
+    texts = [(r['id'], (r.get('title') or '') + '\n' + (r.get('note') or '')) for r in rows]
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revisions'").fetchone():
+        for r in rows:
+            for (prev,) in c.execute('SELECT previous FROM revisions WHERE record_id=? ORDER BY id', (r['id'],)):
+                try: old = json.loads(prev or '{}')
+                except ValueError: continue
+                if isinstance(old, dict) and old.get('child') == record['child']:
+                    texts.append((r['id'], (old.get('title') or '') + '\n' + (old.get('note') or '')))
+    return [(rid, _prompt_chars(t)) for rid, t in texts]
+
+
+def original_seen(app, c, record, questions):
+    """题号 → 这道原错题（含旧版与明确关联的订正/复测）里已整段显示过它的记录编号。只按这道原错题及其关系读，不扫这个孩子或别的孩子的其他记录。"""
+    if not questions: return {}
+    texts, out = _original_texts(c, record), {}
+    for q in questions:
+        p = _prompt_chars(q.get('prompt', ''))[0].strip('\n')
+        if len(p) < 8: continue
+        for rid, text in texts:
+            if _prompt_at(p, text): out.setdefault(q['id'], set()).add(rid)
+    return out
+
+
+def _seen(app, c, record, questions):
+    """同孩全部已见痕迹（_evidence）再加上这道原错题已整段显示过的原题（original）：选新题和保存再试都按它判断“没见过”。"""
+    ev = _evidence(c, record['child_id'])
+    for qid, rids in original_seen(app, c, record, questions).items():
+        ev.setdefault(qid, set()).update(('original', r) for r in rids)
+    return ev
+
+
 def settle_basis(app, record):
     """原错题更正后：旧诊断里DeepTutor已判定的新题作答，逐题交原LearningService.repair_question(action='void')作废，
     版本核对一致才保存新快照（原attempt保留并标voided）；旧再试行与复测原话不动，只标依据已变。
@@ -400,6 +470,18 @@ def state(app, obj, root=None):
         now = record_hash(record); ev = _evidence(c, record['child_id']); have = _tables(c)
         try: pack = load_pack(root)
         except (TaxonomyError, OSError, ValueError): pack = None
+        # 原错题里已整段显示过的原题也算这个孩子见过（只查这道错题关联知识点的子图里的题）；先并入，再算已见题号与“新题”。
+        identity = {'status': 'no_pack', 'qids': []}
+        if pack:
+            tids = set()
+            for table in ('topic_diagnoses', 'topic_links'):
+                if table in have:
+                    tids |= {r[0] for r in c.execute('SELECT DISTINCT topic_id FROM %s WHERE child_id=? AND record_id=?' % table, (record['child_id'], str(record['id']))) if r[0] in pack['by_id']}
+            scope = set().union(*(closure(pack, t) for t in tids)) if tids else set()
+            orig = original_seen(app, c, record, [q for q in pack['questions'] if q.get('topicId') in scope]) if scope else {}
+            for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+            mine = sorted(orig)
+            identity = {'status': 'identified' if mine else 'unidentified' if scope else 'no_topic', 'qids': mine}
         voids = {r[0]: {'state': r[1], 'question_ids': json.loads(r[2])} for r in c.execute(
             'SELECT diagnosis_id,state,question_ids FROM topic_basis_voids WHERE child_id=? AND record_id=?', (record['child_id'], str(record['id'])))} if 'topic_basis_voids' in have else {}
         diags = []
@@ -427,7 +509,7 @@ def state(app, obj, root=None):
                           'pack_sha': d['pack_sha'], 'engine_sha256': d['engine_sha256'], 'void': void,
                           'basis': 'current' if d['record_hash'] == now else 'basis_changed'})
         out = {'ok': True, 'record': dict({k: record[k] for k in ('id', 'day', 'subject', 'title', 'note')}, basis=now),
-               'links': links(c, record['child_id'], record), 'diagnoses': diags, 'seen_qids': sorted(ev)}
+               'links': links(c, record['child_id'], record), 'diagnoses': diags, 'seen_qids': sorted(ev), 'original_identity': identity}
         # 同一道错题已保存的家庭复习、原作业（显式关联，独立错题没有）和家长核对时留下的知识点线索：只读。
         context = app.record_review_context(c, record) if hasattr(app, 'record_review_context') else {}
         hint, terms = context.pop('topic_hint', ''), context.pop('diagnosis_terms', [])
@@ -565,7 +647,7 @@ def mark(app, obj, root=None):
             if obj['mode'] == 'retry' and known is None:
                 if not c.execute('SELECT 1 FROM topic_diagnosis_items WHERE diagnosis_id=?', (d['id'],)).fetchone():
                     raise TaxonomyError('先做至少一题诊断，再独立再试新题', 'no_items', 409)
-                if q['id'] in _evidence(c, record['child_id']):
+                if q['id'] in _seen(app, c, record, [q]):  # including the original wrong record that already showed it
                     raise TaxonomyError('这题此前出现过、答过或看过说明，不能当新题；请换一道没见过的', 'not_new', 409)
             if known is None:
                 c.execute('INSERT INTO topic_exposures(child_id,record_id,diagnosis_id,pack_sha,qid,mode,created_at) VALUES(?,?,?,?,?,?,?)',
@@ -751,14 +833,14 @@ def retry(app, obj, root=None):
         prev = c.execute('SELECT * FROM topic_retries WHERE child_id=? AND request_id=?', (record['child_id'], obj['request_id'])).fetchone()
         if prev is None:
             d = _diagnosis(c, record['child_id'], record, obj['diagnosis_id']); _current(d, record)
-            ev = _evidence(c, record['child_id']); version, snapshot = d['version'], d['deeptutor_snapshot']
+            ev = _evidence(c, record['child_id']); seen = _seen(app, c, record, [q]); version, snapshot = d['version'], d['deeptutor_snapshot']
     if prev is not None:
         _same_retry(prev, mine, record)
         return dict(state(app, _base(obj), root), replayed=True)
     q = question(pack, obj['qid'])
     if q is None or q['topicId'] not in closure(pack, d['topic_id']): raise TaxonomyError('题号不属于这次知识点范围', 'qid_outside_scope')
     if q['id'] not in ev: raise TaxonomyError('这道题还没有在面板上出示为新题；请刷新后点“独立再试一道新题”', 'retry_not_offered', 409)
-    fresh = _fresh(ev, q['id'], d['id'])
+    fresh = _fresh(seen, q['id'], d['id'])  # offered here (ev) is still required above; the original record makes it not new
     dt = {}; outcome = 'parent_check'
     if not fresh:
         outcome = 'not_new'  # 此前出示/答过/看过说明/再试过：不算独立，不调判定器
@@ -783,7 +865,7 @@ def retry(app, obj, root=None):
             c.rollback(); _same_retry(prev, mine, record)
             return dict(state(app, _base(obj), root), replayed=True)
         d = _diagnosis(c, record['child_id'], record, obj['diagnosis_id']); _current(d, record)
-        if d['version'] != version or _fresh(_evidence(c, record['child_id']), q['id'], d['id']) != fresh:
+        if d['version'] != version or _fresh(_seen(app, c, record, [q]), q['id'], d['id']) != fresh:
             raise TaxonomyError('这次诊断刚有新的保存，请刷新后再提交；原答还在输入框里', 'diagnosis_changed', 409)
         followup = None
         if outcome.startswith('independent_'):

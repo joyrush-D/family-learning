@@ -87,7 +87,7 @@ function restore(E,graph,diag){const run=held=>{const answers=diag.items.map(i=>
   if(d.items.length)h+=`<ol class="topic-done">${d.items.map(i=>itemLine(p,i,idle)).join('')}</ol>`;
   h+=retryLines(p,d);
   // 当前操作只有一个：新题再试 > 诊断下一题 > 小结与下一步。题目先登记“已出示”才显示。
-  if(offer?.fresh){p.view={mode:'retry',qid:offer.qid,diag:d.id};const q=p.E.questionById(p.graph,offer.qid);return h+(q?`<p><b>独立再试一道新题</b> <span class="small muted">先别看说明；提交后才判定</span></p>${questionHTML(p,q,'retry')}`:'<p class="error">新题不在当前知识包里，请刷新。</p>')}
+  if(offer?.fresh){p.view={mode:'retry',qid:offer.qid,diag:d.id};const q=p.E.questionById(p.graph,offer.qid);return h+(q?`<p><b>独立再试一道新题</b> <span class="small muted">先别看说明；提交后才判定</span></p>${st.original_identity?.status==='unidentified'?'<p class="small" data-topic-original-unknown>原错题的题面没能与知识包题目逐字对上：如果这道题其实就是原错题，请不要把它算作独立再试。</p>':''}${questionHTML(p,q,'retry')}`:'<p class="error">新题不在当前知识包里，请刷新。</p>')}
   if(offer&&!offer.fresh)h+='<p class="small">上次出示的新题后来又在别处出现过，不再算独立；可以换一道没见过的。</p>';
   if(asking){p.view={mode:'answer',qid:item.question.id,diag:d.id,item,session:s};
    if(!d.shown.includes(item.question.id)){const k=d.id+':'+item.question.id;if(p.shownTried!==k){p.autoShow=k;return h+'<p class="small" data-topic-showing>正在出题…</p>'}return h+'<div class="topic-actions"><button type="button" class="primary" data-topic-show>出下一题</button></div>'}
