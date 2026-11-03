@@ -2541,8 +2541,19 @@ extension WorkspaceStore {
             prints[batch.id] = batch.papers.flatMap { paper in paper.questions.compactMap { question in
                 question.record_id.map { "\(batch.version)|\(paper.paper_id)|\(paper.based_on_version ?? 0)|\($0)" } } }.sorted().joined(separator: ",")
         }
-        let changed = prints.contains { !$0.value.isEmpty && photoSyncedPrints[$0.key] != $0.value }
-        if !force { guard photoProblems["day"] == nil, missing || changed else { return } }
+        // 原清单已显示的依据与已完成批次所示是否一致：同批同版本才算新鲜；处理中的批次不比较、也不记已同步。
+        let shown = Dictionary(wrongItems.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var mismatch = false
+        for batch in photoBatchesShown where batch.state != "queued" && batch.state != "running" {
+            var listed = Set<Int>()
+            for paper in batch.papers { for question in paper.questions { if let id = question.record_id {
+                listed.insert(id)
+                if let row = shown[id], row.photo_basis?.batch_id != batch.id || row.photo_basis?.version != paper.based_on_version { mismatch = true }
+            } } }
+            if wrongItems.contains(where: { $0.photo_basis?.batch_id == batch.id && $0.photo_basis?.current == true && !listed.contains($0.id) }) { mismatch = true }
+        }
+        let fresh = prints.allSatisfy { photoSyncedPrints[$0.key] == $0.value }
+        if !force { guard photoProblems["day"] == nil, missing || (mismatch && !fresh) else { return } }
         if reviewLocked { photoProblems["day"] = "错题已保存，原错题清单暂未更新（有一条家庭复习保存待确认）；确认后点“重新读取”。"; return }
         await load()
         guard child == childID else { return }
