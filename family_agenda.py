@@ -1764,8 +1764,11 @@ PASSED_KINDS = ('event', 'inspection', 'arranged')
 
 
 def _passed(a, day):
-    due = exact_day(a.get('due_on'))
-    return bool(due) and due < day and (a.get('due_kind') or 'deadline') in PASSED_KINDS
+    # Homework with its own earlier completion day (11月17日今晚朗读2遍，11月18日早读检查) is not finished by its check day
+    # passing: still open, it is overdue as a deadline is. Only a bare lesson, check or arranged day is history.
+    due, complete = exact_day(a.get('due_on')), exact_day(a.get('complete_on'))
+    return (bool(due) and due < day and (a.get('due_kind') or 'deadline') in PASSED_KINDS
+            and not (complete and complete < due and a.get('category') == 'homework'))
 
 
 def exact_day(value):
@@ -1837,7 +1840,8 @@ def day_role(agenda, day):
     due = exact_day(a.get('due_on'))
     if due and due < day and not _passed(a, day): return 'overdue'
     if any(d and d > day for d in dates): return 'later'
-    if _passed(a, day): return 'passed'
+    # The parent's own earlier plan of a past lesson or arranged day, still open, is 之前安排, never history.
+    if _passed(a, day) and not exact_day(a.get('scheduled_on')): return 'passed'
     return 'earlier' if any(dates) else 'unknown'
 
 
@@ -1918,6 +1922,10 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         notes = [dict(wrong_row(r), task_id=x['task_id']) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
         pubs = publications(a)
         if version and version['state'] == 'latest': lines = list(version['lines'])
+        # A past lesson or arranged day the parent keeps open with its own review due now (等学校回复, review_on) is an earlier
+        # arrangement still open (之前安排), listed with its original facts; the review day is never a school date.
+        when = day_role(a, day)
+        if when == 'passed' and review_due(x): when = 'earlier'
         return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=version['title'] if version and version['state'] == 'latest' else x.get('title', ''), subject=subject_key(a),
                     **({'version': version} if version else {}),
                     category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
@@ -1927,7 +1935,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                     origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
                     lines=lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
                     today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')),
-                    when=day_role(a, day), publications=pubs, published_at=str(a.get('published_at') or ''),
+                    when=when, publications=pubs, published_at=str(a.get('published_at') or ''),
                     publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),
                     # The task's own saved progress exactly as /api/state reads it (task_progress): feedback, linked wrong
                     # records, current-basis clues, independent new attempts and history; clues are not mastery.
@@ -1999,8 +2007,9 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                   day=min(f['value'] for f in r['facts'] if f.get('known') and exact_day(f.get('value')) and f['value'] > day)) for r in rows if upcoming(r)]
     rows = [r for r in rows if not upcoming(r)]
     # The day's list is its own work. An action with no exact date keeps its id, originals, progress and family edits under
-    # 日期未定/待安排 (view.undated), counted apart from the day; a past lesson, check or arranged day (已过) is that day's history,
-    # listed with the same id on its own day, not open work here. A deadline or handback past due stays overdue in the list.
+    # 日期未定/待安排 (view.undated), counted apart from the day; a bare past lesson, check or arranged day (已过) is that day's
+    # history, listed with the same id on its own day, not open work here. A deadline or handback past due, open homework past
+    # its own completion day, and a parent's earlier plan or due review stay in the list.
     undated = [r for r in rows if r['when'] == 'unknown']
     rows = [r for r in rows if r['when'] not in ('unknown', 'passed')]
     return dict(groups=[dict(subject=key, items=list(items), undated=sum(r['when'] == 'unknown' for r in items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
