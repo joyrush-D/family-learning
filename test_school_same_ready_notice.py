@@ -68,6 +68,11 @@ class ExcusedStepTest(unittest.TestCase):
     def test_excusing_an_unrequired_step_is_no_change(self):
         self.assertFalse(agent._school_same_changes('朗读仍是《溪边》第2、3自然段各两遍，不用背诵，明早抽听。', self.FACTS))
 
+    def test_only_unrequired_excuses_are_dropped(self):
+        self.assertEqual(agent._school_unrequired_excuses_dropped('朗读仍是《溪边》第2、3自然段各两遍，不用背诵，明早抽听。', self.FACTS),
+                         '朗读仍是《溪边》第2、3自然段各两遍，明早抽听。')
+        self.assertEqual(agent._school_unrequired_excuses_dropped('不用读了，明早不抽听。', self.FACTS), '不用读了，明早不抽听。')
+
     def test_excusing_a_required_step_is_a_change(self):
         self.assertTrue(agent._school_same_changes('朗读仍是《溪边》第2、3自然段，不用读给家长听，明早抽听。', self.FACTS))
 
