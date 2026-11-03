@@ -32,9 +32,9 @@ class ActionScopeTest(unittest.TestCase):
         root = Path(self.tmp.name); data = root / 'private'; data.mkdir()
         (root / '家庭运行规则.md').write_text('| child-dev-c | 虚构孩子丙 | 男 | 10岁 | 四年级 |\n| child-dev-d | 虚构孩子丁 | 女 | 9岁 | 三年级 |\n')
         ledger = ''.join(f'| {p}{tid} | {name} | {title} | {due} | 待跟进 | 虚构学校通知 | {action} |\n'
-                         for p, name in (('', '虚构孩子丙'), ('D-', '虚构孩子丁'))
-                         for tid, title, due, action in (('DEV-PE-01', '体育：跳绳练习', '无明确截止', '双脚并拢跳绳80下。'),
-                                                         ('DEV-CN-02', '语文：阅读记录签字', '2026-11-18', '阅读第3页并请家长签字。')))
+                         for p, name in (('', '虚构孩子丙'), ('D', '虚构孩子丁'))  # ledger ids are [A-Z]+digits: PE01 = DEV-PE-01
+                         for tid, title, due, action in (('PE01', '体育：跳绳练习', '无明确截止', '双脚并拢跳绳80下。'),
+                                                         ('CN02', '语文：阅读记录签字', '2026-11-18', '阅读第3页并请家长签字。')))
         (root / '跟踪台账.md').write_text(ledger)
         p = patch.multiple(app, ROOT=root, DATA=data, DB=data / 'family.sqlite3'); p.start(); self.addCleanup(p.stop)
         self.store = app.agent_store()
@@ -75,11 +75,11 @@ class ActionScopeTest(unittest.TestCase):
                 self.assertFalse(rows['体育：定点投球']['today'])
                 # The legacy undated ready task: same id and content, date unknown, never today, never dropped for age.
                 pe = rows['体育：跳绳练习']
-                self.assertEqual((pe['task_id'], pe['when'], pe['today'], pe['lines']), ('DEV-PE-01', 'unknown', False, ['双脚并拢跳绳80下。']))
+                self.assertEqual((pe['task_id'], pe['when'], pe['today'], pe['lines']), ('PE01', 'unknown', False, ['双脚并拢跳绳80下。']))
                 self.assertFalse(next(f for f in pe['facts'] if f['role'] == 'due')['known'])
                 # The open handback stays overdue on its original date with the same id.
                 cn = rows['语文：阅读记录签字']
-                self.assertEqual((cn['task_id'], cn['when']), ('DEV-CN-02', 'overdue'))
+                self.assertEqual((cn['task_id'], cn['when']), ('CN02', 'overdue'))
                 self.assertEqual(next(f for f in cn['facts'] if f['role'] == 'due')['value'], '2026-11-18')
                 group = next(g for g in view['groups'] if g['subject'] == '体育')
                 self.assertEqual(group['undated'], sum(i['when'] == 'unknown' for i in group['items']))
@@ -117,9 +117,16 @@ class ActionScopeTest(unittest.TestCase):
 
 
 def school_row(id, title, subject, due='', kind='', **dates):
-    a = dict(published_on='2026-11-09', due_on=due, scheduled_on='', complete_on='', submit_on='', subjects=[subject], subject_state='known',
-             **({'due_kind': kind} if kind else {}), **dates)
+    a = dict(published_on='2026-11-09', due_on=due, scheduled_on='', complete_on='', submit_on='', subjects=[subject], subject_state='known')
+    a.update(dates)
+    if kind: a['due_kind'] = kind
     return dict(id=id, task_id=id, kind='task', child_ids=[C], title=title, agenda=a, status='待跟进', closed=False, closed_on='', body=title)
+
+
+def pending_row(id, title, body, material=False, **dates):
+    """A pending school row as family_agenda.snapshot gives it (school_material only when its saved brief has no read action)."""
+    row = dict(school_row(id, title, '体育', **dates), task_id='', kind='school', status='待核对', body=body)
+    return dict(row, school_material=True) if material else row
 
 
 class DateRoleTest(unittest.TestCase):
@@ -154,6 +161,19 @@ class DateRoleTest(unittest.TestCase):
         closed_view = self.view(done, '2026-11-14')
         self.assertNotIn('DEV-CN-RECEIPT', {i['id'] for g in closed_view['groups'] for i in g['items']})
         self.assertIn('DEV-CN-RECEIPT', {i['id'] for g in closed_view['closed'] for i in g['items']})
+
+    def test_tonight_action_with_unread_detail_is_todays_work_and_material_is_not(self):
+        inbox = [pending_row('agent-run', '体育：绕圈慢跑', '今晚慢跑2圈。', published_on=DAY, complete_on=DAY),
+                 pending_row('agent-material', '体育：资料内容待整理', '请核对这条学校消息。', material=True, published_on=DAY)]
+        view = self.view(inbox, DAY)
+        rows = {i['id']: i for g in view['groups'] for i in g['items']}
+        self.assertEqual(list(rows), ['agent-run'])
+        run = rows['agent-run']
+        self.assertEqual((run['when'], run['today'], run['pending_review'], run['lines']), ('today', True, True, ['今晚慢跑2圈。']))
+        self.assertEqual(next(f for f in run['facts'] if f['role'] == 'complete')['value'], DAY, 'complete day unchanged')
+        self.assertEqual((view['counts']['today'], view['counts']['open'], view['counts']['material']), (1, 1, 1))
+        self.assertEqual(view['materials'], [dict(subject='体育', items=[dict(id='agent-material', title='体育：资料内容待整理', published_at='')])])
+        self.assertEqual([w['today'] for w in [view['counts']]], [1])
 
     def test_parent_plan_and_saved_progress_keep_the_same_task(self):
         plan = school_row('DEV-PE-01', '家长自定练习标题', '体育', scheduled_on=DAY)
