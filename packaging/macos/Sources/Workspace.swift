@@ -84,6 +84,9 @@ final class WorkspaceStore: ObservableObject {
     @Published var photoPaperBatch: String?
     @Published var photoQuestion: String?
     @Published var photoPollToken = 0
+    /// 当前页需要读回（GET失败、continue/include 回执不明、原图读不到）：同孩同批同原图只读重读，不重发写入、不调模型。
+    @Published var photoRecovery = ""
+    @Published var photoImageEpoch = 0
     var photoImages: [String: NSImage] = [:]
     var photoSequence = 0
     /// “回原作业”要在日历里选中的原作业：不在正看的这一天时，先换到原错题记下的那一天，再按作业编号选中。
@@ -263,8 +266,12 @@ final class WorkspaceStore: ObservableObject {
         if let child, child != childID {
             // 照片导入草稿属于原孩子：上传/登记进行中不换；还没登记完的先问，放弃后只清草稿，已上传的原件不动。
             if photoBusy { notice = "照片还在上传或登记，请等这一步结束再换孩子。"; return }
-            if photoDraft != nil { guard confirmDiscard("放弃这次还没登记完的照片导入") else { return }; photoDraft = nil }
-            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""
+            if let draft = photoDraft {
+                if draft.sent { notice = "这批照片的登记回执还没确认：请先“用同一提交重试”核对，再换孩子。"; return }
+                guard confirmDiscard("放弃这次还没登记的照片导入（已上传的原件保留）") else { return }
+                photoDraft = nil
+            }
+            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoRecovery = ""
         }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
@@ -2463,6 +2470,11 @@ struct PhotoImportDraft {
     var urls: [URL]
     var cached: [String: String] = [:]
     var keys: [String: String] = [:]
+    /// 给已有批次补照片：同一批的编号与当时版本（nil 为新建一批）。
+    var target: String? = nil
+    var version: Int? = nil
+    /// 登记（create/append）已发出但回执不明：只能用同一提交标识与同一内容重试读回，不能放弃或被新导入覆盖。
+    var sent = false
 }
 
 extension WorkspaceStore {
@@ -2483,11 +2495,12 @@ extension WorkspaceStore {
             let data = try await client.get("/api/photo-batches", ["child_id": child])
             let list = try JSONDecoder().decode(PhotoBatchList.self, from: data)
             guard mine == photoSequence, child == childID, list.child_id == child else { return }
-            photoBatches = list.batches; photoChild = child; photoLoadError = ""
+            photoBatches = list.batches; photoChild = child; photoLoadError = ""; photoRecovery = ""
         } catch {
             guard mine == photoSequence, child == childID else { return }
-            if let e = error as? WorkspaceError, e.login { loginRequired = true }
-            photoLoadError = (error as? WorkspaceError)?.text ?? "导入的照片结果暂时读不到，可以稍后再看；原照片和结果都在。"
+            if let e = error as? WorkspaceError, e.login { loginRequired = true; openLogin() }
+            photoLoadError = (error as? WorkspaceError)?.text ?? "导入的照片结果暂时读不到；原照片和结果都在。"
+            photoRecovery = "点“重新读取”读回当前孩子的照片结果。"
         }
     }
 
@@ -2500,8 +2513,40 @@ extension WorkspaceStore {
         }
     }
 
+    /// 当前页的读回：只 GET 同一孩子的批次与原图（并重新挂上只读轮询），不上传、不重新登记、不重发 continue/include、不调模型。
+    func refreshPhotos() async {
+        photoRecovery = ""; photoImageEpoch += 1
+        await loadPhotoBatches()
+        photoPollToken += 1
+    }
+
+    /// 还有没确认的导入时不开始新的一批：回执不明的只能用同一提交重试；明确没写入的可以先放弃。
+    func photoDraftBlocks() -> Bool {
+        guard let draft = photoDraft else { return false }
+        photoNotice = draft.sent ? "上一批的登记回执还没确认：请先点“用同一提交重试”核对，不会重复登记。"
+            : "上一批照片还没登记：请先“用同一提交重试”，或“放弃这次导入”后再选新的照片。"
+        return true
+    }
+
+    func discardPhotoDraft() {
+        guard let draft = photoDraft, !draft.sent, !photoBusy else { return }
+        guard confirmDiscard("放弃这次还没登记的照片导入（已上传的原件保留）") else { return }
+        photoDraft = nil; photoNotice = "已放弃这次导入；已上传的原件仍保存在家庭原件里。"
+    }
+
+    /// 给同一批补照片：沿原 append 接口、当前版本与同样的逐张上传/同一提交重试；不新建批次，旧判断在新版本中标待更新。
+    func appendPhotos(_ batch: PhotoBatch, _ urls: [URL]) {
+        guard !photoBusy, !photoDraftBlocks() else { return }
+        guard batch.child_id == childID else { photoNotice = "这批照片属于另一个孩子，没有补入。"; return }
+        let images = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) ?? false }
+        guard !images.isEmpty else { photoNotice = "没有可补的照片（只收图片文件）。"; return }
+        guard batch.pages.count + images.count <= 30 else { photoNotice = "每批最多30张，这批已有\(batch.pages.count)张；请另建一批。"; return }
+        photoDraft = PhotoImportDraft(child: childID, key: requestKey(), urls: images, target: batch.id, version: batch.version)
+        Task { await runPhotoImport() }
+    }
+
     func importPhotos(_ urls: [URL]) {
-        guard !photoBusy else { return }
+        guard !photoBusy, !photoDraftBlocks() else { return }
         let images = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) ?? false }
         guard !images.isEmpty else { photoNotice = "没有可导入的照片（只收图片文件）。"; return }
         guard images.count <= 30 else { photoNotice = "每批最多30张，这次选了\(images.count)张；请分两批导入。"; return }
@@ -2526,20 +2571,26 @@ extension WorkspaceStore {
             photoNotice = "第\(up.ids.count + 1)张照片没有保存（\(photoStopText(stop))）；前\(up.ids.count)张原件已保存，可用同一提交重试。"
             return
         }
-        photoNotice = "原件已保存，正在登记这一批…"
-        switch await client.post("/api/photo-batch/create", ["child_id": draft.child, "request_key": draft.key, "uploads": up.ids]) {
+        photoNotice = draft.target == nil ? "原件已保存，正在登记这一批…" : "原件已保存，正在补进同一批…"
+        var body: [String: Any] = ["request_key": draft.key, "uploads": up.ids]
+        if let target = draft.target { body["batch_id"] = target; body["version"] = draft.version ?? 0 } else { body["child_id"] = draft.child }
+        draft.sent = true; photoDraft = draft
+        switch await client.post(draft.target == nil ? "/api/photo-batch/create" : "/api/photo-batch/append", body) {
         case .saved(let reply):
             guard let batch = decodePhotoBatch(reply) else { photoNotice = "登记回执无法读取；原件已保存，可用同一提交重试。"; return }
             photoDraft = nil
             if draft.child == childID { photoBatches = [batch] + photoBatches.filter { $0.id != batch.id }; photoChild = draft.child }
-            photoNotice = (reply["replayed"] as? Bool) == true ? "已找到这一批（同一提交），没有重复登记。"
-                : "已登记，后台会自动分科、分卷和检查；可以先离开，回来即可看到结果。"
+            photoNotice = (reply["replayed"] as? Bool) == true ? "已找到这一次提交的结果，没有重复登记。"
+                : draft.target == nil ? "已登记，后台会自动分科、分卷和检查；可以先离开，回来即可看到结果。"
+                : "已补进同一批（第\(batch.version)版）：受影响的卷会重新检查，旧判断标为依据已变，原错题保留。"
             photoPollToken += 1
-        case .refused(let status, let message, _):
-            if status == 401 { loginRequired = true }
-            photoNotice = message + "（这批照片还没登记；已上传的原件保留）"
+        case .refused(let status, let message, let code):
+            draft.sent = false; photoDraft = draft
+            if status == 401 { loginRequired = true; openLogin() }
+            photoNotice = message + (code == "photo_batch_changed" || code == "photo_batch_busy"
+                ? "（这次补照片没有写入；已上传的原件保留，刷新后可重新补）" : "（这次没有写入；已上传的原件保留）")
         case .unknown:
-            photoNotice = "没有收到登记回执；原件已保存，可用同一提交重试，不会重复建批次。"
+            photoNotice = "没有收到登记回执；原件已保存，可用同一提交重试，不会重复登记。"
         }
     }
 
@@ -2581,9 +2632,11 @@ extension WorkspaceStore {
                 photoBatches = photoBatches.map { $0.id == batch.id ? batch : $0 }; photoNotice = done; photoPollToken += 1
             }
         case .refused(let status, let message, _):
-            if status == 401 { loginRequired = true }
+            if status == 401 { loginRequired = true; openLogin() }
             photoNotice = message
-        case .unknown: photoNotice = "没有收到回执，结果未知；稍后刷新再看，不会自动重发。"
+        case .unknown:
+            photoNotice = "没有收到回执，结果未知；不会自动重发。"
+            photoRecovery = "点“重新读取”核对这一批的实际状态。"
         }
     }
 
@@ -2594,11 +2647,20 @@ extension WorkspaceStore {
         else { photoNotice = "这道错题的原记录还没读到；请刷新后再打开，记录不会重复建。" }
     }
 
+    /// 原图只读：401 走原登录恢复；其他失败给当前页“重新读取”，不吞成静默空白。
     func photoImage(_ uploadID: String) async -> NSImage? {
         if let image = photoImages[uploadID] { return image }
-        guard !uploadID.isEmpty, let data = try? await client.get("/upload/" + uploadID), let image = NSImage(data: data) else { return nil }
-        photoImages[uploadID] = image
-        return image
+        guard !uploadID.isEmpty else { return nil }
+        do {
+            let data = try await client.get("/upload/" + uploadID)
+            guard let image = NSImage(data: data) else { photoRecovery = "这张原图无法显示；点“重新读取”再试。"; return nil }
+            photoImages[uploadID] = image
+            return image
+        } catch {
+            if let e = error as? WorkspaceError, e.login { loginRequired = true; openLogin(); photoRecovery = "需要先登录家庭账号；登录后点“重新读取”。" }
+            else { photoRecovery = "原图暂时读不到；点“重新读取”再试，结果不受影响。" }
+            return nil
+        }
     }
 }
 
@@ -2607,6 +2669,7 @@ struct PhotoImportSection: View {
     @ObservedObject var store: WorkspaceStore
     @State var picking = false
     @State var targeted = false
+    @State var appending: PhotoBatch?
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
@@ -2614,6 +2677,15 @@ struct PhotoImportSection: View {
                     .buttonStyle(GroveButtonStyle(kind: .primary)).disabled(store.photoBusy).probe("photo-import")
                 if store.photoDraft != nil && !store.photoBusy {
                     Button("用同一提交重试") { Task { await store.runPhotoImport() } }.buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-retry")
+                    if store.photoDraft?.sent == false {
+                        Button("放弃这次导入") { store.discardPhotoDraft() }.buttonStyle(GroveButtonStyle(kind: .quiet)).probe("photo-discard")
+                    }
+                }
+            }
+            if !store.photoRecovery.isEmpty {
+                HStack(spacing: 8) {
+                    Text(store.photoRecovery).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                    Button("重新读取") { Task { await store.refreshPhotos() } }.buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-refresh")
                 }
             }
             Text("一次可选或拖入最多30张，不同科目、乱序都可以；系统自动分科、分卷和检查，不用先填科目或题号。")
@@ -2624,24 +2696,26 @@ struct PhotoImportSection: View {
             if !store.photoLoadError.isEmpty {
                 Text(store.photoLoadError).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
             }
-            ForEach(store.photoBatchesShown.prefix(5)) { batch in PhotoBatchCard(store: store, batch: batch) }
+            ForEach(store.photoBatchesShown.prefix(5)) { batch in PhotoBatchCard(store: store, batch: batch, append: { pick(append: batch) }) }
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(targeted ? Palette.leaf50 : Color.clear))
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(targeted ? Palette.leaf400 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5])))
         .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in drop(providers) }
         .fileImporter(isPresented: $picking, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
-            if case .success(let urls) = result { store.importPhotos(urls) }
+            if case .success(let urls) = result { if let batch = appending { store.appendPhotos(batch, urls) } else { store.importPhotos(urls) } }
+            appending = nil
         }
         .task(id: "\(store.childID)|\(store.mode.rawValue)|\(store.photoPollToken)") { await store.pollPhotoBatches() }
     }
 
-    func pick() {
+    func pick(append batch: PhotoBatch? = nil) {
+        if store.photoBusy || store.photoDraftBlocks() { return }
         if TestTargets.enabled, !workspaceTestPicks.isEmpty {
-            if let urls = workspaceTestPicks.removeFirst() { store.importPhotos(urls) }
+            if let urls = workspaceTestPicks.removeFirst() { if let batch { store.appendPhotos(batch, urls) } else { store.importPhotos(urls) } }
             return
         }
-        picking = true
+        appending = batch; picking = true
     }
 
     func drop(_ providers: [NSItemProvider]) -> Bool {
@@ -2663,6 +2737,7 @@ struct PhotoImportSection: View {
 struct PhotoBatchCard: View {
     @ObservedObject var store: WorkspaceStore
     let batch: PhotoBatch
+    var append: () -> Void = {}
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -2695,9 +2770,13 @@ struct PhotoBatchCard: View {
             if !batch.progress.failed.isEmpty {
                 Text(batch.progress.failed.map(\.error).joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
             }
-            if batch.can_continue {
-                Button("继续失败部分") { Task { await store.continuePhotoBatch(batch) } }
-                    .buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-continue-\(batch.id)")
+            HStack(spacing: 8) {
+                if batch.can_continue {
+                    Button("继续失败部分") { Task { await store.continuePhotoBatch(batch) } }
+                        .buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-continue-\(batch.id)")
+                }
+                Button("给这批补照片…") { append() }.buttonStyle(GroveButtonStyle(kind: .quiet))
+                    .disabled(store.photoBusy || batch.state == "running").probe("photo-append-\(batch.id)")
             }
         }
         .padding(10)
@@ -2781,7 +2860,7 @@ struct PhotoQuestionDetail: View {
                     }
                     .frame(maxWidth: 560, maxHeight: 680, alignment: .topLeading)
             } else {
-                Text(failed ? "原图暂时读不到，可以重试；结果不受影响。" : "正在读取原图…").font(Palette.small).foregroundStyle(Palette.ink2)
+                Text(failed ? "原图暂时读不到；可在左边点“重新读取”，结果不受影响。" : "正在读取原图…").font(Palette.small).foregroundStyle(Palette.ink2)
             }
             if !question.located {
                 Text("没有可靠对应的题框，未定位；上面是这一卷的完整原图。").font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
@@ -2805,7 +2884,7 @@ struct PhotoQuestionDetail: View {
                     .buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-include")
             }
         }
-        .task(id: uploadID) { image = nil; failed = false; image = await store.photoImage(uploadID); failed = image == nil }
+        .task(id: "\(uploadID)|\(store.photoImageEpoch)") { image = nil; failed = false; image = await store.photoImage(uploadID); failed = image == nil }
     }
 
     func field(_ title: String, _ value: String) -> some View {
