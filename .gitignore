@@ -245,6 +245,7 @@
 !/family_photo_batch.py
 !/test_photo_batch.py
 !/test_photo_batch_ui.cjs
+!/test_photo_batch_native.cjs
 !/family_diagnosis.py
 !/test_diagnosis.py
 !/错题理解闭环-架构.md
