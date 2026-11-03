@@ -74,6 +74,8 @@ function loginProxy(appPort,user,password){
    {name:'list',until:'list-summary',contains:'共',timeout:20},{name:'upcoming',until:'upcoming',contains:'即将/待补：'},{name:'login state',native:'state'},
    {name:'pick child',key:String(childIndex+1),modifiers:['command']},
    {name:'row',click:'row-'+item.id},{name:'detail',until:'detail-title',contains:item.title.slice(0,4)},
+   // Each unique source message opens in place from the item (the server's own message and its attachments) and returns to the same item.
+   ...((item.publications||[]).length?[{name:'source open',click:'source-open-'+item.publications[0].ref},{name:'source text',until:'source-text',timeout:15},{name:'source item',until:'source-item',contains:item.id},{name:'source back',click:'source-back'},{name:'same detail',until:'detail-title',contains:item.title.slice(0,4)}]:[]),
    {name:'wide',width:1440,native:'snapshot'},
    {name:'feedback open',click:'feedback-new'},{name:'feedback sheet',until:'feedback-note'},
    {name:'focus note',click:'feedback-note'},{name:'type note',type:NOTE1},
@@ -110,6 +112,8 @@ function loginProxy(appPort,user,password){
    // A tomorrow date is shown as 明天+its own role word, never an invented 明早.
    {name:'tomorrow row',click:'row-'+math.id},{name:'tomorrow words',until:'fact-'+tomorrow.role,contains:tomorrow.label+' 明天'},{name:'no invented morning',find_text:'明早',absent:true,timeout:3},
    {name:'narrow',width:900,native:'snapshot'},
+   // At 900 the chosen item is a detail page over the kept list: 返回清单 brings back the same list before choosing again.
+   {name:'back to list',click:'detail-back'},{name:'list kept',until:'row-'+item.id},{name:'back state',native:'state'},
    {name:'web tools for the same task',click:'row-'+item.id},{name:'check entry',click:'check-web'},{name:'web state',native:'state'}];
   const stepsFile=path.join(out,'native-steps.json');fs.writeFileSync(stepsFile,JSON.stringify(steps));
   const shots=path.join(out,'shots');fs.mkdirSync(shots,{recursive:true});
