@@ -256,6 +256,48 @@ class RealChainDateRoleTest(unittest.TestCase):
     def ids(self, view, key):
         return {i['task_id'] or i['id'] for g in view[key] for i in g['items']}
 
+    def task(self, task_id):
+        with self.case.app.connect() as db:
+            return {t['id']: t for t in self.case.app.tasks(db)}[task_id]
+
+    def test_open_homework_past_its_own_completion_and_check_day_stays_overdue_work(self):
+        row, a, v = self.one('11月17日今晚朗读2遍，11月18日早读检查。', 'learning', '2026-11-18', '2026-11-17T16:00:00+08:00',
+                             ('2026-11-17', '2026-11-19'))
+        self.assertEqual((a['complete_on'], a['due_on'], a['due_kind'], a['category']), ('2026-11-17', '2026-11-18', 'inspection', 'homework'))
+        self.assertIn(row['task_id'], self.ids(v['2026-11-17'], 'groups'), 'its own work day')
+        late = {i['task_id']: i for g in v['2026-11-19']['groups'] for i in g['items']}
+        self.assertIn(row['task_id'], late, 'unfinished homework with a real completion day is not lost when its check day passes')
+        self.assertNotIn(row['task_id'], self.ids(v['2026-11-19'], 'undated') | self.ids(v['2026-11-19'], 'closed'))
+        r = late[row['task_id']]; facts = {f['role']: f for f in r['facts']}
+        self.assertEqual((r['when'], facts['complete']['value'], facts['due']['value'], facts['due']['kind'], facts['due']['label'], facts['due']['state']),
+                         ('overdue', '2026-11-17', '2026-11-18', 'inspection', '检查', 'overdue'))
+        self.assertEqual(self.task(row['task_id'])['status'], '待跟进', 'the list changes no row')
+
+    def test_past_arranged_day_is_history_until_the_parent_keeps_it_open_with_a_due_review(self):
+        import family_task_focus as focus
+        row, a, v = self.one('11月18日美术课带彩纸。', 'admin', '2026-11-18', '2026-11-17T16:00:00+08:00', ('2026-11-18', '2026-11-19'))
+        self.assertEqual(a['due_on'], '2026-11-18'); self.assertIn(a['due_kind'], agenda.PASSED_KINDS)
+        self.assertIn(row['task_id'], self.ids(v['2026-11-18'], 'groups'))
+        bare = v['2026-11-19']
+        self.assertNotIn(row['task_id'], self.ids(bare, 'groups') | self.ids(bare, 'undated'), 'a bare past lesson day is its own day\'s history')
+
+        class Noon(dt.datetime):
+            @classmethod
+            def now(cls, tz=None): return dt.datetime(2026, 11, 19, 12, 0, tzinfo=tz)
+        with patch.object(focus.dt, 'datetime', Noon):
+            focus.save(self.case.app, dict(id=row['task_id'], version=self.task(row['task_id'])['focus']['version'], request_key='synthetic-art-paper-waiting',
+                                           mode='waiting', next_action='', waiting_for='学校回复', review_on='2026-11-19'))
+        task = self.task(row['task_id'])
+        self.assertEqual((task['focus']['mode'], task['focus']['waiting_for'], task['focus']['review_on'], task['status']), ('waiting', '学校回复', '2026-11-19', '待跟进'))
+        for day in ('2026-11-19', '2026-11-20'):
+            view = self.case.app.day_view(row['child_id'], day)
+            listed = {i['task_id']: i for g in view['groups'] for i in g['items']}
+            self.assertIn(row['task_id'], listed, 'the parent\'s due review keeps it in the day\'s work')
+            r = listed[row['task_id']]; due = next(f for f in r['facts'] if f['role'] == 'due')
+            self.assertEqual((r['when'], due['value'], due['state'], due['label']), ('earlier', '2026-11-18', 'passed', agenda.DUE_LABELS[a['due_kind']]))
+            self.assertNotIn('2026-11-19', [f.get('value') for f in r['facts']], 'the review day is no school date')
+        self.assertEqual(self.case.app.day_view(row['child_id'], '2026-11-18')['counts']['today'], 1, 'its own day unchanged')
+
     def test_d2_an_evening_counted_exercise_keeps_tonight_and_its_next_morning_check(self):
         text = '体育作业：今晚原地高抬腿30次，每10次休息半分钟；明早体育课检查。'
         row, a, v = self.one(text, 'learning', '2026-11-04', '2026-11-03T16:00:00+08:00', ('2026-11-03', '2026-11-04'))
