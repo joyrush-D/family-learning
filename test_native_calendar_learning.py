@@ -45,6 +45,7 @@ if __name__ == '__main__':
         first = get('child_id=child-1&day=2026-10-28')
         t01 = next(i for g in first['groups'] for i in g['items'] if i['task_id'] == 'T01')['id']
         course = next(c['record_id'] for s in first['learning']['subjects'] for c in s['course'])
+        ids = ['context-header', 'mode-strip', 'week-strip', 'workspace-body', 'master-pane', 'detail-pane', 'selected-context', 'week-day-2026-10-26', 'week-day-2026-10-28']
         steps = [
             {'name': 'calendar ready', 'until': 'week-2026-10-28', 'timeout': 20},
             # The time badge sits in a FlowRow the row's combined accessibility label does not expose; the merge itself is
@@ -70,6 +71,13 @@ if __name__ == '__main__':
             {'name': 'select original row', 'click': 'row-' + t01},
             {'name': 'original task detail open', 'until': 'history-web', 'timeout': 15},
             {'name': 'calendar-900', 'width': 900, 'native': 'snapshot'},
+            # 900: the chosen item replaces only the body; header, modes and the seven days stay above it and are clicked directly.
+            {'name': 'geo 900 detail', 'native': 'frame', 'ids': ids},
+            {'name': '900 detail: pick Monday on the strip', 'click': 'week-2026-10-26'},
+            {'name': '900 Monday selected', 'until': 'day-title', 'contains': '2026-10-26', 'timeout': 15},
+            {'name': '900 back to Wednesday on the strip', 'click': 'week-2026-10-28'},
+            {'name': '900 Wednesday selected', 'until': 'day-title', 'contains': '2026-10-28', 'timeout': 15},
+            {'name': '900 back to list if still open', 'click': 'detail-back', 'required': False},
             {'name': 'done switch', 'click': 'mode-已办'},
             {'name': 'done list', 'until': 'list-summary', 'contains': '已办', 'timeout': 10},
             {'name': 'todo switch', 'click': 'mode-当天'},
@@ -92,6 +100,7 @@ if __name__ == '__main__':
             {'name': 'course record apart', 'until': 'course-' + str(course), 'contains': '虚构课堂：有理数加法', 'timeout': 10},
             {'name': 'learning-1440', 'native': 'snapshot'},
             {'name': 'learning-900', 'width': 900, 'native': 'snapshot'},
+            {'name': 'learning 900 back to list', 'click': 'record-back', 'required': False},
             {'name': 'learning back to original task', 'click': 'learning-task-' + str(w1)},
             {'name': 'same original task selected', 'native': 'state'},
             {'name': 'return to native', 'key': '0', 'modifiers': ['command']},
@@ -100,6 +109,30 @@ if __name__ == '__main__':
             {'name': 'reopen', 'native': 'reopen'},
             {'name': 'reopened wrong book', 'click': 'mode-错题本'},
             {'name': 'correction kept after reopen', 'until': 'wrong-row-' + str(w1), 'contains': '已订正', 'timeout': 15},
+            # Layout geometry from the App's own anchors: 900 list/page, the threshold T=1100 crossed at 1099/1100/1101, 1280, 1440,
+            # three modes and closing the detail at one width, then back to 900. Only the test resizes the window.
+            {'name': 'geo calendar', 'click': 'mode-日历'},
+            {'name': 'geo row ready', 'until': 'row-' + t01, 'timeout': 15},
+            {'name': 'geo 900 list', 'width': 900, 'native': 'frame', 'ids': ids},
+            {'name': 'geo select row', 'click': 'row-' + t01},
+            {'name': 'geo detail open', 'until': 'detail-back', 'timeout': 10},
+            {'name': 'geo 900 page', 'native': 'frame', 'ids': ids},
+            {'name': 'layout-900-page', 'native': 'snapshot'},
+            {'name': 'geo 1099', 'width': 1099, 'native': 'frame', 'ids': ids},
+            {'name': 'geo 1100', 'width': 1100, 'native': 'frame', 'ids': ids},
+            {'name': 'geo 1101', 'width': 1101, 'native': 'frame', 'ids': ids},
+            {'name': 'geo 1280', 'width': 1280, 'native': 'frame', 'ids': ids},
+            {'name': 'layout-1280-split', 'native': 'snapshot'},
+            {'name': 'geo 1440', 'width': 1440, 'native': 'frame', 'ids': ids},
+            {'name': 'layout-1440-split', 'native': 'snapshot'},
+            {'name': 'geo 1440 standard fits', 'until': 'row-fit-' + t01, 'contains': 'inrow fits', 'timeout': 8},
+            {'name': 'geo wrong mode', 'click': 'mode-错题本'}, {'name': 'geo 1440 wrong', 'native': 'frame', 'ids': ids},
+            {'name': 'geo learning mode', 'click': 'mode-学习进展'}, {'name': 'geo 1440 learning', 'native': 'frame', 'ids': ids},
+            {'name': 'geo calendar again', 'click': 'mode-日历'}, {'name': 'geo 1440 calendar again', 'native': 'frame', 'ids': ids},
+            {'name': 'geo close detail', 'click': 'detail-back'}, {'name': 'geo 1440 list', 'native': 'frame', 'ids': ids},
+            {'name': 'layout-1440-list', 'native': 'snapshot'},
+            {'name': 'geo back to 900', 'width': 900, 'native': 'frame', 'ids': ids},
+            {'name': 'layout-900-list', 'native': 'snapshot'},
         ]
         (out / 'steps.json').write_text(json.dumps(steps, ensure_ascii=False, indent=1))
         support = out / 'support'; support.mkdir(mode=0o700); (support / 'desktop.json').write_text(json.dumps({'service_origin': origin}))
@@ -122,6 +155,27 @@ if __name__ == '__main__':
         same = rows['same original task selected']
         assert same.get('surface') == 'native' and same.get('mode') == '日历' and same.get('selection') == t01, same
         assert rows['native state'].get('native_visible'), rows['native state']
+        # Fixed layers above an adaptive body (screen coordinates, y up): body and detail never cover the week strip; 7 readable days.
+        geo = {n: r for n, r in rows.items() if n.startswith('geo ') and 'anchors' in r}
+        for n, g in geo.items():
+            a, cw = g['anchors'], g['content_frame'][2]
+            assert all(k in a for k in ('context-header', 'mode-strip', 'week-strip', 'workspace-body', 'master-pane')), (n, sorted(a))
+            wk, body, day = a['week-strip'], a['workspace-body'], a.get('week-day-2026-10-28')
+            assert body[1] + body[3] <= wk[1] + 0.5 and day and day[3] >= 64 and day[2] >= 100, (n, wk, body, day)
+            if 'detail-pane' in a:
+                dp = a['detail-pane']; assert dp[1] + dp[3] <= wk[1] + 0.5, (n, dp, wk)
+                if cw >= 1100:
+                    m = a['master-pane']; assert 'layout=split' in g['texts']['detail-pane'] and m[2] >= 520 and 0.45 <= m[2] / cw <= 0.48 and dp[2] >= 560, (n, m, dp, cw)
+                else: assert 'layout=page' in g['texts']['detail-pane'], (n, g['texts'])
+        assert 'detail-pane' in rows['geo 900 detail']['anchors'] and 'detail-pane' not in rows['geo 900 list']['anchors'] and 'detail-pane' not in rows['geo 1440 list']['anchors']
+        assert [rows[n]['content_frame'][2] for n in ('geo 1099', 'geo 1100', 'geo 1101')] == [1099, 1100, 1101]
+        assert 'layout=page' in rows['geo 1099']['texts']['detail-pane'] and all('layout=split' in rows[n]['texts']['detail-pane'] for n in ('geo 1100', 'geo 1101', 'geo 1280', 'geo 1440'))
+        for group in (['geo 900 list', 'geo 900 page', 'geo back to 900'], ['geo 1440', 'geo 1440 wrong', 'geo 1440 learning', 'geo 1440 calendar again', 'geo 1440 list']):
+            for k in ('context-header', 'mode-strip', 'week-strip'):
+                base = rows[group[0]]['anchors'][k]
+                assert all(all(abs(x - y) <= 1 for x, y in zip(rows[n]['anchors'][k], base)) for n in group), (group, k)
+        assert all(r['window_frame'][2] == rows['geo 900 list']['window_frame'][2] for r in (rows['geo 900 page'], rows['geo back to 900'])), 'window not moved by layout'
+        result.update(threshold_T=1100, geometry={n: dict(window_frame=g['window_frame'], content_frame=g['content_frame'], anchors=g['anchors'], texts=g['texts']) for n, g in geo.items()})
         saved = get('child_id=child-1&day=2026-10-28')
         w = next(r for g in saved['wrong'] for r in g['items'] if r['id'] == w1)
         assert w['state'] == '已订正' and w['followups'][-1]['note'].startswith('虚构订正') and w['task_id'] == 'T01'
