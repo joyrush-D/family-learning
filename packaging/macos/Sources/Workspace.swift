@@ -87,6 +87,8 @@ final class WorkspaceStore: ObservableObject {
     /// 当前页需要读回（GET失败、continue/include 回执不明、原图读不到）：同孩同批同原图只读重读，不重发写入、不调模型。
     /// 按资源分开（批次列表 list、批次状态 batch、每张原图 image:编号）：只有那个资源读成功才清它那一条；显示取其一。
     @Published var photoProblems: [String: String] = [:]
+    /// 已按原 /api/day 读回过的批次原错题编号：同一组编号不重复读（有界）；换孩子时清空。
+    var photoSyncedRecords: Set<Int> = []
     var photoRecovery: String { photoProblems.sorted { $0.key < $1.key }.first?.value ?? "" }
     @Published var photoImageEpoch = 0
     var photoImages: [String: NSImage] = [:]
@@ -273,7 +275,7 @@ final class WorkspaceStore: ObservableObject {
                 guard confirmDiscard("放弃这次还没登记的照片导入（已上传的原件保留）") else { return }
                 photoDraft = nil
             }
-            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]
+            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]; photoSyncedRecords = []
         }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
@@ -978,7 +980,7 @@ struct WrongList: View {
     var addRow: some View {
         VStack(alignment: .leading, spacing: 8) {
             if store.wrongGroups.isEmpty {
-                Text("还没有记下的错题。").font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).probe("wrong-empty")
+                Text(store.photoProblems["day"] != nil ? "导入的错题已保存，原错题清单待更新。" : "还没有记下的错题。").font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).probe("wrong-empty")
                 Text("作业里的错题：在日历里选那一项，写反馈后点“记一道错题”。没有原作业的题，用下面的按钮拍照记下。")
                     .font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
             }
@@ -2499,7 +2501,8 @@ extension WorkspaceStore {
             guard mine == photoSequence, child == childID, list.child_id == child else { return }
             photoBatches = list.batches; photoChild = child; photoLoadError = ""
             // 读回的是批次列表与各批实际状态：只清这两类；原图失败等它自己读成功才清。
-            photoProblems = photoProblems.filter { $0.key.hasPrefix("image:") }
+            photoProblems = photoProblems.filter { $0.key.hasPrefix("image:") || $0.key == "day" }
+            await syncSavedRecords()
         } catch {
             guard mine == photoSequence, child == childID else { return }
             if let e = error as? WorkspaceError, e.login { loginRequired = true; openLogin() }
@@ -2517,10 +2520,24 @@ extension WorkspaceStore {
         }
     }
 
+    /// 批次里已记下的原错题编号还不在原错题清单里：按原 /api/day（同一孩子、同一天）读回一次，原清单仍是唯一依据，
+    /// 不另算错题、不写记录。读不到时标“错题已保存，原清单待更新”，不被普通批次读回清掉，只由当前页“重新读取”再读。
+    func syncSavedRecords(force: Bool = false) async {
+        let child = childID
+        let saved = Set(photoBatchesShown.flatMap(\.papers).flatMap(\.questions).compactMap(\.record_id))
+        let missing = saved.subtracting(wrongItems.map(\.id))
+        guard !missing.isEmpty, force || photoProblems["day"] == nil, force || !missing.isSubset(of: photoSyncedRecords) else { return }
+        await load()
+        guard child == childID else { return }
+        if current != nil && error.isEmpty { photoSyncedRecords.formUnion(saved); photoProblems["day"] = nil }
+        else { photoProblems["day"] = "错题已保存，原错题清单待更新；点“重新读取”再读。" }
+    }
+
     /// 当前页的读回：只 GET 同一孩子的批次与原图（并重新挂上只读轮询），不上传、不重新登记、不重发 continue/include、不调模型。
     func refreshPhotos() async {
         photoImageEpoch += 1
         await loadPhotoBatches()
+        if photoProblems["day"] != nil { await syncSavedRecords(force: true) }
         // 仍未读成功的原图：按同一编号再只读一次（成功才清它那一条，失败照旧保留恢复入口）。
         for key in photoProblems.keys.sorted() where key.hasPrefix("image:") { _ = await photoImage(String(key.dropFirst(6))) }
         photoPollToken += 1
