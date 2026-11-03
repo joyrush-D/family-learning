@@ -118,11 +118,25 @@ async function loadBatches() {
     b.batches = out.batches;
     if (b.error.startsWith('读取导入结果失败')) b.error = '';
     const ids = out.batches.flatMap(x => x.papers.flatMap(p => p.questions.map(q => q.record_id).filter(Boolean)));
+    // 已完成（非排队/处理中）批次的已记原错题与逐卷依据版本：编号相同而依据变了（如第1版→第2版）也要读回原记录。
+    const prints = {};
+    for (const x of out.batches) if (!['queued', 'running'].includes(x.state))
+      prints[x.id] = x.papers.flatMap(p => p.questions.filter(q => q.record_id).map(q => `${x.version}|${p.paper_id}|${p.based_on_version ?? 0}|${q.record_id}`)).sort().join(',');
     const fresh = ids.filter(i => !b.records.has(i));
-    fresh.forEach(i => b.records.add(i));
+    const changed = Object.entries(prints).some(([k, v]) => v && (b.prints || {})[k] !== v);
     paintBatch();
-    // 新记下的错题进入原记录列表，原“记订正 / 复测”链才能找到它。
-    if (fresh.length) await ctx.reload?.();
+    // 经原记录读取入口读回一次（原“记订正 / 复测”链与记录卡片的依据都来自它）；读回成功才记已同步，进行中不重入。
+    if ((fresh.length || changed) && !b.syncing) {
+      b.syncing = true;
+      try {
+        await ctx.reload?.();
+        fresh.forEach(i => b.records.add(i)); b.prints = {...(b.prints || {}), ...prints};
+        if (b.error.startsWith('原错题记录暂未读回')) { b.error = ''; paintBatch(); }
+      } catch (e) {
+        b.error = '原错题记录暂未读回（' + (e.message || '读取失败') + '）；导入结果已保存，稍后回到本页会再读。';
+        paintBatch();
+      } finally { b.syncing = false; }
+    }
   } catch (e) {
     b.error = '读取导入结果失败，可刷新重试：' + (e.message || '网络错误');
     paintBatch();
