@@ -4055,7 +4055,10 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
         # The same teacher's later correction of this item's range whose every dated sentence keeps this item's own day words as
         # they were (更正…：第26页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。) states no day of its own.
         found=re.match(r'\s*(?:更正|补充)([^：:。；;！!？?\n]{0,30})[：:]\s*',e['text'])
-        if not found or not _school_native_later_text(homes[0],e):return False
+        # Its proof: the same publisher, sent later, a header naming this item's own thing and no other subject.
+        if (not found or not e.get('publisher') or e.get('publisher')!=homes[0].get('publisher') or not str(e.get('time',''))>str(homes[0].get('time',''))
+                or not _school_named_objects(found[1])&_school_named_objects(text)
+                or not all(x in text for x in re.findall(_SCHOOL_NATIVE_SUBJECTS,found[1]))):return False
         kept=False
         for s in re.split(r'[。；;！!？?\n]',e['text'][found.end():]):
             words=re.findall(day,s);rest=re.sub(r'(?:都|均|仍|也)?(?:不变|照旧)\s*$','',s.strip())
