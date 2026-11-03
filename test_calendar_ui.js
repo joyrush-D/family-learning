@@ -625,3 +625,25 @@ test('subject filing keeps each wrong question, its own correction and new quest
  assert.deepEqual([book('','T-MATH','English Reader'),book('','','英语分级读物 English'),book('','T-OTHER','语文课外读'),book('综合','T-MATH','自然观察'),book('语文','T-MATH','古诗'),book('','T-GEN','手工')].map(readingSubjectKey),['数学','科目待定','科目待定','综合事务','语文','综合事务']);
  assert.equal(JSON.stringify(ctx.data),saved,'the projection writes nothing back');
 });
+test('a wide day page opens only a row of the list it shows: an empty 待办 opens no hidden undated row, a dated or chosen row does',()=>{
+ const h=harness(),d=h.ctx.data,state=k=>vm.runInContext(k,h.ctx);
+ Object.assign(h.ctx,{filters:()=>'',revealTaskLink(){},revealRecordTopic(){},groveLoadMaterials(){}});
+ const row=(id,title,extra={})=>({id,task_id:'',kind:'school',child_id:'child-a',child_ids:['child-a'],subject:'语文',title,when:'unknown',today:false,lines:[],facts:[],...extra});
+ const old=row('old-undated','虚构旧未定事项'),dated=row('dated-today','虚构今天作业',{when:'today',today:true});
+ const view=groups=>({'child-a':{groups,undated:[{subject:'语文',items:[old]}],closed:[],counts:{open:groups.length,today:groups.length}}});
+ const detail=html=>html.split('id="groveDetail"')[1]||'';
+ d.today_calendar={inbox:[],events:[],timetables:[]};d.today_view=view([]);let html=h.ctx.todayTasksHTML();
+ assert.equal(state('groveSelected'),'','no automatic choice from a hidden list');
+ assert.doesNotMatch(detail(html),/虚构旧未定事项/,'the old undated row stays out of the detail while 待办 is empty');
+ assert.match(detail(html),/grove-empty/);assert.match(html,/data-grove-scope-list="undated" hidden/);
+ // Chosen by a click or a link (both show its own list), it opens and stays chosen across a deliberate switch to 待办.
+ vm.runInContext("groveSelected='old-undated';groveScope=groveScopeOf(groveView(),'old-undated')",h.ctx);html=h.ctx.todayTasksHTML();
+ assert.match(detail(html),/虚构旧未定事项/);assert.doesNotMatch(html,/data-grove-scope-list="undated" hidden/);
+ vm.runInContext("groveScope='open'",h.ctx);assert.match(detail(h.ctx.todayTasksHTML()),/虚构旧未定事项/,'a chosen row is not dropped by a scope switch');
+ // A fresh wide page with a dated row opens that row, never the undated one.
+ vm.runInContext("groveSelected='';groveScope='open'",h.ctx);d.today_view=view([{subject:'语文',items:[dated]}]);html=h.ctx.todayTasksHTML();
+ assert.equal(state('groveSelected'),'dated-today');assert.match(detail(html),/虚构今天作业/);assert.doesNotMatch(detail(html),/虚构旧未定事项/);
+ // The 日期未定 list chosen with nothing chosen opens its own first row; a narrow page chooses nothing.
+ vm.runInContext("groveSelected='';groveScope='undated'",h.ctx);assert.match(detail(h.ctx.todayTasksHTML()),/虚构旧未定事项/);
+ h.width=360;vm.runInContext("groveSelected='';groveScope='open'",h.ctx);h.ctx.todayTasksHTML();assert.equal(state('groveSelected'),'');
+});
