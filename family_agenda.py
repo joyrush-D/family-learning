@@ -565,9 +565,10 @@ def later_dropped_days(quote,text,published,own=None,title=''):
 _COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完成|练习|阅读|读|写|做|背'
 # A counted exercise is its own predicate (原地高抬腿30次、跳绳100下、仰卧起坐20个、慢跑3圈), with no list of activities: the
 # child's work for the day directly heading it. A name holding a negation, state, another day, an ordinal, an option or a
-# report or possession word (今晚有3次机会、第2次提醒、已练30次、练了30次、共3个) is none, nor is a count something else holds.
+# report or possession word (今晚有3次机会、第2次提醒、已练30次、练了30次、共3个) is none, nor is a count something else holds
+# or the casual 一下 (明天准备一下).
 _COUNTED_ACT=(r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|[不没无未免别勿有是共约第已了过的每或])[一-鿿]){2,6}?'
-              r'[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')
+              r'(?!一\s*下)[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')  # 准备一下 is no count
 
 
 def completion_day(quote,header,time,due_on):

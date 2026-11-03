@@ -4062,7 +4062,8 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             at+=len(other)
     done,due,evening,bare,handed=set(),set(),set(),set(),{}
     # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
-    work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包'
+    # A counted exercise (今晚原地高抬腿30次) is the evening's own work as 今晚做… is (family_agenda._COUNTED_ACT).
+    work=_COMPLETION_VERB+r'|(?:装|放)(?:进|入|到)\s*书包|'+family_agenda._COUNTED_ACT
     from family_agenda import prepared_carry
     sentences=re.split(r'[。；;！!？?\n]',span)
     def continued(si,n,clause):
