@@ -759,6 +759,9 @@ def advance(app, now=None, budget=1):
         except (family_llm.LLMDraftError, BatchError, ValueError, OSError) as reason:
             outcome, error = None, reason
             failed += 1
+        except Exception:  # 其他意外：结果未知，记失败原因，不自动重发，不让步骤停在处理中。
+            outcome, error = None, BatchError('处理时发生意外，结果未知；未自动重新调用')
+            failed += 1
         _finish(app, claim, outcome, error, _now())
     return dict(used=used, failed=failed, saves=saves)
 
