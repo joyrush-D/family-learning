@@ -76,6 +76,7 @@
 !/test_native_context.swift
 !/test_native_topic_journey.py
 !/test_native_calendar_learning.py
+!/test_native_photo_receipt_owner.py
 !/test_calendar_ui.js
 !/test_calendar_learning_ui.cjs
 
