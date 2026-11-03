@@ -191,7 +191,7 @@ function revealTaskLink(){
 // workbench reads. A compact subject-first list; the selected row's own detail beside it (>=900px) or in its place on a phone,
 // where the browser's back returns to the list. Rows keep their original ids, task state and controllers; nothing is saved here.
 let groveSelected='',groveDetailOpen=false,groveStamp=null,groveDay='',groveTab='calendar';const groveMaterials=new Map(),groveDays=new Map();
-const groveWhen={later:'以后安排',overdue:'已过期限',earlier:'之前安排',unknown:'日期未写明'};
+const groveWhen={later:'以后安排',overdue:'已过期限',earlier:'之前安排',unknown:'日期未写明',passed:'已过'};
 // Today is data.today_view; another day of the week strip is the same server projection read once by GET /api/day (one
 // request gives that day's list, lessons/plans and the week's counts). A new data load clears the cache, so a save is re-read.
 function groveToday(){const v=data?.today_view?.[currentChild()?.id];return Array.isArray(v?.groups)?v:null}
@@ -280,6 +280,11 @@ function groveVersionHTML(v){if(!v)return '';const list=l=>`<ul class="grove-sta
  return `<section class="grove-card" data-version-detail="${esc(v.state)}"><h3>${v.state==='latest'?'学校要求已更新':'新通知待核对'}</h3>`
   +(v.state==='latest'?`<p class="small">${esc(v.change||'')}；以上显示老师后发的最新要求。</p><p class="small muted">原要求（${esc(v.previous?.title||'')}）：</p>${list(v.previous?.lines)}`:`<p class="grove-unclear" role="note">${esc(v.note||'')}</p>`)
   +(v.notices||[]).map(n=>`<p class="small muted">${v.state==='latest'?'更新通知':'新通知（待在待核对里确认）'}：${esc(who(n))} ${esc((n.published_at||'').slice(0,16).replace('T',' '))}</p>${v.state==='latest'?'':list(n.lines)}`).join('')+'</section>'}
+// A subject tag counts its dated rows and its undated ones apart (server group.undated); undated rows are never this day's.
+function groveGroupCount(g){const u=g.undated||0,n=g.items.length-u;return [n?n+' 项':'',u?'日期未定 '+u:''].filter(Boolean).join(' · ')}
+// School material with no read action yet (server view.materials): one line naming each subject's count, not the day's work;
+// every original stays in the school information page.
+function groveMaterialsHTML(view){const m=view.materials||[];return m.length?`<p class="grove-upcoming small muted" data-grove-materials>学校资料待整理，不算当天要做：${m.map(g=>`${esc(g.subject)} ${g.items.length} 条`).join('；')}。<button type="button" data-page="agent">查看原消息与整理状态</button></p>`:''}
 function groveUpcomingHTML(view){const u=view.upcoming||[];return u.length?`<p class="grove-upcoming small muted" data-grove-upcoming>即将/待补：${u.map(x=>`${esc(x.day.slice(5))} ${esc(x.title)}${x.pending_review?'（待补）':''}${x.change?'（'+esc(x.change)+'）':''}`).join('；')}</p>`:''}
 function groveRowHTML(r){
  const on=r.id===groveSelected,meta=[groveSource(r),groveProgressWords(r.progress)].filter(Boolean).join(' · ');
@@ -379,10 +384,10 @@ function todayTasksHTML(){
  const sources=currentSources().filter(s=>matches({child_ids:[s.child_id]}));
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
  const originalGap=sources.some(s=>s.unread_count>0);
- const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
- const groups=(view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${g.items.length} 项</span></h2>`
+ const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['passed','已过'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
+ const groups=(view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2>`
   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
-  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view);
+  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialsHTML(view);
  const closed=(view.closed||[]).flatMap(g=>g.items||[]);
  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
