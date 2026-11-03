@@ -76,7 +76,9 @@ final class WorkspaceStore: ObservableObject {
     /// 批量照片（PRD 5.1）：当前孩子已导入批次的只读结果与这次还没登记完的导入草稿；换孩子时不带过去，迟到读回不覆盖。
     @Published var photoBatches: [PhotoBatch] = []
     @Published var photoChild = ""
-    @Published var photoNotice = ""
+    /// 当前提示代表的“继续失败部分”回执不明（同孩、同批、同版本）：提示一被其他内容改写，就不再代表它们。
+    @Published var photoNotice = "" { didSet { photoContinueUnknown = [] } }
+    var photoContinueUnknown: Set<PhotoContinueOrigin> = []
     @Published var photoLoadError = ""
     @Published var photoBusy = false
     @Published var photoDraft: PhotoImportDraft?
@@ -2530,6 +2532,9 @@ struct PhotoImportDraft {
     var sent = false
 }
 
+/// 一次回执不明的“继续失败部分”：只有正常读回同孩同批同版本已结束，才算读到它现在的结果（不等于拿到原回执）。
+struct PhotoContinueOrigin: Hashable { let child: String; let batch: String; let version: Int }
+
 extension WorkspaceStore {
     var photoBatchesShown: [PhotoBatch] { photoChild == childID ? photoBatches : [] }
     var selectedPhotoPaper: (PhotoBatch, PhotoPaper)? {
@@ -2549,8 +2554,16 @@ extension WorkspaceStore {
             let list = try JSONDecoder().decode(PhotoBatchList.self, from: data)
             guard mine == photoSequence, child == childID, list.child_id == child else { return }
             photoBatches = list.batches; photoChild = child; photoLoadError = ""
-            // 读回的是批次列表与各批实际状态：只清这两类；原图失败等它自己读成功才清。
-            photoProblems = photoProblems.filter { $0.key.hasPrefix("image:") || $0.key == "day" }
+            // 回执不明的继续：同孩同批同版本读回已结束才算读到结果；处理中、仍失败、改版或不在列表都照旧未知。
+            let settled = photoContinueUnknown.filter { origin in origin.child == child && list.batches.contains {
+                $0.id == origin.batch && $0.child_id == child && $0.version == origin.version && $0.state == "done" } }
+            if !settled.isEmpty {
+                photoContinueUnknown.subtract(settled)
+                if photoContinueUnknown.isEmpty { photoNotice = "已读回这批最新结果，处理已结束。" }
+            }
+            let unsettled = photoContinueUnknown.contains { $0.child == child }
+            // 读回的是批次列表与各批实际状态：只清这两类；原图失败等它自己读成功才清；继续回执还没读到结果时保留读回入口。
+            photoProblems = photoProblems.filter { $0.key.hasPrefix("image:") || $0.key == "day" || $0.key == "batch" && unsettled }
             await syncSavedRecords()
         } catch {
             guard mine == photoSequence, child == childID else { return }
@@ -2704,8 +2717,9 @@ extension WorkspaceStore {
     /// 家长明确“继续失败部分”：只用这一批当前版本提交一次；回执不明不自动重发，到调用上限时服务端不再给继续。
     func continuePhotoBatch(_ batch: PhotoBatch) async {
         guard batch.child_id == childID else { return }
+        let origin = PhotoContinueOrigin(child: batch.child_id, batch: batch.id, version: batch.version)
         applyPhotoOutcome(await client.post("/api/photo-batch/continue", ["batch_id": batch.id, "version": batch.version]),
-                          done: "已排入后台，只重做未完成的步骤。")
+                          done: "已排入后台，只重做未完成的步骤。", continued: origin)
     }
 
     func includePhotoQuestion(_ batch: PhotoBatch, _ question: PhotoQuestion) async {
@@ -2715,7 +2729,7 @@ extension WorkspaceStore {
         await load()
     }
 
-    func applyPhotoOutcome(_ outcome: PostOutcome, done: String) {
+    func applyPhotoOutcome(_ outcome: PostOutcome, done: String, continued: PhotoContinueOrigin? = nil) {
         switch outcome {
         case .saved(let reply):
             if let batch = decodePhotoBatch(reply), batch.child_id == childID {
@@ -2725,7 +2739,10 @@ extension WorkspaceStore {
             if status == 401 { loginRequired = true; openLogin() }
             photoNotice = message
         case .unknown:
+            // 提示已代表的回执不明继续与这一次合并；include 等其他未知改写提示后，批次已结束也不替它核对。
+            let pending = photoContinueUnknown
             photoNotice = "没有收到回执，结果未知；不会自动重发。"
+            if let continued { photoContinueUnknown = pending.union([continued]) }
             photoProblems["batch"] = "点“重新读取”核对这一批的实际状态。"
         }
     }
