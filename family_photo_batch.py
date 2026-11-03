@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import unicodedata
 
 import family_wrong_questions as fwq
 import family_wrong_review as fwr
@@ -21,6 +22,8 @@ MAX_BATCH_BYTES = 200 * 1024 * 1024
 READ_IMAGES = fwq.MAX_IMAGES
 CHECK_IMAGES = 8
 SAVE_CHUNK = fwr.MAX_SAVE_ITEMS
+REVIEW_ITEMS = 25  # homework_reference_draft 每次逐题结果上限（原 schema maxItems）
+FOLLOWUP_LIMIT = 10  # 每批每版本按有据未查题号补查的调用总上限
 ROUND_SAVES = 20
 STALE_RUNNING = dt.timedelta(minutes=15)
 READ_TIMEOUT = 150
@@ -80,8 +83,10 @@ def _json(value):
 
 
 def _norm_label(label):
-    """题号比较只去掉空白与“第/题/标点”包装；不推断大题归属，接不上就不定位。"""
-    return re.sub(r'[\s第题号.．、:：()（）\[\]【】]', '', label or '')
+    """题号只规范包装（全/半角、空白、“第…题”、分隔标点）；括号小题、大题等层级边界全部保留：第1题(1)≠第11题。"""
+    text = re.sub(r'\s+', '', unicodedata.normalize('NFKC', label or ''))
+    text = re.sub(r'第([0-9]+|[一二三四五六七八九十百]+)(?:小题|大题|题)?', r'\1.', text)
+    return re.sub(r'\.+', '.', re.sub(r'[、:]', '.', text)).strip('.')
 
 
 def _table(c):
@@ -107,6 +112,8 @@ def _refresh(u):
     states = {s['state'] for s in u['steps']}
     u['state'] = ('running' if 'running' in states else 'queued' if 'todo' in states else
                   'needs_attention' if states & {'failed', 'unknown'} else 'done')
+    if u['state'] == 'done' and any(p.get('unchecked_questions') for p in u['papers']):
+        u['state'] = 'needs_attention'
 
 
 def _pages(row):
@@ -414,8 +421,9 @@ def validate_grouping(result, readable, info):
                     pending.setdefault(page_id, '组卷页序冲突，待补')
         for page in paper['pages']:
             evidence = info[page['page_id']].get('evidence') or {}
-            if page['role'] == 'answered' and evidence.get('page_kind') == 'answer_key':
-                pending.setdefault(page['page_id'], '读图认为是参考答案页，组卷却当作答页，待核')
+            if page['role'] == 'answered' and evidence.get('page_kind') in ('answer_key', 'questions_only'):
+                pending.setdefault(page['page_id'], '读图认为本页%s，没有学生作答；组卷却当作答页，本页待核，不判孩子对错'
+                                   % ('是参考答案页' if evidence['page_kind'] == 'answer_key' else '只有题面'))
     for raw in result['same_pages']:
         if not isinstance(raw, dict) or set(raw) != {'page_id', 'same_as', 'answers_consistent'} \
                 or type(raw['answers_consistent']) is not bool:
@@ -454,7 +462,8 @@ def _apply_group(u, papers, pending, issues, step):
         old = previous.pop(_signature(paper), None)
         if old is not None and old.get('checked'):
             # 同一份卷的页、页序与页型都没变：沿用原检查与原记录，依据版本不变。
-            paper.update({k: old[k] for k in ('segments', 'questions', 'checked', 'coverage', 'based_on_version', 'note') if k in old})
+            paper.update({k: old[k] for k in ('segments', 'questions', 'checked', 'coverage', 'based_on_version', 'note',
+                                                'unchecked_questions', 'segment_coverage') if k in old})
             paper['carried'] = True
             _queue_saves(u, paper)
         else:
@@ -499,35 +508,61 @@ def _locate(label, page_ids, info):
 
 
 def _merge(paper, info):
-    """各段逐题结果按卷内题身份合并：跨段同题判断一致只留一条，不一致标疑似待核；接不上原题框的标未定位。"""
-    merged, order = {}, []
+    """各段逐题结果只在本段内按完整题号身份去重；不同段（不同原图页）同号不猜同题，各自保留原件归属。
+    每段原检查说明与有据未查题号原样保留，未查完不报完整。"""
+    questions = []
     for number, segment in enumerate(paper['segments']):
         counts = {}
-        for position, q in enumerate(segment['questions'], 1):
-            norm = _norm_label(q['label']) or 's%dq%d' % (number + 1, position)
+        for position, q in enumerate(segment['questions'] + segment.get('followup_questions', []), 1):
+            norm = _norm_label(q['label']) or 'q%d' % position
             counts[norm] = counts.get(norm, 0) + 1
-            ident = norm if counts[norm] == 1 else '%s~%d' % (norm, counts[norm])
             located = _locate(q['label'], segment['pages'], info) if counts[norm] == 1 else None
-            entry = dict(key=paper['paper_id'] + ':' + ident[:100], label=q['label'] or '第%d题' % position,
-                         question=q['question'], student_answer=q['student_answer'], answer=q['answer'],
-                         judgment=q['judgment'], error_reason=q['error_reason'], steps=q['steps'],
-                         uncertainty=q['uncertainty'], question_kind=q.get('question_kind', 'unknown'),
-                         state=_classify(q), page_id=located['page_id'] if located else '',
-                         box=located['box'] if located else None, segment_pages=segment['pages'], conflict='')
-            if ident in merged:
-                prior = merged[ident]
-                if prior['judgment'] != entry['judgment'] or prior['student_answer'] != entry['student_answer']:
-                    prior['conflict'] = '分段检查对同一题的判断不一致，待核'
-                    if prior['state'] in ('wrong', 'correct'):
-                        prior['state'] = 'suspected' if 'incorrect' in (prior['judgment'], entry['judgment']) else 'unknown'
-                continue
-            merged[ident] = entry
-            order.append(ident)
-    paper['questions'] = [merged[k] for k in order]
+            owner = located['page_id'] if located else 's%d' % (number + 1)
+            ident = '%s:%s' % (owner, norm if counts[norm] == 1 else '%s~%d' % (norm, counts[norm]))
+            questions.append(dict(key=(paper['paper_id'] + ':' + ident)[:130], label=q['label'] or '第%d题' % position,
+                                  question=q['question'], student_answer=q['student_answer'], answer=q['answer'],
+                                  judgment=q['judgment'], error_reason=q['error_reason'], steps=q['steps'],
+                                  uncertainty=q['uncertainty'], question_kind=q.get('question_kind', 'unknown'),
+                                  state=_classify(q), page_id=located['page_id'] if located else '',
+                                  box=located['box'] if located else None, segment_pages=segment['pages'], conflict=''))
+    paper['questions'] = questions
     checked = [p for s in paper['segments'] for p in s['pages']]
-    paper['coverage'] = ('本卷已检查%d页作答页、逐题列出%d题；未列出的题目仍未检查，没有错题不代表全卷正确。'
-                         % (len(checked), len(paper['questions'])))
+    gaps = [label for s in paper['segments'] for label in s.get('unchecked', [])]
+    paper['unchecked_questions'] = gaps
+    paper['segment_coverage'] = [dict(pages=s['pages'], coverage=s['coverage'], model_coverage=s.get('model_coverage', ''),
+                                      unchecked=s.get('unchecked', [])) for s in paper['segments']]
+    paper['coverage'] = ('本卷已检查%d页作答页、逐题列出%d题%s；未列出的题目仍未检查，没有错题不代表全卷正确。'
+                         % (len(checked), len(questions), '，另有%d题明确未检查（%s）' % (len(gaps), '、'.join(gaps)) if gaps else ''))
     paper['checked'] = True
+
+
+def _evidenced_gaps(info, pages, returned):
+    """本段读图明确出现、检查却未逐题返回的题号；返回达到单次25题上限时，按本段印刷首末题号补出连续数字范围。"""
+    seen = {_norm_label(q['label']) for q in returned}
+    labels = []
+    def add(label):
+        norm = _norm_label(label)
+        if norm and norm not in seen:
+            seen.add(norm)
+            labels.append(label)
+    for page_id in pages:
+        evidence = info[page_id].get('evidence') or {}
+        for region in info[page_id]['regions']:
+            if region['kind'] != 'handwriting':
+                add(region['label'])
+        add(evidence.get('first_label', ''))
+        add(evidence.get('last_label', ''))
+    if len(returned) >= REVIEW_ITEMS:
+        numbers = [int(n) for n in (_norm_label(q['label']) for q in returned) if n.isdigit()]
+        bounds = [int(n) for page_id in pages for key in ('first_label', 'last_label')
+                  for n in [_norm_label((info[page_id].get('evidence') or {}).get(key, ''))] if n.isdigit()]
+        if numbers and bounds and max(bounds) > max(numbers) and max(bounds) - min(bounds) <= 100:
+            for n in range(min(bounds), max(bounds) + 1):
+                add('第%d题' % n)
+    def order(label):
+        norm = _norm_label(label)
+        return (0, int(norm), '') if norm.isdigit() else (1, 0, norm)
+    return sorted(labels, key=order)
 
 
 def _record_key(row, paper, question, chosen):
@@ -583,9 +618,11 @@ def _finish_paper(u, paper):
 
 
 def _queue_saves(u, paper):
-    wrong = [q['key'] for q in paper['questions'] if q['state'] == 'wrong' and saved_key(paper, q) not in u['saved']]
+    queued = {k for s in u['steps'] if s['kind'] == 'save' and s['state'] != 'done' and s['paper_id'] == paper['paper_id'] for k in s['keys']}
+    wrong = [q['key'] for q in paper['questions'] if q['state'] == 'wrong' and saved_key(paper, q) not in u['saved'] and q['key'] not in queued]
     for start in range(0, len(wrong), SAVE_CHUNK):
-        u['steps'].append(dict(id='save-v%d-%s-%d' % (u['version'], paper['paper_id'], start // SAVE_CHUNK + 1), kind='save',
+        number = sum(1 for s in u['steps'] if s['kind'] == 'save' and s['paper_id'] == paper['paper_id']) + 1
+        u['steps'].append(dict(id='save-v%d-%s-%d' % (u['version'], paper['paper_id'], number), kind='save',
                                paper_id=paper['paper_id'], keys=wrong[start:start + SAVE_CHUNK], state='todo', attempts=0,
                                error='', at='', version=u['version']))
 
@@ -642,9 +679,12 @@ def _run(app, row, u, step):
     total = sum(1 for p in paper['pages'] if p['role'] == 'answered' and not p.get('retake'))
     coverage = ['本段读取本卷作答页%d页（全卷作答页%d页）%s' % (len(step['pages']), total,
                 '，另附同卷参考答案%d页' % len(refs) if refs else '')]
+    if step.get('followup'):
+        coverage.append('本次只补查本段原检查未逐题返回的题号：' + '、'.join(step['labels']))
     return family_llm.homework_reference_draft(_images(app, row, step['pages']), data_path=app.DATA, timeout=CHECK_TIMEOUT,
                                                review=True, reference_images=_images(app, row, step['refs']),
-                                               image_labels=labels, reference_labels=refs, program_coverage=coverage)
+                                               image_labels=labels, reference_labels=refs, program_coverage=coverage,
+                                               pending_labels=step.get('labels', ()))
 
 
 def _apply(u, step, outcome):
@@ -660,12 +700,40 @@ def _apply(u, step, outcome):
     else:
         paper = next(p for p in u['papers'] if p['paper_id'] == step['paper_id'])
         segment = paper['segments'][step['segment']]
-        segment.update(state='done', coverage=outcome['coverage'][:1500],
-                       questions=[{k: q.get(k, '') for k in ('label', 'question', 'student_answer', 'answer', 'judgment',
-                                                            'error_reason', 'steps', 'uncertainty', 'question_kind')}
-                                  for q in outcome['questions']])
+        keep = ('label', 'question', 'student_answer', 'answer', 'judgment', 'error_reason', 'steps', 'uncertainty', 'question_kind')
+        # 原检查对未返回的待补题会补一条 not_checked 的未判定项：那仍是未检查，不算已判。
+        judged = [{k: q.get(k, '') for k in keep} for q in outcome['questions']
+                  if (q.get('inspection') or {}).get('state') != 'not_checked']
+        model_coverage = ((outcome.get('unverified_model_summary') or {}).get('coverage') or '')[:1500]
+        note = ''
+        if step.get('followup'):
+            wanted = {_norm_label(label): label for label in step['labels']}
+            known = {_norm_label(q['label']) for q in segment['questions'] + segment.get('followup_questions', [])}
+            added = [q for q in judged if _norm_label(q['label']) in wanted and _norm_label(q['label']) not in known]
+            segment.setdefault('followup_questions', []).extend(added)
+            got = {_norm_label(q['label']) for q in added}
+            segment['unchecked'] = [l for l in segment.get('unchecked', []) if _norm_label(l) not in got]
+            if model_coverage:
+                segment['model_coverage'] = (segment.get('model_coverage', '') + '\n补查：' + model_coverage)[:3000]
+            missing = [label for norm, label in wanted.items() if norm not in got]
+            if missing:
+                note = '补查没有返回所选题号（%s），结果未知；未自动重新调用，可点“继续失败部分”' % '、'.join(missing)
+        else:
+            segment.update(state='done', coverage=outcome['coverage'][:1500], model_coverage=model_coverage, questions=judged)
+            gaps = _evidenced_gaps(u['pages'], segment['pages'], judged)
+            segment['unchecked'] = gaps
+            used = sum(1 for s in u['steps'] if s.get('followup') and s.get('version') == u['version'])
+            for start in range(0, len(gaps), REVIEW_ITEMS):
+                if used >= FOLLOWUP_LIMIT:
+                    break  # 超过本版本补查上限：保留可见未检查，不再安排。
+                used += 1
+                u['steps'].append(dict(id='%s-f%d' % (step['id'], start // REVIEW_ITEMS + 1), kind='check', followup=True,
+                                       labels=gaps[start:start + REVIEW_ITEMS], paper_id=step['paper_id'],
+                                       segment=step['segment'], pages=step['pages'], refs=step['refs'], state='todo',
+                                       attempts=0, error='', at='', version=u['version']))
         if all(s['state'] == 'done' for s in paper['segments']):
             _finish_paper(u, paper)
+        return note
 
 
 def _claim(app, now):
@@ -733,8 +801,8 @@ def _finish(app, claim, outcome, error, now):
         if error is not None:
             step.update(state='failed', at=now.isoformat(), error=str(error)[:300] or '处理失败')
         else:
-            _apply(u, step, outcome)
-            step.update(state='done', at=now.isoformat())
+            note = _apply(u, step, outcome)
+            step.update(state='unknown' if note else 'done', at=now.isoformat(), error=note or '')
             _plan(u, _pages(row))
         _write(c, row, u, now)
 
@@ -834,6 +902,8 @@ def view_row(app, c, row):
                            unlocated=sum(1 for q in questions if q['state'] in ('wrong', 'suspected') and not q['located']),
                            unchecked_pages=[p for p in answered if p not in checked],
                            coverage=paper.get('coverage', ''), based_on_version=paper.get('based_on_version'),
+                           unchecked_questions=paper.get('unchecked_questions', []),
+                           segment_coverage=paper.get('segment_coverage', []),
                            questions=questions))
     ids = [q['record_id'] for paper in papers for q in paper['questions'] if q['record_id']]
     follow = {}

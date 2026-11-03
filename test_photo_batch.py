@@ -29,7 +29,7 @@ def page_bytes(tag):
     return PNG + b'synthetic-' + tag.encode()
 
 
-def evidence(subject, title, printed, kind='answered', readability='clear', first='第1题', last='第3题'):
+def evidence(subject, title, printed, kind='answered', readability='clear', first='', last=''):
     return dict(subject=subject, subject_basis='题面内容', title=title, printed_page=printed, first_label=first,
                 last_label=last, head='虚构题面开头', tail='虚构题面结尾', page_kind=kind, readability=readability)
 
@@ -42,7 +42,7 @@ def region(label, y=200, kind='wrong_item'):
 # Fictional pages: two math pages imported out of order, a Chinese page, an exact byte duplicate, a math answer key,
 # an unreadable page, and a Chinese-text math word problem page that must stay math.
 PAGES = {
-    'm2': dict(evidence=evidence('数学', '虚构数学单元练习', '2', first='第4题', last='第6题'), regions=[region('第5题', 300), region('第6题', 500)]),
+    'm2': dict(evidence=evidence('数学', '虚构数学单元练习', '2', first='第5题', last='第6题'), regions=[region('第5题', 300), region('第6题', 500)]),
     'c1': dict(evidence=evidence('语文', '虚构语文小测', '1'), regions=[region('第2题', 260)]),
     'm1': dict(evidence=evidence('数学', '虚构数学单元练习', '1'), regions=[region('第2题', 240)]),
     'mk': dict(evidence=evidence('数学', '虚构数学单元练习 参考答案', '', kind='answer_key'), regions=[]),
@@ -87,6 +87,7 @@ class Model:
 
     def __call__(self, messages, schema, name, timeout=60, *, data_path=None):
         self.calls.append(name)
+        self.last_messages = [m['content'] if isinstance(m['content'], str) else [p.get('text', '') for p in m['content']] for m in messages]
         if name in self.fail:
             raise family_llm.LLMDraftError('模型暂时不可用（虚构）')
         tags = self.images(messages)
@@ -258,21 +259,74 @@ class PhotoBatchTest(unittest.TestCase):
         (paper,) = view['papers']
         self.assertEqual((view['state'], paper['paper_id'], len(paper['pages']), paper['unchecked_pages']), ('done', 'paper-p01', 10, []))
         self.assertIn('已检查10页', paper['coverage'])
-        third = next(q for q in paper['questions'] if q['label'] == '第3题')
-        self.assertEqual((third['state'], third['record_id']), ('suspected', None), third)
-        self.assertIn('不一致', third['conflict'])
-        self.assertEqual(sum(q['label'] == '第3题' for q in paper['questions']), 1, 'a question across segments is one question')
-        body = dict(batch_id=view['id'], version=view['version'], question_key=third['key'])
-        code, first = self.request('/api/photo-batch/include', body)
-        code2, again = self.request('/api/photo-batch/include', body)
-        ids = [q['record_id'] for out in (first, again) for q in out['papers'][0]['questions'] if q['key'] == third['key']]
-        self.assertEqual((code, code2), (200, 200))
-        self.assertTrue(ids[0] and ids[0] == ids[1])
+        # 第3题 on page 1 (segment 1) and 第3题 on page 9/10 (segment 2) are on different originals: no evidence they are
+        # one question, so both stay, each with its own owner; no suspected is made up from the label alone.
+        thirds = [q for q in paper['questions'] if q['label'] == '第3题']
+        self.assertEqual(sorted(q['state'] for q in thirds), ['correct', 'wrong'])
+        self.assertEqual(len({q['key'] for q in thirds}), 2)
+        self.assertFalse([q for q in paper['questions'] if q['state'] == 'suspected'])
+        wrong = next(q for q in thirds if q['state'] == 'wrong')
+        self.assertEqual((wrong['page_id'], bool(wrong['record_id'])), ('p01', True))
+        correct = next(q for q in thirds if q['state'] == 'correct')
+        code, refused = self.request('/api/photo-batch/include', dict(batch_id=view['id'], version=view['version'], question_key=correct['key']))
+        self.assertEqual((code, refused['code']), (409, 'photo_question_changed'))
         code, state = self.request('/api/state')
         saved = [r for r in state['records'] if r['source'] == '错题照片核对']
         self.assertEqual(len(saved), 1)
-        self.assertIn('家长选择纳入练习', saved[0]['note'])
-        self.assertEqual(saved[0]['wrong_region']['page_id'], 'p01')
+        self.assertIn('AI判断', saved[0]['note'])
+
+    def test_hierarchical_labels_keep_their_boundaries(self):
+        self.assertNotEqual(fpb._norm_label('第1题(1)'), fpb._norm_label('第11题'))
+        self.assertEqual(fpb._norm_label('第1题（1）'), fpb._norm_label('1(1)'))
+        self.assertEqual(fpb._norm_label(' 第 3 题 '), fpb._norm_label('3.'))
+        self.assertNotEqual(fpb._norm_label('一、3'), fpb._norm_label('13'))
+
+    def dense(self, key, followup):
+        tags = ['D01']
+        PAGES['D01'] = dict(evidence=evidence('数学', '虚构密集页', '1', first='第1题', last='第31题'), regions=[region('第1题', 100)])
+        model = Model(self.ids)
+        model.group = self.paper_of(tags, '虚构密集页')
+        def review(seen):
+            asked = '第26题' in json.dumps(model.last_messages, ensure_ascii=False)
+            return [item('第%d题' % n, 'incorrect') for n in (range(26, 32) if asked and followup else range(1, 26))]
+        model.review = review
+        _, (code, created) = self.batch(key, tags)
+        self.rounds(model, 6)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        return model, created, view
+
+    def test_dense_page_known_gap_is_kept_and_a_bounded_follow_up_checks_only_it(self):
+        model, created, view = self.dense('batch-key-0000000012', True)
+        self.assertEqual(model.calls, [fwq.TASK_NAME, fpb.GROUP_TASK, 'family_homework_reference', 'family_homework_reference'])
+        (paper,) = view['papers']
+        self.assertEqual((view['state'], paper['unchecked_questions']), ('done', []), view['progress'])
+        self.assertEqual(sorted(int(fpb._norm_label(q['label'])) for q in paper['questions']), list(range(1, 32)), 'no duplicate, no gap')
+        code, state = self.request('/api/state')
+        self.assertEqual(sum(r['source'] == '错题照片核对' for r in state['records']), 31)
+        calls = len(model.calls)
+        self.rounds(model, 2)
+        self.assertEqual(len(model.calls), calls)
+
+    def test_dense_page_follow_up_without_the_asked_range_stops_unknown_without_blind_retry(self):
+        model, created, view = self.dense('batch-key-0000000013', False)
+        (paper,) = view['papers']
+        self.assertEqual(paper['unchecked_questions'], ['第%d题' % n for n in range(26, 32)])
+        self.assertEqual((view['state'], view['can_continue']), ('needs_attention', True))
+        self.assertEqual(len(paper['questions']), 25, 'the repeated 1–25 reply adds nothing')
+        self.assertIn('第26题', json.dumps(view, ensure_ascii=False))
+        calls = len(model.calls)
+        self.rounds(model, 3)
+        self.assertEqual(len(model.calls), calls, 'no automatic retry')
+
+    def test_grouping_cannot_turn_a_questions_only_page_into_an_answered_page(self):
+        info = {'p01': dict(evidence=dict(page_kind='questions_only')), 'p02': dict(evidence=dict(page_kind='answered'))}
+        raw = dict(papers=[dict(subject='数学', title='甲', basis='', pages=[dict(page_id='p01', order=1, role='answered'),
+                                                                       dict(page_id='p02', order=2, role='answered')])],
+                   pending=[], same_pages=[])
+        papers, pending, _ = fpb.validate_grouping(raw, ['p01', 'p02'], info)
+        self.assertEqual([p['page_id'] for p in pending], ['p01'])
+        self.assertIn('只有题面', pending[0]['reason'])
+        self.assertEqual([p['page_id'] for p in papers[0]['pages']], ['p02'], 'the other page of the paper continues')
 
     def test_more_than_thirty_wrongs_save_in_stable_chunks_and_a_failed_chunk_resumes_without_duplicates(self):
         tags = ['W%02d' % i for i in range(1, 10)]

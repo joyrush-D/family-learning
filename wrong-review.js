@@ -69,6 +69,8 @@ function paperHTML(batch, paper) {
     <p class="small">${paper.pages.length}页${counts ? ' · ' + counts : ''}${paper.unlocated ? ` · ${paper.unlocated}处未定位到原图题框` : ''}</p>
     ${paper.note ? `<p class="small muted">${esc(paper.note)}</p>` : ''}
     ${paper.coverage ? `<p class="small muted">${esc(paper.coverage)}</p>` : ''}
+    ${(paper.segment_coverage || []).filter(s => s.model_coverage).map(s => `<p class="small muted">检查说明（模型自述，未核）：${esc(s.model_coverage)}</p>`).join('')}
+    ${paper.unchecked_questions.length ? `<p class="small error" data-paper-unchecked>明确未检查：${esc(paper.unchecked_questions.join('、'))}</p>` : ''}
     ${paper.unchecked_pages.length ? `<p class="small muted">尚未检查：${paper.unchecked_pages.map(id => '第' + pageNo(batch, batch.pages.find(p => p.page_id === id)) + '张').join('、')}</p>` : ''}
     <ul class="pb-questions">${paper.questions.filter(q => q.state !== 'correct').map(q => questionHTML(batch, q, open === q.key)).join('')}</ul>
   </section>`;
