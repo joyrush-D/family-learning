@@ -942,14 +942,14 @@ struct ItemRow: View {
                     .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
                 if let first = item.lines.first {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
-                    Text(item.standardWords).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(nil)
+                    Text(item.standardWords).font(Palette.body).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true).accessibilityHint(first).modifier(FitProbe(id: "row-fit-" + item.id))
                     if let v = item.version {
                         // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
                         let words = v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")
                         Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version-" + item.id, text: words)
                     }
-                } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
+                } else { Text("完成标准未提供，待补充").font(Palette.body).foregroundStyle(Palette.coralInk) }
                 FlowRow(spacing: 6, lineSpacing: 4) {
                     if item.showsWhen { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
                     ForEach(item.dayRoles, id: \.self) { f in
@@ -961,7 +961,7 @@ struct ItemRow: View {
                 }
                 .padding(.top, 2)
                 let meta = [item.source, item.sourceWords, item.progress.map(progressWords) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
-                if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("row-meta-" + item.id, text: meta) }
+                if !meta.isEmpty { Text(meta).font(.system(size: 13)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("row-meta-" + item.id, text: meta) }
             }
             .frame(width: textWidth, alignment: .leading)
             Spacer(minLength: 0)
