@@ -90,6 +90,40 @@ SCHEMA = dict(
         uncertainties=dict(type='array', maxItems=MAX_UNCERTAINTIES,
                            items=dict(type='string', maxLength=LIMITS['uncertainty']))))
 
+# 批量照片导入（PRD 5.1）另要逐页读图证据，供之后一次纯文字组卷；旧调用不带 evidence，结构与校验完全不变。
+EVIDENCE_LIMITS = dict(subject=20, subject_basis=200, title=120, printed_page=20, first_label=40, last_label=40,
+                       head=160, tail=160)
+PAGE_KINDS = ('answered', 'questions_only', 'answer_key', 'other')
+READABILITY = ('clear', 'partial', 'unreadable')
+_EVIDENCE = dict(type='object', additionalProperties=False, required=[*EVIDENCE_LIMITS, 'page_kind', 'readability'],
+                 properties={**{key: dict(type='string', maxLength=limit) for key, limit in EVIDENCE_LIMITS.items()},
+                             'page_kind': dict(type='string', enum=list(PAGE_KINDS)),
+                             'readability': dict(type='string', enum=list(READABILITY))})
+EVIDENCE_SCHEMA = json.loads(json.dumps(SCHEMA))
+EVIDENCE_SCHEMA['properties']['pages']['items']['required'].append('evidence')
+EVIDENCE_SCHEMA['properties']['pages']['items']['properties']['evidence'] = _EVIDENCE
+EVIDENCE_PROMPT = PROMPT + '''
+
+本次是批量导入：每页还须输出 evidence（只是读图证据，供之后组卷；不是组卷、判分或掌握结论）：
+- subject：按题面内容判断的科目；中文题面不等于语文（中文应用题、算式仍是数学）。看不出留空。subject_basis：一句话写依据。
+- title：卷头/页眉可见标题；printed_page：印刷页码；first_label/last_label：本页第一道和最后一道题的题号。没有就留空。
+- head/tail：本页题面开头与结尾各一句原文摘要，看不清留空。
+- page_kind：answered 有学生作答；questions_only 只有题面、没有作答；answer_key 参考答案/答案页；other 其他。
+- readability：clear 清楚；partial 部分看不清或裁切；unreadable 基本看不清。
+看不清的一律留空，不猜测补全。'''
+
+
+def _evidence(raw, number):
+    if (not isinstance(raw, dict) or set(raw) != set(EVIDENCE_LIMITS) | {'page_kind', 'readability'}
+            or raw['page_kind'] not in PAGE_KINDS or raw['readability'] not in READABILITY):
+        raise family_llm.LLMDraftError('第%d页读图证据格式无法核对，请重试' % number)
+    out = {}
+    for key, limit in EVIDENCE_LIMITS.items():
+        value = raw[key]
+        out[key] = _clean_text(' '.join(value.split()) if isinstance(value, str) else value, limit, '读图证据')
+    out.update(page_kind=raw['page_kind'], readability=raw['readability'])
+    return out
+
 
 def _clean_text(value, limit, name):
     if not isinstance(value, str):
@@ -102,13 +136,14 @@ def _clean_text(value, limit, name):
     return value
 
 
-def _validated(result, page_count):
+def _validated(result, page_count, evidence=False):
     """确定性校验与归一化；不信任模型的坐标、页数或类型。"""
     if not isinstance(result, dict) or set(result) != {'pages', 'uncertainties'}:
         raise family_llm.LLMDraftError('错题标注结果暂时无法核对，请重试或手动录入')
     pages = result['pages']
     if (not isinstance(pages, list) or len(pages) != page_count
-            or any(not isinstance(page, dict) or set(page) != {'page', 'regions'} for page in pages)):
+            or any(not isinstance(page, dict) or set(page) != ({'page', 'regions', 'evidence'} if evidence else {'page', 'regions'})
+                   for page in pages)):
         raise family_llm.LLMDraftError('错题标注缺少部分页面，请分批重试或手动录入')
     seen = set()
     normalized_pages = []
@@ -171,7 +206,8 @@ def _validated(result, page_count):
                 deduped.add(key)
                 unique.append(region)
         unique.sort(key=lambda r: ((r['box']['y'] + r['box']['h'] / 2) // 100, r['box']['x']))
-        normalized_pages.append(dict(page=number, regions=unique))
+        normalized_pages.append(dict(page=number, regions=unique, evidence=_evidence(page['evidence'], number))
+                                if evidence else dict(page=number, regions=unique))
     normalized_pages.sort(key=lambda page: page['page'])
     uncertainties = result['uncertainties']
     if not isinstance(uncertainties, list) or len(uncertainties) > MAX_UNCERTAINTIES:
@@ -180,7 +216,7 @@ def _validated(result, page_count):
     return dict(pages=normalized_pages, uncertainties=[value for value in cleaned if value])
 
 
-def annotate_pages(images, subject_hint='', timeout=90, *, data_path=None):
+def annotate_pages(images, subject_hint='', timeout=90, *, data_path=None, evidence=False):
     """标注一批作业照片（1..3 张），返回 ``{'pages','uncertainties'}`` 待核对草稿。"""
     if not isinstance(images, (list, tuple)) or not 1 <= len(images) <= MAX_IMAGES:
         raise ValueError('每批最多标注%d张照片' % MAX_IMAGES)
@@ -207,10 +243,12 @@ def annotate_pages(images, subject_hint='', timeout=90, *, data_path=None):
         content.append(dict(type='image_url',
                             image_url=dict(url='data:' + image['mime'] + ';base64,'
                                            + base64.b64encode(image['data']).decode('ascii'))))
-    result = family_llm._chat_json([dict(role='system', content=PROMPT),
+    if type(evidence) is not bool:
+        raise ValueError('读图证据选项不正确')
+    result = family_llm._chat_json([dict(role='system', content=EVIDENCE_PROMPT if evidence else PROMPT),
                                     dict(role='user', content=content)],
-                                   SCHEMA, TASK_NAME, timeout, data_path=data_path)
-    return _validated(result, len(images))
+                                   EVIDENCE_SCHEMA if evidence else SCHEMA, TASK_NAME, timeout, data_path=data_path)
+    return _validated(result, len(images), evidence)
 
 
 def sniff_mime(data):
