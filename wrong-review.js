@@ -123,7 +123,8 @@ async function loadBatches() {
     for (const x of out.batches) if (!['queued', 'running'].includes(x.state))
       prints[x.id] = x.papers.flatMap(p => p.questions.filter(q => q.record_id).map(q => `${x.version}|${p.paper_id}|${p.based_on_version ?? 0}|${q.record_id}`)).sort().join(',');
     const fresh = ids.filter(i => !b.records.has(i));
-    const changed = Object.entries(prints).some(([k, v]) => v && (b.prints || {})[k] !== v);
+    // 空指纹也是有效的已完成状态（新版本里没有任何已记原错题，旧错题依据已变）：非空→空、或第一次见到，也读回一次。
+    const changed = Object.entries(prints).some(([k, v]) => (b.prints || {})[k] !== v);
     paintBatch();
     // 经原记录读取入口读回一次（原“记订正 / 复测”链与记录卡片的依据都来自它）；读回成功才记已同步，进行中不重入。
     if ((fresh.length || changed) && !b.syncing) {
