@@ -77,6 +77,8 @@ function loginProxy(appPort,user,password){
    // Each unique source message opens in place from the item (the server's own message and its attachments) and returns to the same item.
    ...((item.publications||[]).length?[{name:'source open',click:'source-open-'+item.publications[0].ref},{name:'source text',until:'source-text',timeout:15},{name:'source item',until:'source-item',contains:item.id},{name:'source back',click:'source-back'},{name:'same detail',until:'detail-title',contains:item.title.slice(0,4)}]:[]),
    {name:'wide',width:1440,native:'snapshot'},
+   // Geometry, not text: beside the 1440 detail each listed row's complete standard is laid out at the height the whole text needs at that width.
+   {name:'1440 standard fits',until:'row-fit-'+item.id,contains:'fits',timeout:8},...(math&&math.id!==item.id?[{name:'1440 other standard fits',until:'row-fit-'+math.id,contains:'fits',timeout:8}]:[]),
    {name:'feedback open',click:'feedback-new'},{name:'feedback sheet',until:'feedback-note'},
    {name:'focus note',click:'feedback-note'},{name:'type note',type:NOTE1},
    {name:'esc stays',key:'\u001b',code:53},{name:'still dirty',native:'dirty'},
@@ -113,7 +115,7 @@ function loginProxy(appPort,user,password){
    {name:'tomorrow row',click:'row-'+math.id},{name:'tomorrow words',until:'fact-'+tomorrow.role,contains:tomorrow.label+' 明天'},{name:'no invented morning',find_text:'明早',absent:true,timeout:3},
    {name:'narrow',width:900,native:'snapshot'},
    // At 900 the chosen item is a detail page over the kept list: 返回清单 brings back the same list before choosing again.
-   {name:'back to list',click:'detail-back'},{name:'list kept',until:'row-'+item.id},{name:'back state',native:'state'},
+   {name:'back to list',click:'detail-back'},{name:'list kept',until:'row-'+item.id},{name:'900 standard fits',until:'row-fit-'+item.id,contains:'fits',timeout:8},{name:'back state',native:'state'},
    {name:'web tools for the same task',click:'row-'+item.id},{name:'check entry',click:'check-web'},{name:'web state',native:'state'}];
   const stepsFile=path.join(out,'native-steps.json');fs.writeFileSync(stepsFile,JSON.stringify(steps));
   const shots=path.join(out,'shots');fs.mkdirSync(shots,{recursive:true});
