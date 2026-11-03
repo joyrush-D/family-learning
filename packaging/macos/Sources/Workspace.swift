@@ -502,7 +502,7 @@ struct WoodTag: View {
         HStack(spacing: 8) {
             Circle().fill(Palette.wood300).frame(width: 4, height: 4)
             Text(text).font(Palette.round(14, .bold))
-            if !count.isEmpty { Text(count).font(Palette.round(12)).opacity(0.85) }
+            if !count.isEmpty { Text(count).font(Palette.round(13)).opacity(0.85) }
             Circle().fill(Palette.wood300).frame(width: 4, height: 4)
         }
         .foregroundStyle(Palette.woodInk)
@@ -520,7 +520,7 @@ struct Badge: View {
     var ink: Color = Palette.woodInk
     var dashed = false
     var body: some View {
-        Text(text).font(Palette.round(12.5)).foregroundStyle(ink)
+        Text(text).font(Palette.round(13)).foregroundStyle(ink)
             .padding(.horizontal, 9).padding(.vertical, 3)
             .background(Capsule().fill(dashed ? Palette.card : tone))
             .overlay(Capsule().strokeBorder(dashed ? Palette.coral400 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [4, 3])))
@@ -1278,7 +1278,7 @@ struct LessonCard: View {
             FlowRow(spacing: 6, lineSpacing: 6) {
                 ForEach(table.sessions, id: \.self) { s in
                     HStack(spacing: 5) {
-                        Text(s.slot).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.woodInk)
+                        Text(s.slot).font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.woodInk)
                         Text(s.title).font(Palette.small).foregroundStyle(Palette.ink)
                     }
                     .padding(.horizontal, 8).padding(.vertical, 5).background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.paper2))
@@ -1323,8 +1323,8 @@ struct PlanRow: View {
                     let meta = [plan.review == nil ? "" : "家庭复习 · 家长安排，不是老师作业", plan.review?.basis_state == "basis_changed" ? "原错题之后更正过，请核对" : "",
                                 plan.location, plan.status == "tentative" ? "待确认" : "", plan.repeat ? "重复安排" : "", plan.shared ? "几个孩子共同" : "",
                                 plan.source.isEmpty ? "" : "学校来源"].filter { !$0.isEmpty }.joined(separator: " · ")
-                    if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
-                    if let text = plan.unmerged { Text(text).font(.system(size: 12.5)).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
+                    if !meta.isEmpty { Text(meta).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                    if let text = plan.unmerged { Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true) }
                 }
                 Spacer(minLength: 0)
             }
@@ -1474,7 +1474,7 @@ struct LearningCard: View {
                 }
             }
             if let task = entry.task_title, !task.isEmpty {
-                Text("原作业：" + task).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                Text("原作业：" + task).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
             }
             if let next = entry.next, !next.isEmpty {
                 Text("下一步：" + next).font(Palette.small).foregroundStyle(Palette.leafInk).fixedSize(horizontal: false, vertical: true)
@@ -1500,12 +1500,12 @@ struct CourseCard: View {
     let entries: [LearningEntry]
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("课程记录（安排与进度，不是孩子表现）").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.woodInk)
+            Text("课程记录（安排与进度，不是孩子表现）").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.woodInk)
             ForEach(entries) { c in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(c.title).font(Palette.round(14, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
                     if !c.note.isEmpty { Text(c.note).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
-                    Text(c.day + " · 出处：" + (c.source ?? "未写明")).font(.system(size: 12)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                    Text(c.day + " · 出处：" + (c.source ?? "未写明")).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
                 }.probe("course-\(c.record_id)", text: c.title)
             }
         }
@@ -1621,7 +1621,7 @@ struct Inspector: View {
     func factCard(_ f: DayFact) -> some View {
         let urgent = f.state == "next_morning" || f.state == "overdue"
         return VStack(alignment: .leading, spacing: 4) {
-            Label(f.label, systemImage: factIcon(f.role)).font(.system(size: 12.5)).foregroundStyle(Palette.ink2)
+            Label(f.label, systemImage: factIcon(f.role)).font(Palette.small).foregroundStyle(Palette.ink2)
             Text((f.today == true ? "今天 " : "") + (f.known ? f.value : "时间未明确")).font(Palette.round(15, .bold))
                 .foregroundStyle(!f.known ? Palette.ink2 : urgent ? Palette.coralInk : Palette.ink).italic(!f.known)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
