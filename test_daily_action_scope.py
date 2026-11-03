@@ -338,8 +338,10 @@ class RealChainDateRoleTest(unittest.TestCase):
         for text in ('今晚不用按四拍节奏拍手3组；明天音乐课检查。', '今晚按四拍节奏拍了3组；明天音乐课检查。', '今晚按四拍节奏已拍手3组；明天音乐课检查。'):
             self.assertEqual(fa.completion_day(text, '', T, '2026-11-13'), '', text)
         for text in ('明晚不用按四拍节奏拍手3组。', '明晚按四拍节奏拍了3组。', '明晚按明天的节奏拍手3组。', '今晚或明晚按四拍节奏拍手3组。',
-                     '明晚按四拍节奏拍手3组吗？', '如果下雨，明晚按四拍节奏拍手3组。'):
+                     '明晚按四拍节奏拍手3组吗？'):
             self.assertNotIn('2026-11-13', fa.deadlines(text, sent), text)
+        # A condition in an earlier clause is the role reader's guard (below); the calendar tie reads it as the plain name does.
+        self.assertEqual(fa.deadlines('如果下雨，明晚按四拍节奏拍手3组。', sent), fa.deadlines('如果下雨，明晚拍手3组。', sent))
         for quote in ('明晚不用按四拍节奏拍手3组；11月16日音乐课检查。', '明晚按四拍节奏拍了3组；11月16日音乐课检查。',
                       '如果下雨，明晚按四拍节奏拍手3组；11月16日音乐课检查。', '今晚或明晚按四拍节奏拍手3组；11月16日音乐课检查。',
                       '明晚按四拍节奏拍手3组吗？11月16日音乐课检查。', '明晚按四拍节奏拍手3组。'):
