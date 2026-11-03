@@ -41,9 +41,12 @@ class WrongReviewError(ValueError):
         self.code = code
 
 
-def _text(obj, key, limit, *, required=False, name=None):
+def _text(obj, key, limit, *, required=False, name=None, multiline=False):
     value = obj.get(key, '')
-    if not isinstance(value, str) or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    if multiline and isinstance(value, str):
+        # 与读图转写同一规则：段落换行保留（CRLF/CR→LF，Tab→空格），其他控制字符仍拒绝。
+        value = value.replace('\r\n', '\n').replace('\r', '\n').replace('\t', ' ')
+    if not isinstance(value, str) or any(ord(ch) < 32 and not (multiline and ch == '\n') or ord(ch) == 127 for ch in value):
         raise WrongReviewError('%s格式不正确' % (name or key))
     value = value.strip()
     if required and not value:
@@ -230,10 +233,10 @@ class Store:
                         raise WrongReviewError('原图框题只能从原作业已保存的照片记录')
                     region = _region(region, index)
                 label = _text(item, 'label', fwq.LIMITS['label'], name='题号')
-                text = _text(item, 'text', fwq.LIMITS['text'], name='题面')
-                answer = _text(item, 'answer', fwq.LIMITS['answer'], name='原答案')
-                correction = _text(item, 'correction', fwq.LIMITS['correction'], name='订正')
-                note_extra = _text(item, 'note', 1000, name='备注')
+                text = _text(item, 'text', fwq.LIMITS['text'], name='题面', multiline=True)
+                answer = _text(item, 'answer', fwq.LIMITS['answer'], name='原答案', multiline=True)
+                correction = _text(item, 'correction', fwq.LIMITS['correction'], name='订正', multiline=True)
+                note_extra = _text(item, 'note', 1000, name='备注', multiline=True)
                 topic_hint = _text(item, 'topic_hint', fwq.LIMITS['topic_hint'], name='知识点候选')
                 error_hint = _text(item, 'error_hint', fwq.LIMITS['error_hint'], name='错误类型候选')
                 if not (label or text or answer or correction):

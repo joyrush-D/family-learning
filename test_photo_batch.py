@@ -396,6 +396,31 @@ class PhotoBatchTest(unittest.TestCase):
         code, state = self.request('/api/state')
         self.assertEqual([r['title'] for r in state['records'] if r['source'] == '错题照片核对'], ['数学错题：第2题'])
 
+    def test_reading_text_keeps_ordinary_line_breaks_and_still_refuses_other_controls(self):
+        page = dict(page=1, regions=[dict(region('卷头'), kind='layout', text='虚构卷头第一行\r\n第二行\t附注', answer='', correction='')],
+                    evidence=PAGES['m1']['evidence'])
+        out = fwq._validated(dict(pages=[page], uncertainties=['第一行\n第二行']), 1, evidence=True)
+        self.assertEqual((out['pages'][0]['regions'][0]['text'], out['uncertainties']), ('虚构卷头第一行\n第二行 附注', ['第一行\n第二行']))
+        bad = lambda **change: dict(pages=[dict(page, **change)], uncertainties=[])
+        for control in ('\x00', '\x1b', '\x7f'):
+            with self.assertRaises(family_llm.LLMDraftError):
+                fwq._validated(bad(regions=[dict(page['regions'][0], text='甲' + control + '乙')]), 1, evidence=True)
+        with self.assertRaises(family_llm.LLMDraftError):  # a question label is never merged across a line break
+            fwq._validated(bad(regions=[dict(page['regions'][0], label='第1题\n第2题')]), 1, evidence=True)
+        with self.assertRaises(family_llm.LLMDraftError):
+            fwq._validated(bad(evidence=dict(page['evidence'], first_label='第1题\n第2题')), 1, evidence=True)
+        import family_wrong_review as fwr
+        self.assertEqual(fwr._text(dict(text='甲\r\n乙\t丙'), 'text', 100, multiline=True), '甲\n乙 丙')
+        for value, multiline in (('甲\n乙', False), ('甲\x00乙', True)):
+            with self.assertRaises(fwr.WrongReviewError):
+                fwr._text(dict(text=value), 'text', 100, multiline=multiline)
+        upload = self.upload('m1', 'manual-save-key-000001')
+        code, out = self.request('/api/wrong/save', dict(child='示例甲', day='2026-11-03', subject='数学', request_key='manual-save-key-0000002',
+                                                         items=[dict(attachment=upload, label='第1题', text='虚构题面第一行\r\n第二行', answer='35', correction='')]))
+        self.assertEqual(code, 200, out)
+        code, state = self.request('/api/state')
+        self.assertIn('题面：虚构题面第一行\n第二行', next(r['note'] for r in state['records'] if r['id'] == out['saved'][0]['id']))
+
     def test_grouping_cannot_turn_a_questions_only_page_into_an_answered_page(self):
         info = {'p01': dict(evidence=dict(page_kind='questions_only')), 'p02': dict(evidence=dict(page_kind='answered'))}
         raw = dict(papers=[dict(subject='数学', title='甲', basis='', pages=[dict(page_id='p01', order=1, role='answered'),
