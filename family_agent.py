@@ -2864,15 +2864,16 @@ _SCHOOL_COUNT_UNITS=r'遍|次|题|道|页|课|篇|首|段|行|单元|章|节|项
 _SCHOOL_CLOCK=re.compile(r'\d{4}\s*[-/年.]\s*\d{1,2}\s*[-/月.]\s*\d{1,2}\s*[日号]?|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?|\d{1,2}\s*[日号]|\d{1,2}\s*[:：点]\s*\d{0,2}')
 
 
-def _school_counts(value):
-    """(number, unit) of every count, range or numbered part outside named objects, dates and clock times; 2 = 两 = 二."""
+def _school_counts(value, bound=False):
+    """(number, unit) of every count, range or numbered part outside named objects, dates and clock times; 2 = 两 = 二.
+    bound: a numbered list's numbers take its unit, for comparing a reminder's whole requirement with the affair's."""
     value=_SCHOOL_CLOCK.sub(' ',_SCHOOL_NAMED.sub(' ',value.lower()))
     # An explicit numeric range states each number in it (第1-3段 = 第1、2、3段); long or reversed ranges stay as written.
     value=re.sub(r'(\d+)\s*[-–—~～至到]\s*(\d+)',lambda m:'、'.join(str(n) for n in range(int(m[1]),int(m[2])+1)) if 0<int(m[2])-int(m[1])<=30 else m[0],value)
     # A numbered list ends in its one unit (第2、3自然段 = 第2段、第3段): each of its numbers counts in that unit, never unitless,
     # so a paragraph number can never stand for a count of readings (各读三遍).
-    value=value.replace('自然段','段')
-    value=re.sub(r'\d+(?:\s*[、，,和及与]\s*\d+)+\s*('+_SCHOOL_COUNT_UNITS+r')',lambda m:'、'.join(n+m[1] for n in re.findall(r'\d+',m[0][:len(m[0])-len(m[1])])),value)
+    if bound:value=value.replace('自然段','段')
+    if bound:value=re.sub(r'\d+(?:\s*[、，,和及与]\s*\d+)+\s*('+_SCHOOL_COUNT_UNITS+r')',lambda m:'、'.join(n+m[1] for n in re.findall(r'\d+',m[0][:len(m[0])-len(m[1])])),value)
     found=set()
     for number,unit in re.findall(r'(\d+)\s*('+_SCHOOL_COUNT_UNITS+')?',value): found.add((int(number),unit))
     for lead,word,unit in re.findall(r'(第|练习|习题)?([一二两三四五六七八九十]+)\s*('+_SCHOOL_COUNT_UNITS+')?',value):
@@ -3177,10 +3178,10 @@ def _school_restated_reason(said, facts, summary):
     if _school_same_changes(said,facts):return _SCHOOL_CHANGED_REASON
     if _school_same_unstated(said,facts):return '提醒写了原事项没有的要求或完成标准，不能只当作重复提醒；原事项和提醒原文都保留。'
     if _school_units_differ(said,facts):return '提醒中由谁做哪一步与原事项不一致（主体和动作对调或改变），不能当作重复提醒；原事项和提醒原文都保留。'
-    old=_school_counts(facts)
+    old=_school_counts(facts,bound=True)
     for value in (said,summary):
         if (not _school_named_objects(value).issubset(_school_named_objects(facts))
-                or any(not any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(value))):
+                or any(not any(n==m and (u==v or not u or not v) for m,v in old) for n,u in _school_counts(value,bound=True))):
             return '提醒中的单元、篇目、题号、页码或次数与原事项不一致，可能是另一项；原事项和提醒原文都保留。'
     return ''
 
