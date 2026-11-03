@@ -1,6 +1,6 @@
 // Batch photo import, Web entry (PRD 5.1 W1). Disposable synthetic family only; fixed raw model replies pass the real
 // annotate/grouping/review validators. The backend round is the product's own family_agent.run_once on the demo data.
-// Optional PLAYWRIGHT_MODULE, FAMILY_TEST_PYTHON and PHOTO_BATCH_UI_PROOF_DIR; no real accounts, files or model calls.
+// Optional PLAYWRIGHT_MODULE, PLAYWRIGHT_CHANNEL, PLAYWRIGHT_EXECUTABLE (headless binary), FAMILY_TEST_PYTHON and PHOTO_BATCH_UI_PROOF_DIR; no real accounts, files or model calls.
 const assert = require('node:assert/strict');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
@@ -114,7 +114,8 @@ const batchView = (p, id) => p.evaluate(async id => (await (await fetch('/api/ph
   let browser;
   const checks = [];
   try {
-    browser = await chromium.launch({headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || undefined});
+    browser = await chromium.launch({headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || undefined,
+                                     executablePath: process.env.PLAYWRIGHT_EXECUTABLE || undefined});
     for (const width of [360, 1440]) {
       const host = await server();
       const p = await browser.newPage({viewport: {width, height: 900}});
