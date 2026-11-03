@@ -86,7 +86,8 @@ def _norm_label(label):
     """题号只规范包装（全/半角、空白、“第…题”、分隔标点）；括号小题、大题等层级边界全部保留：第1题(1)≠第11题。"""
     text = re.sub(r'\s+', '', unicodedata.normalize('NFKC', label or ''))
     text = re.sub(r'第([0-9]+|[一二三四五六七八九十百]+)(?:小题|大题|题)?', r'\1.', text)
-    return re.sub(r'\.+', '.', re.sub(r'[、:]', '.', text)).strip('.')
+    text = re.sub(r'\.+', '.', re.sub(r'[、:]', '.', text)).strip('.')
+    return re.sub(r'\.(?=\()', '', text)  # “第1题(1)”与“1(1)”同为第1题第(1)小题
 
 
 def _table(c):
