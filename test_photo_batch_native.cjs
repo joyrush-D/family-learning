@@ -4,16 +4,76 @@
 // fail_before_send); server side via this proxy (one failed batch list GET, one 401 original image GET).
 // Usage on a separate test Mac:  node test_photo_batch_native.cjs --allow-visible-test-window
 // Headless contract check only (no app, no window):  node test_photo_batch_native.cjs --server-only
-// The system picker and drag-in cannot be automated: picks are the app's test-declared files (not a system picker proof).
+// Guard self-test (no app, no window):  node test_photo_batch_native.cjs --self-test
+// Evidence labels: the pages are synthetic 1x1 placeholder PNGs (no real photo pixels or box placement is proven), the
+// "reopen" step is the app's in-memory view remount (not a cold process restart), and picks are test-declared files (not
+// the system picker or drag-in). Real 900/1440 photos and cold App restarts are Root's independent evidence.
+// Safety: PHOTO_NATIVE_OUT must be a new directory (existing, symlinked, root-level or in-repository paths are refused);
+// the build goes only into that directory; every spawned process is this run's own and is stopped by its handle on
+// success, failure or the PHOTO_NATIVE_DEADLINE_MS deadline; the fixture refuses child processes, external network and
+// any SQLite but its own fictional one, and has a bounded lifetime and fixed-reply budget.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net'),http=require('node:http'),crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process'),{once}=require('node:events'),{setTimeout:delay}=require('node:timers/promises');
-const visible=process.argv.includes('--allow-visible-test-window'),serverOnly=process.argv.includes('--server-only');
-if(!visible&&!serverOnly){console.error('Pass --allow-visible-test-window on a separate test Mac, or --server-only for the headless contract.');process.exit(2)}
-const out=process.env.PHOTO_NATIVE_OUT||fs.mkdtempSync(path.join(os.tmpdir(),'photo-native-'));fs.mkdirSync(out,{recursive:true});
+const visible=process.argv.includes('--allow-visible-test-window'),serverOnly=process.argv.includes('--server-only'),selfTest=process.argv.includes('--self-test');
+const refuse=reason=>{console.error('refused: '+reason);process.exit(2)};
+if([visible,serverOnly,selfTest].filter(Boolean).length!==1)refuse('pass exactly one of --allow-visible-test-window (separate test Mac), --server-only or --self-test');
+const DEADLINE_MS=Number(process.env.PHOTO_NATIVE_DEADLINE_MS)||(visible?600000:120000);
+function exists(p){try{fs.lstatSync(p);return true}catch{return false}}
+// A new, exclusive output directory: never an existing path or symlink, never under a symlinked parent, never the filesystem
+// root level, the home directory or inside this repository. Created non-recursively, so a concurrent creator makes it fail.
+function exclusiveOut(){
+ const given=process.env.PHOTO_NATIVE_OUT;
+ if(!given)return fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'photo-native-'));
+ const target=path.resolve(given),parent=path.dirname(target),repo=fs.realpathSync(__dirname),home=fs.realpathSync(os.homedir());
+ if(exists(target))refuse('output path already exists (or is a symlink): '+target);
+ let real;try{real=fs.realpathSync(parent)}catch{refuse('output parent does not exist: '+parent)}
+ if(real!==parent)refuse('output parent is or passes through a symlink: '+parent);
+ if(parent===path.parse(target).root||target===home||target===repo||target.startsWith(repo+path.sep))refuse('dangerous output location: '+target);
+ fs.mkdirSync(target,{mode:0o700});return target;
+}
+const out=selfTest?null:exclusiveOut();
+const owned=[];let appSpawned=false;
+function spawnOwned(name,cmd,args,opts){const proc=spawn(cmd,args,opts);owned.push({name,proc,signal:name==='fixture'?'SIGINT':'SIGTERM'});if(name==='app')appSpawned=true;return proc}
+// Stop only this run's own children, by their handles: polite signal, bounded wait, then SIGKILL and a bounded wait.
+async function stopOwned(){
+ for(const {proc,signal} of [...owned].reverse()){
+  if(proc.exitCode!==null||proc.signalCode!==null)continue;
+  const ended=once(proc,'exit');proc.kill(signal);await Promise.race([ended,delay(4000)]);
+  if(proc.exitCode===null&&proc.signalCode===null){proc.kill('SIGKILL');await Promise.race([ended,delay(3000)])}
+ }
+ return owned.map(({name,proc})=>({name,pid:proc.pid,exit:proc.exitCode,signal:proc.signalCode,ended:proc.exitCode!==null||proc.signalCode!==null}));
+}
+let finishing=null;
+async function finish(code,status,summary={}){
+ if(finishing)return finishing;
+ finishing=(async()=>{
+  clearTimeout(deadlineTimer);const children=await stopOwned();
+  const terminal={status,code,app_spawned:appSpawned,deadline_ms:DEADLINE_MS,children,...summary};
+  if(out)fs.writeFileSync(path.join(out,'TERMINAL.json'),JSON.stringify(terminal,null,1));
+  console.log(JSON.stringify(terminal));process.exit(code);
+ })();
+ return finishing;
+}
+const deadlineTimer=setTimeout(()=>finish(3,'deadline',{error:'deadline '+DEADLINE_MS+' ms reached; own children stopped'}),DEADLINE_MS);
 const PNG_HEX='89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000100ffff03000006000557bfab440000000049454e44ae426082';
 const page=tag=>Buffer.concat([Buffer.from(PNG_HEX,'hex'),Buffer.from('synthetic-'+tag)]);
 async function freePort(){const s=net.createServer();s.listen(0,'127.0.0.1');await once(s,'listening');const p=s.address().port;await new Promise(r=>s.close(r));return p}
-const LAUNCH=`import app, base64, json, runpy, sys, threading, time
+const LAUNCH=`import atexit, json, os, signal, sys, threading, time
+LIFETIME, STATUS, MAX_REPLIES = float(sys.argv[2]), sys.argv[3], 40
+blocked, state = [], dict(fixed_replies=0, rounds=0)
+def audit(event, args):
+    if event in ('subprocess.Popen', 'os.system', 'os.posix_spawn', 'os.spawn', 'os.exec', 'os.fork', 'os.forkpty', 'pty.spawn'):
+        blocked.append(event); raise PermissionError('fixture: no child processes')
+    if event in ('socket.connect', 'socket.bind') and isinstance(args[1], tuple) and args[1] and args[1][0] not in ('127.0.0.1', '::1', 'localhost'):
+        blocked.append(event); raise PermissionError('fixture: loopback only')
+    if event == 'sqlite3.connect' and str(args[0]) != ':memory:' and 'family-demo-' not in str(args[0]):
+        blocked.append(event); raise PermissionError('fixture: only its own fictional SQLite')
+sys.addaudithook(audit)
+atexit.register(lambda: open(STATUS, 'w').write(json.dumps(dict(state, blocked=blocked, provider_calls=0))))
+def end_of_life():
+    os.kill(os.getpid(), signal.SIGINT); time.sleep(5); os._exit(4)
+life = threading.Timer(LIFETIME, end_of_life); life.daemon = True; life.start()
+import app, base64, runpy
 import family_agent, family_llm, family_photo_batch as fpb, family_wrong_questions as fwq
 family_llm.configuration = lambda *a, **k: ('https://example.invalid', 'synthetic')
 PNG = bytes.fromhex('${PNG_HEX}')
@@ -30,6 +90,9 @@ def item(label, said, ref, judgment, reason=''):
     return dict(label=label, question='虚构题面', student_answer=said, answer=ref, judgment=judgment, error_reason=reason, possible_cause='',
                 steps='按参考订正' if judgment == 'incorrect' else '', uncertainty='', question_kind='objective')
 def fake(messages, schema, name, timeout=60, *, data_path=None):
+    state['fixed_replies'] += 1
+    if state['fixed_replies'] > MAX_REPLIES:
+        raise family_llm.LLMDraftError('fixture: fixed reply budget exhausted')
     tags = [TAGS[base64.b64decode(p['image_url']['url'].split(',', 1)[1])] for m in messages if isinstance(m['content'], list)
             for p in m['content'] if p.get('type') == 'image_url']
     if name == fwq.TASK_NAME:
@@ -50,9 +113,11 @@ def fake(messages, schema, name, timeout=60, *, data_path=None):
     return dict(items=items, coverage='虚构覆盖', question_labels=[i['label'] for i in items])
 family_llm._chat_json = fake
 def backend():
-    while True:
+    stop = time.time() + LIFETIME
+    while time.time() < stop and state['rounds'] < 600:
         time.sleep(0.4)
         if 'family-demo-' not in str(app.DATA): continue
+        state['rounds'] += 1
         try: family_agent.run_once(app)
         except Exception as error: print('round error', repr(error), file=sys.stderr, flush=True)
 threading.Thread(target=backend, daemon=True).start()
@@ -82,11 +147,33 @@ function proxy(appPort,user,password){
  return {server,seen,faults};
 }
 async function eventually(check,label,timeout=30000){const until=Date.now()+timeout;while(Date.now()<until){if(await check())return;await delay(200)}throw Error('Timed out: '+label)}
+async function guards(){
+ // Each case is this file in a child process: refusals must happen before any spawn; the deadline must stop the own fixture.
+ const run=(args,env)=>new Promise(resolve=>{const p=spawnOwned('self-test-child',process.execPath,[__filename,...args],{env:{...process.env,...env},stdio:['ignore','pipe','pipe']});
+  let text='';p.stdout.on('data',b=>text+=b);p.stderr.on('data',b=>text+=b);p.on('exit',code=>resolve({code,text}))});
+ const base=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'photo-native-guard-')),results=[];
+ const existing=path.join(base,'existing');fs.mkdirSync(existing);const link=path.join(base,'link');fs.symlinkSync(existing,link);
+ for(const [name,args,env] of [['no mode',[],{}],['existing out',['--server-only'],{PHOTO_NATIVE_OUT:existing}],['symlink out',['--server-only'],{PHOTO_NATIVE_OUT:link}],
+   ['symlinked parent',['--server-only'],{PHOTO_NATIVE_OUT:path.join(link,'new')}],['inside repository',['--server-only'],{PHOTO_NATIVE_OUT:path.join(__dirname,'photo-native-out')}]]){
+  const r=await run(args,env);assert.equal(r.code,2,name+': '+r.text);assert.match(r.text,/refused/,name);results.push(name);
+ }
+ assert.equal(exists(path.join(__dirname,'photo-native-out')),false,'nothing created inside the repository');
+ const late=path.join(base,'deadline');const r=await run(['--server-only'],{PHOTO_NATIVE_OUT:late,PHOTO_NATIVE_DEADLINE_MS:'2500'});
+ assert.equal(r.code,3,'deadline exit: '+r.text);const terminal=JSON.parse(fs.readFileSync(path.join(late,'TERMINAL.json'),'utf8'));
+ assert.equal(terminal.status,'deadline');assert.equal(terminal.app_spawned,false);assert.ok(terminal.children.length>0&&terminal.children.every(c=>c.ended),'deadline stopped its own fixture');
+ for(const c of terminal.children){let alive=true;try{process.kill(c.pid,0)}catch{alive=false}assert.equal(alive,false,'pid '+c.pid+' gone')}
+ results.push('deadline terminal');fs.rmSync(base,{recursive:true,force:true});
+ return finish(0,'passed',{self_test:results});
+}
 (async()=>{
+ if(selfTest)return guards();
  const port=await freePort(),USER='fictional-parent',PASS='fictional-'+crypto.randomUUID(),auth=proxy(port,USER,PASS);
- const env0={...process.env};for(const k of Object.keys(env0))if(k.startsWith('FAMILY_'))delete env0[k];
- const fixture=spawn(process.env.FAMILY_TEST_PYTHON||'python3',['-B','-c',LAUNCH,String(port)],{cwd:__dirname,env:env0,stdio:['ignore','ignore','pipe']});let errors='';fixture.stderr.on('data',b=>errors+=b);
- const stop=async()=>{auth.server.close();if(fixture.exitCode!==null)return;const d=once(fixture,'exit');fixture.kill('SIGINT');await Promise.race([d,delay(3000)]);if(fixture.exitCode===null)fixture.kill('SIGKILL')};
+ // No real model, data, account or proxy settings reach the children; any data fallback points inside this run's directory.
+ const env0={};for(const [k,v] of Object.entries(process.env))if(!/^(FAMILY_|OPENAI|ANTHROPIC|ARK_|DOUBAO|VOLC|TYPESAFE)|API_KEY|TOKEN|SECRET|PASSWORD|PROXY/i.test(k))env0[k]=v;
+ env0.FAMILY_DATA=path.join(out,'no-household-data');
+ const status=path.join(out,'fixture-status.json'),lifetime=Math.max(1,Math.floor(DEADLINE_MS/1000));
+ const fixture=spawnOwned('fixture',process.env.FAMILY_TEST_PYTHON||'python3',['-B','-c',LAUNCH,String(port),String(lifetime),status],{cwd:__dirname,env:env0,stdio:['ignore','ignore','pipe']});let errors='';fixture.stderr.on('data',b=>errors+=b);
+ const stop=async()=>{auth.server.close();return stopOwned()};
  try{
   auth.server.listen(0,'127.0.0.1');await once(auth.server,'listening');const origin=`http://127.0.0.1:${auth.server.address().port}`;
   await eventually(async()=>{try{return (await fetch(`http://127.0.0.1:${port}/`)).ok}catch{return false}},'fixture server');
@@ -118,7 +205,11 @@ async function eventually(check,label,timeout=30000){const until=Date.now()+time
    const others=await (await fetch(origin+'/api/photo-batches?child_id='+other,{headers:H})).json();assert.deepEqual(others.batches,[],'other child sees nothing');
    const creates=auth.seen.filter(s=>s.path==='/api/photo-batch/create');assert.equal(new Set(creates.map(s=>s.key)).size,1,'one create key');
    assert.doesNotMatch(errors,/round error/,errors);
-   console.log(JSON.stringify({server_only:true,batch:b1.id,versions:2,wrong_located:wrong.length,create_requests:creates.length,create_keys:1,stale_append:409}));return;
+   const children=await stop();const fixed=JSON.parse(fs.readFileSync(status,'utf8'));
+   assert.equal(appSpawned,false,'server-only never starts the App');assert.ok(children.every(c=>c.ended),'own children ended');
+   assert.deepEqual(fixed.blocked,[],'no blocked process/network/SQLite attempt');assert.equal(fixed.provider_calls,0);assert.ok(fixed.fixed_replies>0);
+   return finish(0,'passed',{server_only:true,batch:b1.id,versions:2,wrong_located:wrong.length,create_requests:creates.length,create_keys:1,stale_append:409,
+    fixed_replies:fixed.fixed_replies,provider_calls:0,images:'synthetic_1x1_placeholder_png',pixel_or_box_placement_verified:false});
   }
   const app=execFileSync('sh',[path.join(__dirname,'packaging/macos/build.sh'),path.join(out,'build')],{encoding:'utf8'}).trim().split('\n').pop();
   const steps=[
@@ -133,17 +224,19 @@ async function eventually(check,label,timeout=30000){const until=Date.now()+time
    {name:'original answer apart',find_text:'原答（孩子写的）'},{name:'AI signature',find_text:'署名：AI判断'},{name:'result 1440',native:'snapshot'},
    {name:'open record',click_prefix:'photo-open-record-'},{name:'correct',click_prefix:'wrong-correct-'},{name:'note',click:'correction-note'},{name:'type',type:'虚构：重算得25。'},
    {name:'save correction',click:'sheet-save'},{name:'corrected',find_text:'重算得25',timeout:15},
-   {name:'reopen cold',native:'reopen'},{name:'wrong notebook again',click:'mode-错题本'},{name:'batch kept',find_text:'数学 · 虚构数学练习',timeout:20},
+   {name:'reopen in-memory view (not a cold process restart)',native:'reopen'},{name:'wrong notebook again',click:'mode-错题本'},{name:'batch kept',find_text:'数学 · 虚构数学练习',timeout:20},
    {name:'append',pick:[files[3]]},{name:'add photo',click_prefix:'photo-append-'},{name:'appended',until:'photo-notice',contains:'已补进同一批',timeout:20},
    {name:'narrow 900',width:900,native:'snapshot'},
    {name:'other child',key:'2',modifiers:['command']},{name:'isolation',find_text:'虚构数学练习',absent:true,timeout:8},{name:'back',key:'1',modifiers:['command']}];
   const stepsFile=path.join(out,'photo-native-steps.json');fs.writeFileSync(stepsFile,JSON.stringify(steps,null,1));
-  const shots=path.join(out,'shots');fs.mkdirSync(shots,{recursive:true});const support=fs.mkdtempSync(path.join(os.tmpdir(),'photo-native-support-'));
+  const shots=path.join(out,'shots');fs.mkdirSync(shots);const support=path.join(out,'support');fs.mkdirSync(support,{mode:0o700});
+  if(new URL(origin).hostname!=='127.0.0.1'||!auth.server.listening)throw Error('fixture origin is not a bound loopback server; refusing to launch');
   const env={...env0,FAMILY_DESKTOP_SUPPORT_DIR:support,FAMILY_DESKTOP_TEST_ORIGIN:origin,FAMILY_DESKTOP_TEST_SETUP_INPUTS:JSON.stringify([origin]),
    FAMILY_DESKTOP_TEST_SURFACE:'native',FAMILY_DESKTOP_TEST_LOGIN:JSON.stringify([USER,PASS]),FAMILY_DESKTOP_TEST_NATIVE_STEPS:stepsFile,FAMILY_DESKTOP_TEST_SNAPSHOT_DIR:shots,FAMILY_DESKTOP_SMOKE_HOLD:'1'};
-  const proc=spawn(path.join(app,'Contents/MacOS/YiqiChengzhang'),['--smoke-test'],{env,stdio:['ignore','pipe','pipe']});let text='';proc.stdout.on('data',b=>text+=b);proc.stderr.on('data',b=>text+=b);
+  const proc=spawnOwned('app',path.join(app,'Contents/MacOS/YiqiChengzhang'),['--smoke-test'],{env,stdio:['ignore','pipe','pipe']});let text='';proc.stdout.on('data',b=>text+=b);proc.stderr.on('data',b=>text+=b);
   const [code]=await once(proc,'exit');fs.writeFileSync(path.join(out,'app.log'),text);assert.equal(code,0,'native steps failed; see '+out);
   const creates=auth.seen.filter(s=>s.path==='/api/photo-batch/create'&&s.status===200);assert.equal(new Set(creates.map(s=>s.key)).size,1,'one batch key across the lost receipt and the refused second import');
-  console.log(JSON.stringify({native:true,out,creates:creates.length}));
+  return finish(0,'passed',{native:true,out,creates:creates.length,reopen:'in_memory_view_remount',cold_app_restart_verified:false,
+   images:'synthetic_1x1_placeholder_png',pixel_or_box_placement_verified:false,picker:'test_declared_files',system_picker_or_drag_verified:false});
  }finally{await stop()}
-})().catch(e=>{console.error(e);process.exit(1)});
+})().catch(e=>{console.error(e);return finish(1,'failed',{error:String(e&&e.stack||e)})});
