@@ -3332,7 +3332,7 @@ def _reconcile_school_same(app, store, now, budget):
         if not fp: continue
         try:
             items=_select('school',evidence,as_of=now.date().isoformat(),data_path=store.data,school_goals=[],
-                          school_tasks=[t for t in targets if t['id']!=later['id']])
+                          school_tasks=[t for t in targets if t['id']!=later['id']],school_saved_same=True)
             used+=1
             found=[i for i in items if (i.get('plan') or {}).get('school_task',{}).get('change')=='same' and i['plan']['school_task'].get('state')=='ready'
                    and i['plan']['school_task'].get('target_basis') and i['plan']['school_task'].get('target_id') in {t['id'] for t in candidates}]
@@ -7785,7 +7785,7 @@ def _school_native_saved(items,evidence):
         raise AgentError('学校独立要求保存时仍有遗漏，整批未写入',409,'school_action_coverage')
 
 
-def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None,school_later=None,school_pending=()):
+def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_goals=None, school_tasks=(),school_existing=None,school_rewrite=(),school_revisable=None,school_later=None,school_pending=(),school_saved_same=False):
     original_pointers=[]
     if mode == 'school':
         original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
@@ -8090,7 +8090,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 if uncertain_due:item['plan']['school_unadopted_due']=proposed_due
             elif due and due<as_of and brief['state']!='reference':
                 brief.update(state='review',reason=brief['reason'][:300]+' 原截止日期已过，请核对是否已处理或仍需补办；不推定完成或安排今天补做。')
-            elif not due and brief['state']=='ready' and any((sent_day(e.get('time','')) or as_of)<as_of for e in cited_evidence):
+            # An earlier message is no new task of today; the saved-repeat re-reading (school_saved_same) asks only whether it is
+            # a saved task's own affair, so a same relation already proven ready on its basis is kept (no task, day or status).
+            elif (not due and brief['state']=='ready' and any((sent_day(e.get('time','')) or as_of)<as_of for e in cited_evidence)
+                  and not (school_saved_same and brief.get('change')=='same' and brief.get('target_basis'))):
                 brief.update(state='review',reason=brief['reason'][:300]+' 原消息早于今天且未注明有效截止，是否仍需办理请家长核对；不作为今天新作业自动收集。')
             elif ambiguous_due and brief['state']=='ready' and not _school_dated_quote(dated_quote,cited_evidence,due,brief):
                 brief.update(state='review',reason=brief['reason'][:300]+' 原通知含多个日期，已按原文取'+due+'；请核对这一天是否属于本事项。')
