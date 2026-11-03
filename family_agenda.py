@@ -30,6 +30,10 @@ _WEEKDAYS={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6}
 def _relative_weekday(text,anchor):
     """Ground 本周X/下周X/周X against the sending day; recurring (每周), past (上周) or unknown anchors stay as written."""
     if not anchor: return text
+    # A date restating its own weekday (2026-11-10（周二）, from 11月10日（周二）) names that one day; a weekday the date does
+    # not fall on stays written beside it, so the clause keeps two days and is read as unknown, never guessed.
+    text=re.sub(r'(\d{4}-\d{2}-\d{2})\s*[（(]\s*(?:周|星期|礼拜)([一二三四五六日天])\s*[）)]',
+                lambda m:m[1] if date(m[1]) and dt.date.fromisoformat(m[1]).weekday()==_WEEKDAYS[m[2]] else m[0],text)
     sent=dt.date.fromisoformat(anchor); monday=sent-dt.timedelta(days=sent.weekday())
     def resolve(match):
         if match.group('range') or (match.group('prefix') or '').startswith(('每','上')) or re.search(r'[每上本这下个]\s+$',text[:match.start()]): return match[0]
@@ -1095,10 +1099,11 @@ def snapshot(app,start,end):
                 if row['child_id'] not in ids or brief.get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
                 purpose=brief.get('purpose')
-                # Action or not is read only from the saved brief: a read goal whose purpose is not unknown. Kind, pending state,
-                # a subject word, a title, a stored attachment or a publication day prove no action; such a row is material
-                # still to be organized (it stays here, in the school inbox and its originals, unchanged).
-                material=not str(brief.get('goal') or '').strip() or purpose=='unknown'
+                # Action or not is read only from the saved brief: a read goal whose purpose is neither optional nor unknown.
+                # Voluntary/reference (optional) is never required work, whatever goal it reads (_school_brief keeps it out of
+                # 必做); kind, pending state, a subject word, a title, a stored attachment or a publication day prove no action.
+                # Such a row is material still to be organized (it stays here, in the school inbox and its originals, unchanged).
+                material=not str(brief.get('goal') or '').strip() or purpose in ('optional','unknown')
                 category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
                 # A candidate reads its day from the same stored original words, publication and siblings as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
@@ -1984,11 +1989,17 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                   change=(r.get('version') or {}).get('change', ''),
                   day=min(f['value'] for f in r['facts'] if f.get('known') and exact_day(f.get('value')) and f['value'] > day)) for r in rows if upcoming(r)]
     rows = [r for r in rows if not upcoming(r)]
+    # The day's list is its own work. An action with no exact date keeps its id, originals, progress and family edits under
+    # 日期未定/待安排 (view.undated), counted apart from the day; a past lesson, check or arranged day (已过) is that day's history,
+    # listed with the same id on its own day, not open work here. A deadline or handback past due stays overdue in the list.
+    undated = [r for r in rows if r['when'] == 'unknown']
+    rows = [r for r in rows if r['when'] not in ('unknown', 'passed')]
     return dict(groups=[dict(subject=key, items=list(items), undated=sum(r['when'] == 'unknown' for r in items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
                 closed=[dict(subject=key, items=list(items)) for key, items in subject_filed(closed_rows, lambda r: r['subject'])],
                 wrong=[dict(subject=key, items=list(items)) for key, items in subject_filed([wrong_row(r) for r in wrong], lambda r: SUBJECT_GENERAL if str(r.get('subject') or '').strip() == '综合' else str(r.get('subject') or '').strip())],
                 upcoming=sorted(later, key=lambda u: (u['day'], u['subject'])),
+                undated=[dict(subject=key, items=list(items)) for key, items in subject_filed(undated, lambda r: r['subject'])],
                 materials=[dict(subject=key, items=[dict(id=r['id'], title=r['title'], published_at=r['published_at']) for r in items])
                            for key, items in subject_filed(material, lambda r: r['subject'])],
-                counts=dict(open=len(rows), closed=len(closed_rows), upcoming=len(later), material=len(material),
+                counts=dict(open=len(rows), closed=len(closed_rows), upcoming=len(later), material=len(material), undated=len(undated),
                             **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))

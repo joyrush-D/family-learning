@@ -242,7 +242,7 @@ function groveLearningHTML(v){
    +`<div class="grove-actions">${e.task_id?`<button type="button" data-task="${esc(e.task_id)}" data-learning-task="${esc(e.record_id)}">回原作业</button>`:''}<button type="button" data-grove-tab="wrong">看原错题</button></div></article>`).join('')
   +(s.course.length?`<div class="grove-card grove-course"><p class="grove-course-title">课程记录（安排与进度，不是孩子表现）</p>${s.course.map(c=>`<div data-course-record="${esc(c.record_id)}"><strong>${esc(c.title)}</strong>${c.note?`<p>${esc(c.note)}</p>`:''}<p class="small muted">${esc(c.day)} · 出处：${esc(c.source||'未写明')}</p></div>`).join('')}</div>`:'')+'</section>').join('');
 }
-function groveRows(view){return [...(view?.groups||[]),...(view?.closed||[])].flatMap(g=>g.items||[])}
+function groveRows(view){return [...(view?.groups||[]),...(view?.undated||[]),...(view?.closed||[])].flatMap(g=>g.items||[])}
 function groveWide(){return matchMedia('(min-width: 900px)').matches}
 function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.role==='submit'&&f.today?'今天先提交':f.role==='check'&&f.today?'今天先检查':f.label+' '+(f.known?f.value:'日期未写明')}
 function groveChipsHTML(r){
@@ -284,7 +284,7 @@ function groveVersionHTML(v){if(!v)return '';const list=l=>`<ul class="grove-sta
 function groveGroupCount(g){const u=g.undated||0,n=g.items.length-u;return [n?n+' 项':'',u?'日期未定 '+u:''].filter(Boolean).join(' · ')}
 // School material with no read action yet (server view.materials): one line naming each subject's count, not the day's work;
 // every original stays in the school information page.
-function groveMaterialsHTML(view){const m=view.materials||[];return m.length?`<p class="grove-upcoming small muted" data-grove-materials>学校资料待整理，不算当天要做：${m.map(g=>`${esc(g.subject)} ${g.items.length} 条`).join('；')}。<button type="button" data-page="agent">查看原消息与整理状态</button></p>`:''}
+function groveMaterialLineHTML(view){const m=view.materials||[];return m.length?`<p class="grove-upcoming small muted" data-grove-materials>学校资料待整理，不算当天要做：${m.map(g=>`${esc(g.subject)} ${g.items.length} 条`).join('；')}。<button type="button" data-page="agent">查看原消息与整理状态</button></p>`:''}
 function groveUpcomingHTML(view){const u=view.upcoming||[];return u.length?`<p class="grove-upcoming small muted" data-grove-upcoming>即将/待补：${u.map(x=>`${esc(x.day.slice(5))} ${esc(x.title)}${x.pending_review?'（待补）':''}${x.change?'（'+esc(x.change)+'）':''}`).join('；')}</p>`:''}
 function groveRowHTML(r){
  const on=r.id===groveSelected,meta=[groveSource(r),groveProgressWords(r.progress)].filter(Boolean).join(' · ');
@@ -387,8 +387,12 @@ function todayTasksHTML(){
  const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['passed','已过'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
  const groups=(view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2>`
   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
-  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialsHTML(view);
+  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
  const closed=(view.closed||[]).flatMap(g=>g.items||[]);
+ // Actions with no exact date (server view.undated): one line beside 已办, not this day's count; each keeps its subject, id and
+ // detail. It stays open while its selected row is inside, so a selection survives the re-render.
+ const undated=view.undated||[],undatedN=undated.reduce((a,g)=>a+(g.items||[]).length,0);
+ const undatedHTML=undatedN?`<details class="grove-closed grove-undated" data-grove-undated${undated.some(g=>g.items.some(r=>r.id===groveSelected))?' open':''}><summary>日期未定/待安排 ${undatedN} 项 · 不算这一天</summary>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${g.items.length} 项</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</details>`:'';
  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
  return `<div class="grove" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}" data-tab="${esc(groveTab)}"><section class="grove-list" aria-labelledby="groveListTitle">`
@@ -399,7 +403,7 @@ function todayTasksHTML(){
   +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[day===data.today?day+' 今天':day,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${day===data.today?add:`<button type="button" data-grove-day="${esc(data.today)}">回到今天</button>`}</header>`
   +`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
   +groveScheduleHTML(view)
-  +`<div class="today-task-groups" id="task-groups">${groups}</div>`
+  +`<div class="today-task-groups" id="task-groups">${groups}</div>`+undatedHTML
   +(closed.length?`<details class="grove-closed"><summary>这一天已办 ${closed.length} 项</summary><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></details>`:'')
   +`</section><section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`);
 }

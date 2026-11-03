@@ -403,7 +403,10 @@ function restoreContentFocus(saved){
  target.focus({preventScroll:retained});
  if(saved.page===page&&typeof saved.start==='number'&&target.matches('input,textarea')){try{target.setSelectionRange(saved.start,saved.end)}catch{}}
 }
-function render(){if(!data)return;if(!currentChild())child=data.children[0]?.name||'';rememberChild();const savedFocus=captureContentFocus();if(page!=='calendar')window.FamilyCalendar?.leave();window.FamilyStudy?.leave();window.FamilySettings?.leave();window.FamilyTeachers?.leave();window.FamilyWorld?.destroy();let html='';const openLearningPanels=[...document.querySelectorAll('details[data-learning-panel][open]')].map(x=>x.dataset.learningPanel);const ts=selected(data.tasks),rs=selected(data.records);const active=ts.filter(t=>!taskClosed(t));
+// The Mac workbench's school-material line opens one child's school information here (#page=agent&child=<child id>): the
+// existing 成长助手 page with its school inbox and organize state, for exactly that child. Nothing is collected or saved here.
+let schoolLinkPending='';{const m=/^#page=agent&child=([^&]{1,100})$/.exec(location.hash);if(m)try{schoolLinkPending=decodeURIComponent(m[1])}catch{}}
+function render(){if(!data)return;if(schoolLinkPending){const id=schoolLinkPending;schoolLinkPending='';history.replaceState(null,'',location.pathname+location.search);if(selectChild(id))page='agent'}if(!currentChild())child=data.children[0]?.name||'';rememberChild();const savedFocus=captureContentFocus();if(page!=='calendar')window.FamilyCalendar?.leave();window.FamilyStudy?.leave();window.FamilySettings?.leave();window.FamilyTeachers?.leave();window.FamilyWorld?.destroy();let html='';const openLearningPanels=[...document.querySelectorAll('details[data-learning-panel][open]')].map(x=>x.dataset.learningPanel);const ts=selected(data.tasks),rs=selected(data.records);const active=ts.filter(t=>!taskClosed(t));
 if(page==='home'){
 html=todayTasksHTML();
  }else if(page==='tasks'){

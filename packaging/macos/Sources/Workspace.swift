@@ -62,6 +62,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var loginRequired = false
     @Published var mode: ListMode = .calendar
     @Published var showDone = false
+    /// 日历里“日期未定”一段：服务端 undated 的同一行（与待办/已办同一个切换）。
+    @Published var showUndated = false
     @Published var selection: String?
     @Published var sheet: SheetKind?
     @Published var materials: [String: MaterialState] = [:]
@@ -79,6 +81,7 @@ final class WorkspaceStore: ObservableObject {
     var openDocument: (URL, String) -> Void = { _, _ in }
     /// 次级网页：同一份原作业，带明确意图（print-original / print-reference / check / original / history），由网页原流程接着做。
     var openWebTools: (String, String) -> Void = { _, _ in }
+    var openSchoolInfo: (String) -> Void = { _ in }
     var openLogin: () -> Void = {}
     var confirmDiscard: (String) -> Bool = { _ in false }
     var onLoaded: () -> Void = {}
@@ -103,7 +106,7 @@ final class WorkspaceStore: ObservableObject {
         return v
     }
     var childName: String { current?.child_name ?? "" }
-    var groups: [ItemGroup] { showDone ? (current?.closed ?? []) : (current?.groups ?? []) }
+    var groups: [ItemGroup] { showDone ? (current?.closed ?? []) : showUndated ? (current?.undated ?? []) : (current?.groups ?? []) }
 
     /// 所选日所在的周一至周日。数量只取同一孩子最近一次读回的 week（服务端同一口径）；换了孩子或还没读到时不显示数量，不当 0。
     var weekDays: [WeekDay] {
@@ -123,7 +126,8 @@ final class WorkspaceStore: ObservableObject {
         return WorkspaceStore.short(a) + " – " + WorkspaceStore.short(b)
     }
     var wrongGroups: [WrongGroup] { current?.wrong ?? [] }
-    var allItems: [DayItem] { (current?.groups ?? []).flatMap(\.items) + (current?.closed ?? []).flatMap(\.items) }
+    var allItems: [DayItem] { (current?.groups ?? []).flatMap(\.items) + (current?.undated ?? []).flatMap(\.items) + (current?.closed ?? []).flatMap(\.items) }
+    func undatedHas(_ id: String) -> Bool { (current?.undated ?? []).contains { $0.items.contains { $0.id == id } } }
     var selected: DayItem? { allItems.first { $0.id == selection } }
     var wrongItems: [SavedRecord] { wrongGroups.flatMap(\.items) }
     var selectedRecord: SavedRecord? { record.flatMap { id in wrongItems.first { $0.id == id } } }
@@ -135,7 +139,7 @@ final class WorkspaceStore: ObservableObject {
     /// 回到同一份原作业：在日历里按作业编号选中；它不在正看的这一天（以前的作业、已办）时，换到原错题记下的那天再选。
     func backToTask(_ task: String, day recordDay: String) {
         guard !task.isEmpty else { return }
-        if let item = allItems.first(where: { $0.task_id == task }) { mode = .calendar; showDone = item.closed; select(item.id); return }
+        if let item = allItems.first(where: { $0.task_id == task }) { mode = .calendar; showDone = item.closed; showUndated = undatedHas(item.id); select(item.id); return }
         guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
         mode = .calendar; pendingTask = task
         change(day: recordDay.isEmpty ? day : recordDay)
@@ -153,7 +157,7 @@ final class WorkspaceStore: ObservableObject {
             if !keepSelection || !allItems.contains(where: { $0.id == selection }) { selection = nil }
             if let task = pendingTask {
                 pendingTask = nil
-                if let item = allItems.first(where: { $0.task_id == task }) { showDone = item.closed; selection = item.id }
+                if let item = allItems.first(where: { $0.task_id == task }) { showDone = item.closed; showUndated = undatedHas(item.id); selection = item.id }
                 else { notice = "原作业不在这一天的清单里；原错题和订正仍在错题本。" }
             }
             if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
@@ -263,6 +267,7 @@ final class WorkspaceStore: ObservableObject {
             return n == 0 ? "按科目看原记录与知识点线索" : "原错题 \(n) 道 · 线索不等于掌握"
         case .calendar:
             if showDone { return "已办 \(v.counts["closed"] ?? 0) 项" }
+            if showUndated { return "日期未定 \(v.counts["undated"] ?? 0) 项 · 不算这一天" }
             var parts = ["共 \(v.counts["open"] ?? 0) 项", "今天要做 \(v.counts["today"] ?? 0)"]
             for (key, label) in [("later", "以后安排"), ("overdue", "已过期限"), ("earlier", "之前安排"), ("unknown", "日期未写明"), ("passed", "已过"), ("upcoming", "即将/待补")] {
                 if let n = v.counts[key], n > 0 { parts.append("\(label) \(n)") }
@@ -273,7 +278,7 @@ final class WorkspaceStore: ObservableObject {
 
     /// 以后课堂/待补范围的事项（服务端 day_view 同一 upcoming，与网页同一行）：日期、标题、待补与变化；发生日完整列出，不算今天。
     var upcomingLine: String? {
-        guard mode == .calendar, !showDone, let u = current?.upcoming, !u.isEmpty else { return nil }
+        guard mode == .calendar, !showDone, !showUndated, let u = current?.upcoming, !u.isEmpty else { return nil }
         return "即将/待补：" + u.map { x in
             "\(x.day.dropFirst(5)) \(x.title)" + (x.pending_review ? "（待补）" : "") + ((x.change ?? "").isEmpty ? "" : "（\(x.change ?? "")）")
         }.joined(separator: "；")
@@ -281,7 +286,7 @@ final class WorkspaceStore: ObservableObject {
 
     /// 尚无已读行动的学校资料（服务端 day_view 同一 materials，与网页同一行）：每科条数，不算当天要做；原消息与整理状态在网页版。
     var materialsLine: String? {
-        guard mode == .calendar, !showDone, let m = current?.materials, !m.isEmpty else { return nil }
+        guard mode == .calendar, !showDone, !showUndated, let m = current?.materials, !m.isEmpty else { return nil }
         return "学校资料待整理，不算当天要做：" + m.map { "\($0.subject) \($0.items.count) 条" }.joined(separator: "；") + "。"
     }
 
@@ -606,7 +611,7 @@ struct SubjectList: View {
             if store.mode == .calendar { WeekStrip(store: store).padding(.horizontal, 14).padding(.top, 8) }
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(store.mode == .calendar ? (store.showDone ? "这一天已办" : "当天清单") : store.mode.rawValue).font(Palette.round(21, .bold)).foregroundStyle(Palette.ink)
+                    Text(store.mode == .calendar ? (store.showDone ? "这一天已办" : store.showUndated ? "日期未定/待安排" : "当天清单") : store.mode.rawValue).font(Palette.round(21, .bold)).foregroundStyle(Palette.ink)
                     Text(store.summary).font(.system(size: 14)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("list-summary", text: store.summary)
                 }
                 Spacer(minLength: 4)
@@ -651,7 +656,7 @@ struct SubjectList: View {
                 let words = "还有 \(count) 条学校消息尚未整理，作业清单可能不完整。原消息已保存。"
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).probe("school-pending", text: words)
-                    Button("在网页版查看整理状态") { store.openWebTools("", "") }.buttonStyle(.borderless).controlSize(.small).probe("school-pending-open")
+                    Button("在网页版查看整理状态") { store.openSchoolInfo(store.current?.child_id ?? store.childID) }.buttonStyle(.borderless).controlSize(.small).probe("school-pending-open")
                 }
                 .padding(.horizontal, 18).padding(.vertical, 6)
             }
@@ -689,17 +694,18 @@ struct SubjectList: View {
     /// 日历内保留原来的“待办 / 已办”切换（同一份服务端 groups/closed），每段 44pt。
     var doneSwitch: some View {
         HStack(spacing: 3) {
-            ForEach([false, true], id: \.self) { done in
-                let on = store.showDone == done, n = store.current?.counts[done ? "closed" : "open"] ?? 0
-                let text = (done ? "已办" : "待办") + (n > 0 ? " \(n)" : "")
-                Button { store.showDone = done } label: {
+            ForEach(["open", "undated", "closed"].filter { $0 != "undated" || store.showUndated || (store.current?.counts["undated"] ?? 0) > 0 }, id: \.self) { key in
+                let on = key == "closed" ? store.showDone : key == "undated" ? store.showUndated : !store.showDone && !store.showUndated
+                let n = store.current?.counts[key] ?? 0
+                let text = (key == "closed" ? "已办" : key == "undated" ? "日期未定" : "待办") + (n > 0 ? " \(n)" : "")
+                Button { store.showDone = key == "closed"; store.showUndated = key == "undated" } label: {
                     Text(text).font(Palette.round(13)).padding(.horizontal, 10).frame(minWidth: 58, minHeight: Palette.hit).contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
                 .background(Capsule().fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
                 .accessibilityAddTraits(on ? .isSelected : [])
-                .probe(done ? "mode-已办" : "mode-当天", text: text)
+                .probe(key == "closed" ? "mode-已办" : key == "undated" ? "mode-日期未定" : "mode-当天", text: text)
             }
         }
         .padding(3).background(Capsule().fill(Palette.wood))
@@ -767,7 +773,7 @@ struct SubjectList: View {
                 }
             }
             if store.groups.isEmpty && store.current != nil {
-                Text(store.showDone ? "这一天没有已办的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
+                Text(store.showDone ? "这一天没有已办的事项。" : store.showUndated ? "没有日期未定的事项。" : "这一天没有已整理的未完成事项；没有反馈不等于没做。")
                     .font(Palette.body).foregroundStyle(Palette.ink2).probe("list-empty")
             }
             if let line = store.upcomingLine {
@@ -777,7 +783,7 @@ struct SubjectList: View {
             if let line = store.materialsLine {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("materials", text: line)
-                    Button("在网页版查看原消息与整理状态") { store.openWebTools("", "") }.buttonStyle(.borderless).controlSize(.small).probe("materials-open")
+                    Button("在网页版查看原消息与整理状态") { store.openSchoolInfo(store.current?.child_id ?? store.childID) }.buttonStyle(.borderless).controlSize(.small).probe("materials-open")
                 }
                 .listRowSeparator(.hidden)
             }
