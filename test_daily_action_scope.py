@@ -256,7 +256,37 @@ class RealChainDateRoleTest(unittest.TestCase):
     def ids(self, view, key):
         return {i['task_id'] or i['id'] for g in view[key] for i in g['items']}
 
-    def test_a_restated_weekday_keeps_a_lesson_bring_day_and_only_a_due_handback_stays_overdue(self):
+    def test_d2_an_evening_counted_exercise_keeps_tonight_and_its_next_morning_check(self):
+        text = '体育作业：今晚原地高抬腿30次，每10次休息半分钟；明早体育课检查。'
+        row, a, v = self.one(text, 'learning', '2026-11-04', '2026-11-03T16:00:00+08:00', ('2026-11-03', '2026-11-04'))
+        self.assertTrue(row['task_id'], 'one saved task, not a pending card without dates')
+        self.assertEqual((a['complete_on'], a['due_on']), ('2026-11-03', '2026-11-04'), 'done tonight, checked at the next morning lesson')
+        self.assertIn(row['task_id'], self.ids(v['2026-11-03'], 'groups'), 'tonight is its work day')
+        self.assertNotIn(row['task_id'], self.ids(v['2026-11-03'], 'undated'))
+        self.assertIn(row['task_id'], self.ids(v['2026-11-04'], 'groups'), 'its check day lists the same task')
+        with self.case.app.connect() as db:
+            task = {t['id']: t for t in self.case.app.tasks(db)}[row['task_id']]
+        self.assertIn('30次', task['goal']); self.assertIn('每10次休息半分钟', task['goal'])
+        later, a, v = self.one('体育作业：明晚原地高抬腿30次；后天体育课检查。', 'learning', '2026-11-05', '2026-11-03T16:00:00+08:00', ('2026-11-03', '2026-11-04'))
+        self.assertEqual((a['complete_on'], a['due_on']), ('2026-11-04', '2026-11-05'), 'not tonight: 明晚 is its own work day')
+        self.assertNotIn(later['task_id'], self.ids(v['2026-11-03'], 'undated'))
+        self.assertIn(later['task_id'], self.ids(v['2026-11-04'], 'groups'))
+
+    def test_d2_guards_a_counted_exercise_reads_no_day_it_does_not_state(self):
+        import family_agenda as fa, family_agent as agent
+        sent = '2026-11-03'
+        self.assertEqual(fa.deadlines('今晚原地高抬腿30次，每10次休息半分钟；明早体育课检查。', sent), {'2026-11-03'})
+        self.assertEqual(fa.deadlines('明早交。', sent), {'2026-11-04'}, '明早 is the next day as 明天早上 is')
+        self.assertEqual(fa.deadlines('明晚跳绳100下。', sent), {'2026-11-04'})
+        for text in ('今晚不用原地高抬腿30次。', '今晚或明晚跳绳100下。', '今晚有3次机会。', '今晚已练30次。', '今晚练了30次。',
+                     '今晚第2次提醒。', '今晚原地高抬腿30次吗？', '每10次休息半分钟。'):
+            self.assertEqual(fa.deadlines(text, sent), set(), text)
+        quote = '今晚原地高抬腿30次，每10次休息半分钟；明早体育课检查。'
+        self.assertEqual(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), ({'2026-11-03'}, '2026-11-04'))
+        quote = '今晚或明晚跳绳100下；后天体育课检查。'
+        self.assertNotEqual((agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []) or (set(),))[0], {'2026-11-04'},
+                            'an option between two evenings is no chosen work day')
+
         future, a, v = self.one('11月10日（周二）美术课带一张白色卡纸，不用今晚画画。', 'admin', '2026-11-10', '2026-11-03T16:20:00+08:00', ('2026-11-03', '2026-11-10'))
         self.assertEqual((a['due_on'], a['due_kind']), ('2026-11-10', 'arranged'), 'the negated 今晚 lends no day')
         self.assertNotIn(future['task_id'], self.ids(v['2026-11-03'], 'groups') | self.ids(v['2026-11-03'], 'undated'))

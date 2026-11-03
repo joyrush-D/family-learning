@@ -116,7 +116,7 @@ def _action_deadlines(text,published):
     # (把校内参观活动回执签字交回) is one object however long, so only that noun counts toward the window below; a
     # state, another day or a clause word inside the name (把已取消的活动回执), or a day that is itself written inside a
     # 《》 title (资料标题为《明天把…回执交回指南》), leaves the text as it was.
-    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
                 r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z0-9])*?'
                 r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+m[2],text or '')
     action=r'(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
@@ -126,19 +126,19 @@ def _action_deadlines(text,published):
     # else before the action leaves the text as it was.
     locator=r'(?:[、和]?的?第?[0-9一二三四五六七八九十百]+(?:[-–~～至到]第?[0-9一二三四五六七八九十百]+)?(?:页|题|课|单元|章|节))'
     plain=r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z])'
-    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
                 r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》(?:'+plain+r'*?'+locator+r'+)?'
                 r'|'+plain+r'+?'+locator+r'+)'
                 r'(?:(?:签字|签名|盖章|填好|填写)(?:并|后)?)*(?='+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)
     text=_titles_read_as_objects(text)
     # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
-    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+action
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)([^。；;，,\n]{0,8}?)'+action
     for match in re.finditer(pattern,text or ''):
         # A direct negation right before the action (今晚不交纸质作业、明天不用带) ties the day to no action of its own.
         if _negates(match[2]):continue
         token=match[1];value=date(token)
-        if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
-            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+        if not value and published and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
             try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
@@ -149,10 +149,10 @@ def _action_deadlines(text,published):
     # 签字安排 into a deadline by searching arbitrarily past the date.
     direct_prefix=r'[ \t：:]*(?:(?:需要|务必|由家长|同学们|家长|孩子|学生|请|需|须|要|先)[ \t]*){0,2}(?:(?:语文|数学|英语|科学|历史|地理|生物|物理|化学)[ \t：:]*)?'
     direct_action=r'(?:复习|打印|签字|盖章)(?!资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况|方式|入口|功能|机)'
-    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+direct_prefix+direct_action,text):
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)'+direct_prefix+direct_action,text):
         token=match[1];value=date(token)
-        if not value and anchor and token in ('今天','今日','今晚','明天','明日','后天'):
-            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+        if not value and anchor and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
             try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
@@ -160,24 +160,27 @@ def _action_deadlines(text,published):
     # 语文今晚阅读《晨星故事》、数学今晚口算第1题、英语明天跟读、今晚读《长叶读本》), ties it just as 今晚复习 does: the native
     # reader's activities and the completion verbs, no list of its own. A report or question after the verb (读了、读过的、
     # 跟读吗), a negation or condition (not an asker word), or a question or condition in its clause states no requirement.
-    learning=r'(?:'+family_agent._SCHOOL_LEARNING_ACTS+'|'+_COMPLETION_VERB+r')(?![了过的着吗册本卷]|资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况)'
-    for match in re.finditer(r'(今天|今日|今晚|明天|明日|后天)'+direct_prefix+learning,text):
+    # A counted exercise (今晚原地高抬腿30次) is such an activity too (_COUNTED_ACT).
+    learning=(r'(?:(?:'+family_agent._SCHOOL_LEARNING_ACTS+'|'+_COMPLETION_VERB+r')(?![了过的着吗册本卷]|资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况)'
+              r'|'+_COUNTED_ACT+r')')
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)'+direct_prefix+learning,text):
         clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
-        if re.search(r'吗|[？?]|如果|假如|若是|要是|是否',clause):continue
-        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]]
+        # A day offered as one option (今晚或明晚跳绳100下) leaves the day to choose.
+        if re.search(r'吗|[？?]|如果|假如|若是|要是|是否',clause) or re.search(r'(?:或者?|或是|还是)\s*$',text[:match.start()]):continue
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[match[1]]
         if not anchor:continue
         try:candidates.add((dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat())
         except OverflowError:pass
     # A day directly heading the child's own preparation of a thing (明天准备好一条短绳、周四请家长准备齐三支彩笔) ties it as
     # 明天带 does. A negation (不用准备好), an option (可以准备、自愿准备) or a question or condition in its clause (如果下雨、
     # 是否准备好) states no requirement, and a name or state after the word (准备活动、准备好的材料) is no predicate (_PREPARE).
-    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)([^。；;，,\n]{0,8}?)'+_PREPARE,text):
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)([^。；;，,\n]{0,8}?)'+_PREPARE,text):
         clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
         if (_negates(match[2]) or re.search(r'可|自愿|自选|酌情|视情况|建议|尽量|最好|如有|有条件',match[2])
                 or re.search(r'吗|[？?]|如果|假如|若是|要是|是否|万一|如需|仅供参考',clause)):continue
         value=date(match[1])
         if not value and anchor:
-            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]])).isoformat()
+            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[match[1]])).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
     for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
@@ -190,33 +193,33 @@ def _action_deadlines(text,published):
     # date and the exam word, past the tight window above. Allow that gap but stop before another date
     # or a clause break so separate items keep their own dates. 测试/检测 stay out here: 设备测试/核酸检测
     # are not tests the child sits, and the tight pass already covers their own phrasings.
-    span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)[^。；;，,\n]){0,16}?'
+    span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)[^。；;，,\n]){0,16}?'
     reading_event=r'读(?=[一二两三四五六七八九十百0-9]+(?:遍|次))'
     # Unit/title names can separate the date from the reading action. Do not
     # cross a different date or clause, or treat a material's name as an action.
-    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)'+span+r'(?:'+reading_event+r')',text or ''):
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)'+span+r'(?:'+reading_event+r')',text or ''):
         token=match[1];value=date(token)
-        if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
-            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+        if not value and published and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
             try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
     # A conflicting relative/explicit parenthetical is uncertainty, not a
     # reason to silently prefer one date. A mere date label remains no action.
-    for match in re.finditer(r'(今天|今日|今晚|明天|明日|后天)\s*[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]',text or ''):
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)\s*[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]',text or ''):
         if not published or not re.match(span+r'(?:完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|'+reading_event+r')',text[match.end():]):continue
-        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[match[1]]
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[match[1]]
         try:relative=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
         except OverflowError:continue
         if date(match[2]):candidates.update((relative,match[2]))
     # A dated pickup the family is asked to do: when and where (放学、东门) stand between the day and 接孩子, past the
     # tight window above. It stays inside its clause; another day or a negation (不用接) before it leaves the day unread.
-    pickup=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天|不|无|勿|别|免|未|没)[^。；;，,\n]){0,16}?接\s*(?:'+_PARTICIPANTS['学生']+r')'
+    pickup=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|不|无|勿|别|免|未|没)[^。；;，,\n]){0,16}?接\s*(?:'+_PARTICIPANTS['学生']+r')'
     exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
-    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天)(?:'+span+r'(?:'+exam_event+r')|'+pickup+r')',text or ''):
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?:'+span+r'(?:'+exam_event+r')|'+pickup+r')',text or ''):
         token=match[1];value=date(token)
-        if not value and published and token in ('今天','今日','今晚','明天','明日','后天'):
-            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}[token]
+        if not value and published and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
             try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
             except OverflowError:pass
         if value:candidates.add(value)
@@ -560,6 +563,11 @@ def later_dropped_days(quote,text,published,own=None,title=''):
 
 
 _COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完成|练习|阅读|读|写|做|背'
+# A counted exercise is its own predicate (原地高抬腿30次、跳绳100下、仰卧起坐20个、慢跑3圈), with no list of activities: the
+# child's work for the day directly heading it. A name holding a negation, state, another day, an ordinal, an option or a
+# report or possession word (今晚有3次机会、第2次提醒、已练30次、练了30次、共3个) is none, nor is a count something else holds.
+_COUNTED_ACT=(r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|[不没无未免别勿有是共约第已了过的每或])[一-鿿]){2,6}?'
+              r'[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')
 
 
 def completion_day(quote,header,time,due_on):
@@ -591,7 +599,7 @@ def completion_day(quote,header,time,due_on):
     if own_day and (not date(own_day) or own_day<sent.isoformat() or re.search(r'交|带',first[written.end():])):return ''
     lead=lead or written
     work=first[lead.end():] if lead else first
-    if not re.search(_COMPLETION_VERB,work) or re.search(r'不用|不必|无需|无须|不需要?|不要求',work):return ''
+    if not (re.search(_COMPLETION_VERB,work) or re.match(r'\s*'+_COUNTED_ACT,work)) or re.search(r'不用|不必|无需|无须|不需要?|不要求',work):return ''
     day=own_day or sent.isoformat()
     if lead or (re.fullmatch(r'\s*(?:今天|今日|今晚)的?[^，,。；;\n\d]{0,8}?作业\s*[：:]?\s*',header or '')
                 and re.match(r'\s*(?:明天|明日|明早)',rest) and not re.search(_DAY_WORDS,re.sub(r'^\s*(?:明天|明日|明早)','',rest))):
