@@ -99,6 +99,14 @@ final class WorkspaceStore: ObservableObject {
         notice = "有一条家庭复习的保存还没确认：请先在原卡片上“用同一次提交重试”核对，再换孩子、日期或刷新。"
         return true
     }
+    /// 待办 / 日期未定 / 已办切换与换孩子、日期走同一守卫：保存未确认的家庭复习卡片和“用同一次提交重试”留在原处，
+    /// 弹出层未保存的内容先问；只换显示哪一段，所选事项、草稿和各行原样保留。
+    func setScope(_ key: String) {
+        if reviewHold() { return }
+        guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
+        sheet = nil; sheetDirty = false
+        showDone = key == "closed"; showUndated = key == "undated"
+    }
     /// 正在显示、可以操作的这一天：只有读回的正是所选孩子、所选日期才算。切换后还没读到或读失败时为 nil——
     /// 上一个孩子/上一天的读取结果只留作缓存（已知孩子仍可切回、重试），不在新选中的孩子/日期下显示、选中、计数或写入。
     var current: DayView? {
@@ -698,7 +706,7 @@ struct SubjectList: View {
                 let on = key == "closed" ? store.showDone : key == "undated" ? store.showUndated : !store.showDone && !store.showUndated
                 let n = store.current?.counts[key] ?? 0
                 let text = (key == "closed" ? "已办" : key == "undated" ? "日期未定" : "待办") + (n > 0 ? " \(n)" : "")
-                Button { store.showDone = key == "closed"; store.showUndated = key == "undated" } label: {
+                Button { store.setScope(key) } label: {
                     Text(text).font(Palette.round(13)).padding(.horizontal, 10).frame(minWidth: 58, minHeight: Palette.hit).contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
