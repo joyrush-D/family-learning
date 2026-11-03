@@ -235,7 +235,7 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.role = role; self.case = role.SchoolDateRoleTests('run_one'); self.case.setUp()
         self.addCleanup(self.case.doCleanups)
 
-    def one(self, text, purpose, due, sent, days):
+    def one(self, text, purpose, due, sent, days, goal=None):
         import copy
         import family_agent as agent
         self.case.setUp()  # one original per fresh fictional store
@@ -246,7 +246,7 @@ class RealChainDateRoleTest(unittest.TestCase):
                                     sender_id='qa-teacher-day-scope', message_order='1')]
         c.store.ingest(payload)
         proposal = dict(title_quote=text, focus='school', due=due, evidence=[{'ref': 'message:%s:1' % self.role.SOURCE['id']}],
-                        learning_subject='', learning_goal_id='', task_title=text[:16], task_goal=text, task_advice='', task_change='new',
+                        learning_subject='', learning_goal_id='', task_title=text[:16], task_goal=goal or text, task_advice='', task_change='new',
                         task_target_id='', task_state='ready', task_reason='纯虚构固定回复，不是模型产物。', task_purpose=purpose, task_submission='')
         c.model.side_effect = lambda *args, **kwargs: dict(proposals=[copy.deepcopy(proposal)])
         self.assertEqual(agent.run_once(c.app, c.now)['failed'], 0)
@@ -262,6 +262,45 @@ class RealChainDateRoleTest(unittest.TestCase):
     def task(self, task_id):
         with self.case.app.connect() as db:
             return {t['id']: t for t in self.case.app.tasks(db)}[task_id]
+
+    def test_n01_a_method_with_an_attributive_keeps_the_counted_exercise_its_own_work_and_check_days(self):
+        import family_agent as agent
+        text = '体育：明晚按照老师上节课讲过的左右交替方法踢毽子24下，11月16日体育课检查动作。'; goal = text[3:]
+        row, a, v = self.one(text, 'learning', '2026-11-16', '2026-11-12T16:00:00+08:00', ('2026-11-12', '2026-11-13', '2026-11-16'), goal)
+        self.assertEqual((a['complete_on'], a['due_on'], a['due_kind']), ('2026-11-13', '2026-11-16', 'inspection'))
+        self.assertIn(row['task_id'], self.ids(v['2026-11-13'], 'groups')); self.assertIn(row['task_id'], self.ids(v['2026-11-16'], 'groups'))
+        self.assertNotIn(row['task_id'], self.ids(v['2026-11-12'], 'undated'))
+        t = self.task(row['task_id']); self.assertEqual((row['body'], t.get('action') or t.get('title')), (goal, goal), 'method and count kept byte for byte')
+        # The same attributive 的 rule without an aspect; the act's own report/state, another actor, a negation or an option stays none.
+        self.assertEqual(agenda.deadlines('明晚按照老师的方法踢毽子24下。', '2026-11-12'), {'2026-11-13'})
+        for none in ('明晚按照老师上节课讲过的左右交替方法踢了毽子24下。', '明晚按照老师讲过的方法踢毽子24下了。', '明晚按照方法踢过的24下。',
+                     '明晚老师按照上节课讲过的方法踢毽子24下。', '明晚不用按照老师讲过的方法踢毽子24下。', '明晚按照讲过的方法或自选方法踢毽子24下。'):
+            self.assertEqual(agenda.deadlines(none, '2026-11-12'), set(), none)
+        # Only the method's own words are left out of the handback/approximation checks: the act's 上交 and an 8点左右 stay.
+        read = agenda.counted_method_read('明晚按照老师上节课讲过的左右交替方法踢毽子24下')
+        self.assertTrue(read.endswith('踢毽子24下') and '交' not in read and '左右' not in read, read)
+        self.assertIn('上交', agenda.counted_method_read('明晚按照要求上交手工作品3个'))
+        self.assertEqual(agenda.counted_method_read('明晚8点左右跳绳100下'), '明晚8点左右跳绳100下')
+        self.assertEqual(agent._school_clause_day('明晚按照老师上节课讲过的左右交替方法踢毽子24下', '2026-11-12'), '2026-11-13')
+
+    def test_n02_carrying_only_a_thing_to_the_lesson_is_its_arranged_day_and_the_teacher_demo_stays_raw(self):
+        import family_agent as agent
+        text = '体育：老师明晚会在教研展示中踢毽子24下，这是教师示范安排；学生11月16日体育课只带跳绳，不用在家练习，也不用提交录像。'
+        goal = '11月16日体育课只带跳绳，不用在家练习，也不用提交录像。'
+        row, a, v = self.one(text, 'admin', '2026-11-16', '2026-11-12T16:00:00+08:00', ('2026-11-12', '2026-11-13', '2026-11-16'), goal)
+        self.assertEqual((a['complete_on'], a['due_on'], a['due_kind']), ('', '2026-11-16', 'arranged'))
+        listed = {i['task_id']: i for g in v['2026-11-16']['groups'] for i in g['items']}
+        self.assertIn(row['task_id'], listed)
+        facts = {f['role']: f for f in listed[row['task_id']]['facts']}
+        self.assertNotIn('complete', facts); self.assertEqual((facts['due']['value'], facts['due']['kind'], facts['due']['label']), ('2026-11-16', 'arranged', '安排日'))
+        self.assertNotIn(row['task_id'], self.ids(v['2026-11-13'], 'groups'), 'the teacher demo is not the child\'s day')
+        t = self.task(row['task_id']); saved = t.get('action') or t.get('title')
+        self.assertEqual((row['body'], saved), (goal, goal)); self.assertNotIn('踢毽子', saved); self.assertNotIn('24', saved)
+        for errand in ('学生11月16日体育课只带跳绳', '11月16日体育课只带跳绳', '11月16日体育课仅需携带跳绳'):
+            self.assertTrue(agent._school_native_errand(errand, ()), errand)
+        for none in ('11月16日体育课不用带跳绳', '11月16日体育课只不带跳绳', '老师11月16日体育课只带跳绳', '11月16日前只需带跳绳', '11月16日体育课只要带跳绳'):
+            self.assertFalse(agent._school_native_errand(none, ()), none)
+        self.assertEqual(agenda.date_meaning(goal, '2026-11-16', '2026-11-12', '', goal), 'arranged')
 
     def test_open_homework_past_its_own_completion_and_check_day_stays_overdue_work(self):
         row, a, v = self.one('11月17日今晚朗读2遍，11月18日早读检查。', 'learning', '2026-11-18', '2026-11-17T16:00:00+08:00',
