@@ -31,6 +31,7 @@ import family_tls
 import family_task_focus
 import family_wrong_questions
 import family_wrong_review
+import family_photo_batch
 import family_diagnosis
 import family_remediation
 import family_agenda
@@ -401,6 +402,7 @@ def snapshot():
         records = [dict(r) for r in c.execute('SELECT * FROM records ORDER BY day DESC,id DESC')]
         for r in records: r['attachments'] = json.loads(r['attachments'])
         family_wrong_review.read_regions(SimpleNamespace(**globals()),c,records,names)
+        family_photo_batch.read_regions(SimpleNamespace(**globals()),c,records,names)
         attach_retry_views(c,records,children)
         uploads = [upload_info(r) for r in c.execute('SELECT * FROM uploads ORDER BY created DESC,id DESC')]
         updates = {r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')}
@@ -2780,6 +2782,12 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/child-access': return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),'state',{}))
             if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=family_calendar.Store(connect,profiles,DATA,initialize=False).saved_timetables()))
             if path=='/api/state': return self.reply(200,snapshot())
+            if path in family_photo_batch.GET_ROUTES:
+                # Read only: opening or refreshing a batch never calls a model or advances its steps.
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if any(len(v)!=1 or len(v[0])>100 for v in query.values()): return self.reply(400,{'error':'查询格式不正确'})
+                try: return self.reply(200,family_photo_batch.GET_ROUTES[path](SimpleNamespace(**globals()),query))
+                except family_photo_batch.BatchError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
             if path=='/api/day':
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if set(query)-{'child_id','day'} or any(len(v)!=1 or len(v[0])>100 for v in query.values()):
@@ -3119,6 +3127,10 @@ class Handler(BaseHTTPRequestHandler):
             if self.path=='/api/wrong/save':
                 try: return self.reply(200,wrong_review_store().save(obj))
                 except family_wrong_review.WrongReviewError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except RecordError as e: return self.reply(e.status,dict(error=str(e),code=e.code,not_saved=e.not_saved,request_known=e.request_known))
+            if path in family_photo_batch.ROUTES:
+                try: return self.reply(200,family_photo_batch.ROUTES[path](SimpleNamespace(**globals()),obj))
+                except family_photo_batch.BatchError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
                 except RecordError as e: return self.reply(e.status,dict(error=str(e),code=e.code,not_saved=e.not_saved,request_known=e.request_known))
             if self.path=='/api/diagnosis/run':
                 self.connection.settimeout(150)

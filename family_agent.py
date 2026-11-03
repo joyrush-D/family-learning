@@ -9891,10 +9891,28 @@ def _round_connect(connect):
     return open_round
 
 
+PHOTO_ROUND_CALLS = 1
+
+
+def _photo_batches(app, now, budget):
+    """Parent-imported photo batches (PRD 5.1) advance here, at most one model call a round from what is left."""
+    import family_photo_batch
+    try:
+        return family_photo_batch.advance(app, now, budget)
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        return {'used': 0, 'failed': 1, 'saves': 0}
+
+
 def run_once(app, now=None):
     now = _now(now); store = Store(_round_connect(app.connect), app.profiles, app.DATA, app=app)
     config = store._config()
-    if not config['enabled']: return {'state': 'disabled', 'created': 0, 'processed': 0}
+    if not config['enabled']:
+        # Manual photo input does not wait for school sources or the Agent switch; same round lock, same bounded call.
+        with _lock(store.data / '.agent.lock') as locked:
+            photo = _photo_batches(app, now, PHOTO_ROUND_CALLS) if locked else None
+        result = {'state': 'disabled', 'created': 0, 'processed': 0}
+        if photo and (photo['used'] or photo['saves'] or photo['failed']): result['photo_batch'] = photo
+        return result
     with _lock(store.data / '.agent.lock') as locked:
         if not locked: return {'state': 'already_running', 'created': 0, 'processed': 0}
         store._runtime('running', now)
@@ -10136,6 +10154,9 @@ def run_once(app, now=None):
                 import family_task_video
                 video = family_task_video.prepare(app, store, now)
                 budget -= video['used']; processed += video['used']; failed += video['failed']
+            # A photo batch takes at most one call from what is left; its record writes need no model call.
+            photo = _photo_batches(app, now, min(max(budget, 0), PHOTO_ROUND_CALLS))
+            budget -= photo['used']; processed += photo['used']; failed += photo['failed']
             with store._db() as c:
                 unresolved = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>0').fetchone()[0]
                 exhausted = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]
