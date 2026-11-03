@@ -668,10 +668,19 @@ def _school_step_owned(goal, step, texts, others=()):
                 at+=len(other)
         return False
     best=anchor
+    # A read list's own line naming nothing (二、标星单词…各抄写一遍) is titled by the nearest line above it that is only a name
+    # (英语《每日练习》); an earlier sentence naming that same thing is the same item's lead, never another object's.
+    heading=None if _school_named_objects(anchor[3]) else next((line for line in reversed(home[:sentence].split('\n')) if _school_named_objects(line)),None)
+    if heading and not re.fullmatch(r'\s*(?:'+_SCHOOL_NATIVE_SUBJECTS+r')?\s*(?:《[^》]*》)+\s*[：:]?\s*',heading):heading=None
+    def led(c):  # the clause's whole earlier sentence names the thing the anchor's heading names
+        if not heading or c[0]!=anchor[0] or c[1]>=sentence:return False
+        text=texts[c[0]];a=max(text.rfind(stop,0,c[1]) for stop in '。；;！!？?\n')+1
+        b=min([i for i in (text.find(stop,c[1]) for stop in '。；;！!？?\n') if i!=-1] or [len(text)])
+        return bool(_school_named_objects(text[a:b])&_school_named_objects(heading))
     if added:
         def stated(pattern,clause):return set(re.findall(pattern,re.sub(r'《[^》]*》','',clause)))
         def before(c):  # An earlier sentence of the item's own original states the same requirement (同书同页) or nothing of it.
-            if c[0]!=anchor[0] or c[1]>=sentence or not _school_named_objects(c[3])&_school_named_objects(anchor[3]):return False
+            if c[0]!=anchor[0] or c[1]>=sentence or not (_school_named_objects(c[3])&_school_named_objects(anchor[3]) or led(c)):return False
             if any(not stated(p,c[3])<=stated(p,anchor[3]) for p in (_SCHOOL_OUTCOME_RANGE,_SCHOOL_ANY_DAY)):return False
             start=max(home.rfind(stop,0,c[1]) for stop in '。；;！!？?\n')+1
             return not any(quoted(x) for x in clauses if x[0]==anchor[0] and start<=x[1]<anchor[1])
@@ -679,7 +688,7 @@ def _school_step_owned(goal, step, texts, others=()):
         best=max(later,key=lambda c:(sum(char in c[2] for char in added),c[0]==anchor[0],c[0]!=anchor[0] or c[1]>=sentence,-c[0],-c[1]))
         if 2*sum(char in best[2] for char in added)<len(added) or quoted(best):return False,repeated,''
         if best[0]==anchor[0] and best[1]<anchor[1]:
-            if not _school_step_names(best[3],anchor[3]):return False,repeated,''
+            if not (_school_step_names(best[3],anchor[3]) or led(best)):return False,repeated,''
         elif best[0]==anchor[0] and best[1]>anchor[1]:
             between=[c for c in clauses if c[0]==anchor[0] and anchor[1]<c[1]<best[1] and quoted(c)]
             # It still continues this item when it names it again: words of this item's own clause that the other items'
@@ -3082,7 +3091,11 @@ def _school_same_changes(text, facts):
     spoken=_school_same_spoken(text);plain=re.sub(r'[“”「」『』"]','',facts)
     for match in _SCHOOL_SAME_CHANGED.finditer(spoken):
         phrase=re.split(r'[，,。；;！!？?\n]',spoken[match.start():match.end()+8])[0]
-        if phrase not in facts and phrase not in plain: return True
+        if phrase not in facts and phrase not in plain:
+            # Excusing a step the affair never asks for (不用背诵 beside a reading) changes nothing; one any word of which it states keeps the guard.
+            excused=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',phrase)
+            if excused and not any(c in plain for c in excused[1]):continue
+            return True
     return False
 
 
@@ -4038,7 +4051,19 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
         if (not found or not _school_native_later_text(homes[0],e) or len([s for s in re.split(r'[。；;！!？?\n]',body) if s.strip()])!=1
                 or re.search(_SCHOOL_CHANGE+r'|(?:不|免)\s*(?:交|检查|'+_SCHOOL_SIGN+r'|收)|改期|停办|'+_SCHOOL_NATIVE_UNSETTLED,_titles_read_as_objects(body))):return None
         return found[1],body
-    dated=[e for e in cited if e is not homes[0] and (_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']))]
+    def unchanged(e):
+        # The same teacher's later correction of this item's range whose every dated sentence keeps this item's own day words as
+        # they were (更正…：第26页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。) states no day of its own.
+        found=re.match(r'\s*(?:更正|补充)([^：:。；;！!？?\n]{0,30})[：:]\s*',e['text'])
+        if not found or not _school_native_later_text(homes[0],e):return False
+        kept=False
+        for s in re.split(r'[。；;！!？?\n]',e['text'][found.end():]):
+            words=re.findall(day,s);rest=re.sub(r'(?:都|均|仍|也)?(?:不变|照旧)\s*$','',s.strip())
+            if not words:continue
+            if rest==s.strip() or not all(w in text for w in words) or re.search(_SCHOOL_CHANGE+r'|改期|停办|取消|'+_SCHOOL_NATIVE_UNSETTLED,_titles_read_as_objects(rest)):return False
+            kept=True
+        return kept
+    dated=[e for e in cited if e is not homes[0] and not unchanged(e) and (_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']))]
     restated=[(e,restating(e)) for e in dated]
     if not all(r for _,r in restated):return None
     start=text.index(quote);end=start+len(quote)
@@ -4062,6 +4087,12 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
         return bool(re.fullmatch(role+r'(?:让孩子)?(?:交|交回|上交|提交)(?:给[^，,]{1,8})?\s*',c)
                     or (m:=re.fullmatch(role+r'(?:让孩子)?(?:交回|上交|交)([^，,给至到]{1,8})\s*',c)) and m[1] in words)
     following=re.match(r'[^。；;！!？?\n]+[。；;！!？?\n]?',text[end:])
+    parts=re.split(r'[，,]',following[0].strip('。；;！!？? \n')) if following else []
+    def undated(c):
+        # The same work's own undated standard or step there (每题写出算式并验算、请家长签字): no day, handback, carrying, change,
+        # subject or other named thing of its own; it reads no role and takes no day.
+        return bool(c.strip()) and not _school_named_objects(c) and not re.search(day+r'|'+_SCHOOL_ANY_DAY+r'|周末|交|检查|带|收|'+_SCHOOL_CHANGE
+                                                                          +r'|'+_SCHOOL_NATIVE_SUBJECTS,_titles_read_as_objects(c))
     # A message holding only this item's sentence and that following one leaves no other words a bare check could name.
     alone=bool(following) and not text[:head].strip() and not text[end+following.end():].strip()
     if following and all(re.fullmatch(role+r'(?:完成|做完|写完|读完|(?:请家长)?(?:'+_SCHOOL_SIGN+r'))\s*',c)
@@ -4072,7 +4103,8 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
                          # Checked at its own subject's lesson (明早语文课检查 after 语文今晚完成…): the lesson the item's own words name.
                          or ((m:=re.fullmatch(role+r'('+_SCHOOL_LESSON_PLACE+r')(?:上|时)?\s*检查\s*',c))
                              and (named:=set(re.findall(_SCHOOL_NATIVE_SUBJECTS,m[1]))) and all(s in own for s in named))
-                         for c in re.split(r'[，,]',following[0].strip('。；;！!？? \n'))):
+                         or undated(c)
+                         for c in parts) and not all(undated(c) for c in parts):
         end+=following.end()
     span=_school_choices_read(text[head:end])
     # Only a 或 a day borders leaves this item's day to choose (_SCHOOL_DAY_OR); one between answers, people, receivers or ways
@@ -4112,6 +4144,8 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
         for n,clause in enumerate(clauses):
             # 今天语文作业： labels the work its sending day publishes; it states no role day of its own.
             clause=re.sub(r'^\s*(?:今天|今日)\s*[^，,：:\d]{0,6}?(?:作业|任务)\s*[：:]','',clause)
+            # 见今天这份附件 points at the material its sending day gives, as that label does: no time of the work itself.
+            clause=re.sub(_SCHOOL_RESOURCE_TODAY,'',clause)
             clause=affirmed(clause)  # 今晚不是不需要提交 is read as 今晚需要提交: its action and day stand
             # 今晚不用填写实验记录表: a clause whose every own predicate is negated states no action and no day (AC03).
             if re.search(day,clause) and _school_clause_negated(clause):continue
@@ -7634,6 +7668,8 @@ def _school_bracket_restated(text,published,keep=False):
 
 
 _SCHOOL_RESOURCE_TIME=r'发放|下发|分发|发下|印发|统一发|可领'
+# A sending-day word naming only the material the work uses (见今天这份附件、按今天发的练习单), never a time of its own.
+_SCHOOL_RESOURCE_TODAY=r'(?:见|看|按|按照|参考|参照)\s*(?:今天|今日)\s*(?:发的|发布的|下发的|的)?\s*(?:这份|这张|这些|该)?\s*(?:附件|资料|材料|图片|文件|练习单|作业单)'
 _SCHOOL_DAY_HEAD=(r'(?:(?:下|本|这)?(?:周|星期|礼拜)[一二三四五六日天]|今天|今日|今晚|明天|明日|明早|明晚|后天|'
                   r'(?:\d{4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*[日号])(?:早上|早晨|上午|中午|下午|傍晚|晚上|晚)?')
 
