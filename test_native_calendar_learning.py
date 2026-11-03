@@ -113,6 +113,8 @@ if __name__ == '__main__':
             # three modes and closing the detail at one width, then back to 900. Only the test resizes the window.
             {'name': 'geo calendar', 'click': 'mode-日历'},
             {'name': 'geo row ready', 'until': 'row-' + t01, 'timeout': 15},
+            # The reopened App keeps the original task chosen (回原作业); close it first so this frame is the plain list.
+            {'name': 'geo close if open', 'click': 'detail-back', 'required': False},
             {'name': 'geo 900 list', 'width': 900, 'native': 'frame', 'ids': ids},
             {'name': 'geo select row', 'click': 'row-' + t01},
             {'name': 'geo detail open', 'until': 'detail-back', 'timeout': 10},
@@ -167,7 +169,8 @@ if __name__ == '__main__':
                 if cw >= 1100:
                     m = a['master-pane']; assert 'layout=split' in g['texts']['detail-pane'] and m[2] >= 520 and 0.45 <= m[2] / cw <= 0.48 and dp[2] >= 560, (n, m, dp, cw)
                 else: assert 'layout=page' in g['texts']['detail-pane'], (n, g['texts'])
-        assert 'detail-pane' in rows['geo 900 detail']['anchors'] and 'detail-pane' not in rows['geo 900 list']['anchors'] and 'detail-pane' not in rows['geo 1440 list']['anchors']
+        assert 'detail-pane' in rows['geo 900 detail']['anchors'], 'detail at 900'
+        assert 'detail-pane' not in rows['geo 900 list']['anchors'] and 'detail-pane' not in rows['geo 1440 list']['anchors'], 'no empty detail column'
         assert [rows[n]['content_frame'][2] for n in ('geo 1099', 'geo 1100', 'geo 1101')] == [1099, 1100, 1101]
         assert 'layout=page' in rows['geo 1099']['texts']['detail-pane'] and all('layout=split' in rows[n]['texts']['detail-pane'] for n in ('geo 1100', 'geo 1101', 'geo 1280', 'geo 1440'))
         for group in (['geo 900 list', 'geo 900 page', 'geo back to 900'], ['geo 1440', 'geo 1440 wrong', 'geo 1440 learning', 'geo 1440 calendar again', 'geo 1440 list']):
