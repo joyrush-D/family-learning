@@ -1474,11 +1474,18 @@ extension AppDelegate {
         var center = NSPoint(x: node.frame.midX, y: node.frame.midY), row = -1
         var rowTable: NSTableView?
         // 列表里的一行：用表格自己的那一行（锚点所在的那一行）的位置；先让表格自己滚到这一行，再点这一行的中间。
+        var geometry: [String: Any] = [:]
         if let (anchor, _) = TestTargets.live(id), let (table, index) = TestTargets.row(of: anchor), let tw = table.window {
             // 用表格公开的显露行操作；不直接改 clip-view 偏移去强行居中。
-            // SwiftUI 的 cell-hosting 命中布局必须跟着其真实滚动更新，已可见的行无需再移动。
-            table.scrollRowToVisible(index)
+            // 行内控件（非 row- 整行）已整块在表格可见区内时不再滚整行：e2b 实测这一步把已可见的开始时间框整体移动 45pt
+            // （探针屏幕 y90，点击处对应 y135）；整行目标或控件未完全可见时照旧滚，随后都按控件滚动后的真实位置点击。
+            let before = anchor.convert(anchor.bounds, to: table), visibleBefore = table.visibleRect
+            let shown = !id.hasPrefix("row-") && visibleBefore.contains(before)
+            if !shown { table.scrollRowToVisible(index) }
             await sleep(0.4); row = index; rowTable = table
+            geometry = ["row_scrolled": !shown, "target_in_table_before": NSStringFromRect(before), "table_visible_before": NSStringFromRect(visibleBefore),
+                        "target_in_table_after": NSStringFromRect(anchor.convert(anchor.bounds, to: table)), "table_visible_after": NSStringFromRect(table.visibleRect),
+                        "row_rect": NSStringFromRect(table.rect(ofRow: index))]
             // Click the current control's own frame, not the arbitrary centre of its layout row.
             // The row can include empty padding beside a short SwiftUI label. The selected original ID below is still mandatory.
             let r = tw.convertToScreen(anchor.convert(anchor.bounds, to: nil)); center = NSPoint(x: r.midX, y: r.midY)
@@ -1507,6 +1514,14 @@ extension AppDelegate {
         let local = w.convertFromScreen(NSRect(origin: center, size: .zero)).origin
         // NSView.hitTest 接收父视图坐标；这里只修正测试定位，不修改控件选择。
         let hit = w.contentView?.hitTest(w.contentView?.superview?.convert(local, from: nil) ?? local)
+        // 只读诊断：命中的真实控件是否可用/可编辑/肯接焦点、是否仍连在本窗口与本行，以及点击前的焦点；不设焦点、不改值。
+        var hitState: [String: Any] = ["first_responder_before": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none"]
+        if let h = hit {
+            hitState["hit_accepts_first_responder"] = h.acceptsFirstResponder; hitState["hit_in_window"] = h.window === w; hitState["hit_hidden"] = h.isHiddenOrHasHiddenAncestor
+            if let c = h as? NSControl { hitState["hit_enabled"] = c.isEnabled; hitState["hit_refuses_first_responder"] = c.refusesFirstResponder }
+            if let f = h as? NSTextField { hitState["hit_editable"] = f.isEditable; hitState["hit_selectable"] = f.isSelectable }
+            if let t = rowTable { hitState["hit_row"] = t.row(for: h) }
+        }
         // 测试定位：新版 SwiftUI 会由表格本身接收行内点击。核真实行坐标和随后读回的选中项，不能仅凭命中视图类型拒绝它。
         // 空白处、科目标题、另一窗口仍拒绝；下面只投递鼠标事件，不直接设置选择。
         let atRow = rowTable.map { $0.row(at: $0.convert(local, from: nil)) } ?? -1
@@ -1528,7 +1543,8 @@ extension AppDelegate {
         var observedMouse: [[String: Any]] = []
         let mouseWatch = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) { event in
             observedMouse.append(["type": event.type.rawValue, "click_count": event.clickCount, "window": event.windowNumber,
-                                  "location": NSStringFromPoint(event.locationInWindow), "event_window": event.window?.windowNumber ?? -1])
+                                  "location": NSStringFromPoint(event.locationInWindow), "event_window": event.window?.windowNumber ?? -1,
+                                  "first_responder_at": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none"])
             return event
         }
         defer { NotificationCenter.default.removeObserver(watch); if let mouseWatch { NSEvent.removeMonitor(mouseWatch) } }
@@ -1575,7 +1591,10 @@ extension AppDelegate {
                         "key": w.isKeyWindow, "activated": activated, "first_responder": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none"]
             }
         }
-        return ["ok": true, "id": id, "click_count": clickCount, "mouse_dispatch": observedMouse,
+        let hitAfter = w.contentView?.hitTest(w.contentView?.superview?.convert(local, from: nil) ?? local)
+        hitState["hit_same_after"] = hitAfter === hit
+        hitState["first_responder_after"] = w.firstResponder.map { String(describing: type(of: $0)) } ?? "none"
+        return ["geometry": geometry, "hit_state": hitState, "ok": true, "id": id, "click_count": clickCount, "mouse_dispatch": observedMouse,
                 "first_responder": w.firstResponder.map { String(describing: type(of: $0)) } ?? "none",
                 "hit": hit.map { String(describing: type(of: $0)) } ?? "none", "sheet": w !== window,
                 "located_by": nodes().contains { $0.id == id } ? "accessibility" : "workbench_frame", "control_redirect": redirected, "fraction_point": explicit.map { [Double($0.x), Double($0.y)] } ?? [Double](),
