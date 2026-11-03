@@ -264,7 +264,7 @@ final class WorkspaceStore: ObservableObject {
         case .calendar:
             if showDone { return "已办 \(v.counts["closed"] ?? 0) 项" }
             var parts = ["共 \(v.counts["open"] ?? 0) 项", "今天要做 \(v.counts["today"] ?? 0)"]
-            for (key, label) in [("later", "以后安排"), ("overdue", "已过期限"), ("earlier", "之前安排"), ("unknown", "日期未写明"), ("upcoming", "即将/待补")] {
+            for (key, label) in [("later", "以后安排"), ("overdue", "已过期限"), ("earlier", "之前安排"), ("unknown", "日期未写明"), ("passed", "已过"), ("upcoming", "即将/待补")] {
                 if let n = v.counts[key], n > 0 { parts.append("\(label) \(n)") }
             }
             return parts.joined(separator: " · ")
@@ -277,6 +277,12 @@ final class WorkspaceStore: ObservableObject {
         return "即将/待补：" + u.map { x in
             "\(x.day.dropFirst(5)) \(x.title)" + (x.pending_review ? "（待补）" : "") + ((x.change ?? "").isEmpty ? "" : "（\(x.change ?? "")）")
         }.joined(separator: "；")
+    }
+
+    /// 尚无已读行动的学校资料（服务端 day_view 同一 materials，与网页同一行）：每科条数，不算当天要做；原消息与整理状态在网页版。
+    var materialsLine: String? {
+        guard mode == .calendar, !showDone, let m = current?.materials, !m.isEmpty else { return nil }
+        return "学校资料待整理，不算当天要做：" + m.map { "\($0.subject) \($0.items.count) 条" }.joined(separator: "；") + "。"
     }
 
     static func formatter() -> DateFormatter {
@@ -330,7 +336,7 @@ func progressWords(_ p: TaskProgress) -> String {
 }
 
 extension DayItem {
-    var whenLabel: String { ["later": "以后安排", "overdue": "已过期限", "earlier": "之前安排", "unknown": "日期未写明"][when ?? ""] ?? "" }
+    var whenLabel: String { ["later": "以后安排", "overdue": "已过期限", "earlier": "之前安排", "unknown": "日期未写明", "passed": "已过"][when ?? ""] ?? "" }
     var publishedTime: String { String((published_at ?? "").dropFirst(11).prefix(5)) }
     var source: String { [publisher ?? "", publishedTime].filter { !$0.isEmpty }.joined(separator: " ") }
     var webID: String { task_id.isEmpty ? id : task_id }
@@ -756,7 +762,7 @@ struct SubjectList: View {
                             .listRowSeparator(.hidden)
                     }
                 } header: {
-                    WoodTag(text: group.subject, count: "\(group.items.count) 项").padding(.top, 8).padding(.bottom, 2)
+                    WoodTag(text: group.subject, count: group.countWords).padding(.top, 8).padding(.bottom, 2)
                         .probe("subject-" + group.subject)
                 }
             }
@@ -767,6 +773,13 @@ struct SubjectList: View {
             if let line = store.upcomingLine {
                 Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
                     .listRowSeparator(.hidden).probe("upcoming", text: line)
+            }
+            if let line = store.materialsLine {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("materials", text: line)
+                    Button("在网页版查看原消息与整理状态") { store.openWebTools("", "") }.buttonStyle(.borderless).controlSize(.small).probe("materials-open")
+                }
+                .listRowSeparator(.hidden)
             }
         }
         .listStyle(.sidebar)

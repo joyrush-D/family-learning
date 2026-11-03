@@ -113,7 +113,18 @@ struct LearningSubject: Decodable, Hashable { let subject: String; let course: [
 struct LearningPack: Decodable, Hashable { let installed: Bool; let message: String }
 struct Learning: Decodable, Hashable { let subjects: [LearningSubject]; let pack: LearningPack }
 
-struct ItemGroup: Decodable, Hashable { let subject: String; let items: [DayItem] }
+struct ItemGroup: Decodable, Hashable {
+    let subject: String; let items: [DayItem]
+    /// 同组里日期未写明的行数（服务端 day_view 同一投影；较早后台缺省按 0）：它们不算这一天的，科目标签分开计。
+    let undated: Int?
+    var countWords: String {
+        let u = undated ?? 0, n = items.count - u
+        return [n > 0 ? "\(n) 项" : "", u > 0 ? "日期未定 \(u)" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+/// 尚无已读行动的学校资料（服务端 day_view 同一 materials）：每科只给条数一行，不算当天要做；原消息与整理状态在网页版学校信息。
+struct MaterialItem: Decodable, Hashable { let id: String; let title: String }
+struct MaterialGroup: Decodable, Hashable { let subject: String; let items: [MaterialItem] }
 struct WrongGroup: Decodable, Hashable { let subject: String; let items: [SavedRecord] }
 struct DayChild: Decodable, Hashable, Identifiable { let id: String; let name: String }
 
@@ -137,6 +148,7 @@ struct DayView: Decodable {
     let week: [WeekDay]?
     let learning: Learning?
     let upcoming: [UpcomingItem]?
+    let materials: [MaterialGroup]?
 }
 
 /// 一份原作业的资料，服务端 /api/print/homework/materials 原样：出处（学校消息原件、孩子报来的作业……）与已保存的读取状态

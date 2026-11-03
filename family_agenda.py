@@ -1095,6 +1095,10 @@ def snapshot(app,start,end):
                 if row['child_id'] not in ids or brief.get('state')=='reference':continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
                 purpose=brief.get('purpose')
+                # Action or not is read only from the saved brief: a read goal whose purpose is not unknown. Kind, pending state,
+                # a subject word, a title, a stored attachment or a publication day prove no action; such a row is material
+                # still to be organized (it stays here, in the school inbox and its originals, unchanged).
+                material=not str(brief.get('goal') or '').strip() or purpose=='unknown'
                 category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
                 # A candidate reads its day from the same stored original words, publication and siblings as its accepted item.
                 m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
@@ -1112,6 +1116,7 @@ def snapshot(app,start,end):
                           siblings=[q for q in link.get('sibling_quotes') or [] if isinstance(q,str)]) if link else None
                 items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
                     agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {}),
+                    **({'school_material':True} if material else {}),
                     **({'pending_link':link} if link else {})))
             items=_one_pending_affair(c,items,store)
             items=_one_affair_versions(c,items,store)
@@ -1738,7 +1743,14 @@ DUE_LABELS = {'event': '活动日期', 'handback': '交回', 'inspection': '检�
 CORRECTION_KINDS = ('订正', '复测', '独立复测')
 # How a row relates to the viewed day, from its saved dates only: 今天 (done/planned/due that day), 已过期限, 以后 (a later
 # date), 之前安排 (an earlier plan still open) and 日期未写明 (no exact date; never guessed, never counted as today).
-DAY_ROLES = {'today': '今天', 'overdue': '已过期限', 'later': '以后', 'earlier': '之前安排', 'unknown': '日期未写明'}
+DAY_ROLES = {'today': '今天', 'overdue': '已过期限', 'later': '以后', 'earlier': '之前安排', 'unknown': '日期未写明', 'passed': '已过'}
+# A lesson, in-class check or arranged day that is over has passed (已过, history); only a deadline or handback becomes overdue.
+PASSED_KINDS = ('event', 'inspection', 'arranged')
+
+
+def _passed(a, day):
+    due = exact_day(a.get('due_on'))
+    return bool(due) and due < day and (a.get('due_kind') or 'deadline') in PASSED_KINDS
 
 
 def exact_day(value):
@@ -1765,7 +1777,7 @@ def _day_rank(item, day):
     a = item.get('agenda') or {}
     due, planned, published = exact_day(a.get('due_on')), exact_day(a.get('scheduled_on')), exact_day(a.get('published_on'))
     if day in (due, planned) or day in (exact_day(a.get('complete_on')), exact_day(a.get('submit_on'))): return 0, day
-    if due and due < day: return 1, due
+    if due and due < day: return (6, due) if _passed(a, day) else (1, due)
     if due: return 2, due
     if planned and planned < day: return 3, planned
     return (4, a.get('published_at') or published) if published else (5, '')
@@ -1794,7 +1806,7 @@ def day_facts(agenda, day, today, school):
     due = exact_day(a.get('due_on'))
     if due:
         kind = a.get('due_kind') or 'deadline'
-        state = ('passed' if kind in ('event', 'inspection', 'arranged') else 'overdue') if due < day else \
+        state = ('passed' if _passed(a, day) else 'overdue') if due < day else \
             'next_morning' if kind in ('deadline', 'handback') and due == (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() else ''
         facts.append(dict(role='due', kind=kind, label=DUE_LABELS.get(kind, '截止'), value=due, known=True, state=state))
     else:
@@ -1808,8 +1820,9 @@ def day_role(agenda, day):
     dates = [exact_day(a.get(k)) for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')]
     if day in dates: return 'today'
     due = exact_day(a.get('due_on'))
-    if due and due < day: return 'overdue'
+    if due and due < day and not _passed(a, day): return 'overdue'
     if any(d and d > day for d in dates): return 'later'
+    if _passed(a, day): return 'passed'
     return 'earlier' if any(dates) else 'unknown'
 
 
@@ -1894,6 +1907,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                     **({'version': version} if version else {}),
                     category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
                     status=x.get('status', ''), closed=bool(x.get('closed')), pending_review=x.get('kind') == 'school',
+                    **({'material': True} if x.get('school_material') else {}),
                     origin='school' if school else 'oral' if oral else 'family',
                     origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
                     lines=lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
@@ -1951,6 +1965,10 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         return open_out, closed_out
 
     rows, closed_rows = group([(row(x), False) for x in open_rows] + [(row(x), True) for x in closed_rows])
+    # School material with no read action (unknown purpose or no read goal) is not this day's work and no item count: it
+    # keeps its original message, attachments and organize state in the school inbox, and the day names it once per subject.
+    material = [r for r in rows if r.get('material')]
+    rows = [r for r in rows if not r.get('material')]
     # A later lesson-day item (bring, in-class check, event) or a later item still waiting for its scope (待核对) the family
     # has not touched is not this day's work: it is listed in full on its own day and only named in one short 即将/待补 line
     # before it. Anything with family progress, a record, a new version or no exact later date stays listed every day; a
@@ -1965,8 +1983,11 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
                   change=(r.get('version') or {}).get('change', ''),
                   day=min(f['value'] for f in r['facts'] if f.get('known') and exact_day(f.get('value')) and f['value'] > day)) for r in rows if upcoming(r)]
     rows = [r for r in rows if not upcoming(r)]
-    return dict(groups=[dict(subject=key, items=list(items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
+    return dict(groups=[dict(subject=key, items=list(items), undated=sum(r['when'] == 'unknown' for r in items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
                 closed=[dict(subject=key, items=list(items)) for key, items in subject_filed(closed_rows, lambda r: r['subject'])],
                 wrong=[dict(subject=key, items=list(items)) for key, items in subject_filed([wrong_row(r) for r in wrong], lambda r: SUBJECT_GENERAL if str(r.get('subject') or '').strip() == '综合' else str(r.get('subject') or '').strip())],
                 upcoming=sorted(later, key=lambda u: (u['day'], u['subject'])),
-                counts=dict(open=len(rows), closed=len(closed_rows), upcoming=len(later), **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))
+                materials=[dict(subject=key, items=[dict(id=r['id'], title=r['title'], published_at=r['published_at']) for r in items])
+                           for key, items in subject_filed(material, lambda r: r['subject'])],
+                counts=dict(open=len(rows), closed=len(closed_rows), upcoming=len(later), material=len(material),
+                            **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))
