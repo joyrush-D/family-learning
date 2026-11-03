@@ -467,7 +467,7 @@ class PhotoBatchTest(unittest.TestCase):
         for block in re.split(r'\n(?=struct |extension |// MARK)', source):
             m = re.match(r'struct (Photo\w+): Decodable', block)
             if m:
-                structs[m.group(1)] = re.findall(r'let (\w+): ([^;\n]+)', block)
+                structs[m.group(1)] = re.findall(r'let (\w+): ([^;\n}]+)', block)
         self.assertIn('PhotoBatch', structs)
         def check(value, kind, where):
             kind = kind.strip()
