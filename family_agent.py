@@ -4094,7 +4094,8 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             sent_work=(own_day==published and not re.search(r'交|检查',clause) and re.search(work,_titles_read_as_objects(clause)))
             # A later day's own work clause with no role of its own (明晚原地高抬腿30次；后天体育课检查) is that day's completion as
             # the sending day's is: its one day, no hand-in or check; the one due and every guard below still decide.
-            later_work=bool(own_day and own_day>published and not roles and not re.search(r'交|检查',clause)
+            one=next(iter(days)) if len(days)==1 else own_day
+            later_work=bool(one and one>published and not _school_clause_roles(clause) and not re.search(r'交|检查',clause)
                             and re.search(work,_titles_read_as_objects(clause)))
             # A dated step with no role of its own (今晚请家长在《研学活动回执》勾选选项) ends in the same sentence's directly
             # following undated step that only finishes it (然后签字, 签字后拍照上传), with or without a connector: that is its
