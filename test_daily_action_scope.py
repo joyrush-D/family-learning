@@ -321,6 +321,30 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.assertNotIn(later['task_id'], self.ids(v['2026-11-03'], 'undated'))
         self.assertIn(later['task_id'], self.ids(v['2026-11-04'], 'groups'))
 
+    # 明晚按四拍节奏拍手3组: an ordinary method opening the counted work keeps 明晚 its own completion day, the lesson its check.
+    def test_d2_a_method_led_counted_exercise_keeps_its_own_later_work_day(self):
+        import family_agenda as fa, family_agent as agent
+        text = '音乐作业：明晚按四拍节奏拍手3组，每组8拍；11月16日音乐课检查。'
+        row, a, v = self.one(text, 'learning', '2026-11-16', '2026-11-12T16:00:00+08:00', ('2026-11-12', '2026-11-13', '2026-11-16'))
+        self.assertTrue(row['task_id'], 'one saved task, not a pending card without dates')
+        self.assertEqual((a['complete_on'], a['due_on'], a['due_kind']), ('2026-11-13', '2026-11-16', 'inspection'))
+        self.assertIn(row['task_id'], self.ids(v['2026-11-13'], 'groups'), '明晚 is its own work day')
+        self.assertIn(row['task_id'], self.ids(v['2026-11-16'], 'groups'), 'its check day lists the same task')
+        self.assertNotIn(row['task_id'], self.ids(v['2026-11-12'], 'undated'))
+        task = self.task(row['task_id']); self.assertIn('按四拍节奏拍手3组', task['action']); self.assertIn('每组8拍', task['action'])
+        T, sent = '2026-11-12T16:00:00+08:00', '2026-11-12'
+        self.assertEqual(fa.deadlines('明晚按四拍节奏拍手3组。', sent), {'2026-11-13'})
+        self.assertEqual(fa.completion_day('音乐作业：今晚按四拍节奏拍手3组，每组8拍；明天音乐课检查。', '音乐作业', T, '2026-11-13'), sent)
+        for text in ('今晚不用按四拍节奏拍手3组；明天音乐课检查。', '今晚按四拍节奏拍了3组；明天音乐课检查。', '今晚按四拍节奏已拍手3组；明天音乐课检查。'):
+            self.assertEqual(fa.completion_day(text, '', T, '2026-11-13'), '', text)
+        for text in ('明晚不用按四拍节奏拍手3组。', '明晚按四拍节奏拍了3组。', '明晚按明天的节奏拍手3组。', '今晚或明晚按四拍节奏拍手3组。',
+                     '明晚按四拍节奏拍手3组吗？', '如果下雨，明晚按四拍节奏拍手3组。'):
+            self.assertNotIn('2026-11-13', fa.deadlines(text, sent), text)
+        for quote in ('明晚不用按四拍节奏拍手3组；11月16日音乐课检查。', '明晚按四拍节奏拍了3组；11月16日音乐课检查。',
+                      '如果下雨，明晚按四拍节奏拍手3组；11月16日音乐课检查。', '今晚或明晚按四拍节奏拍手3组；11月16日音乐课检查。',
+                      '明晚按四拍节奏拍手3组吗？11月16日音乐课检查。', '明晚按四拍节奏拍手3组。'):
+            self.assertNotIn('2026-11-13', (agent._school_role_days(quote, [dict(text=quote, time=T)], []) or (set(),))[0], quote)
+
     def test_d2_guards_a_counted_exercise_reads_no_day_it_does_not_state(self):
         import family_agenda as fa, family_agent as agent
         sent = '2026-11-03'
