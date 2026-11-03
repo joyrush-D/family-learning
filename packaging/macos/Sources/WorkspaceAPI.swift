@@ -13,8 +13,12 @@ struct DayFact: Decodable, Hashable {
     let today: Bool?
 }
 
+/// 批量照片原错题的具体依据（只读）：当前第几版、原文字属第几版、是否当前与一句短说明；旧记录没有这一项。
+struct PhotoBasis: Decodable, Hashable { let batch_id: String; let version: Int; let text_version: Int; let current: Bool; let words: String }
+
 struct SavedRecord: Decodable, Hashable, Identifiable {
     let id: Int
+    var photo_basis: PhotoBasis? = nil
     let day: String
     let created: String
     let title: String

@@ -708,6 +708,44 @@ class PhotoBatchTest(unittest.TestCase):
         self.assertIsNone(q['record_id'])
         self.assertIn('待核', q['conflict'])
 
+    def day_wrong(self):
+        code, day = self.request('/api/day?child_id=child-1')
+        self.assertEqual(code, 200, day)
+        return {r['id']: r for g in day['wrong'] for r in g['items']}
+
+    def test_day_wrong_rows_carry_the_concrete_photo_basis_read_only(self):
+        first, view, records = self.appended('basis-same-0001', '35')
+        row = self.day_wrong()[first['id']]
+        self.assertEqual((row['photo_basis']['current'], row['photo_basis']['text_version'], row['photo_basis']['version']), (True, 1, 2))
+        self.assertIn('原文字是第1版AI判断', row['photo_basis']['words'])
+        self.assertEqual((row['note'], row['state']), (first['note'][:600], '待订正'), 'record text and manual state untouched')
+
+    def test_changed_question_old_row_says_basis_changed_and_new_row_is_current(self):
+        first, view, records = self.appended('basis-changed-0001', '36')
+        rows = self.day_wrong()
+        self.assertFalse(rows[first['id']]['photo_basis']['current'])
+        self.assertIn('依据已变', rows[first['id']]['photo_basis']['words'])
+        new = next(r for i, r in rows.items() if i != first['id'])
+        self.assertTrue(new['photo_basis']['current'])
+        self.assertEqual(rows[first['id']]['note'], first['note'][:600])
+
+    def test_unlocated_saved_wrong_has_basis_and_legacy_rows_have_none(self):
+        _, (code, created) = self.batch('basis-unlocated-0001', ['W01'])
+        PAGES.setdefault('W01', dict(evidence=evidence('数学', '虚构', '1'), regions=[]))
+        model = Model(self.ids)
+        model.group = self.paper_of(['W01'], '虚构无框')
+        model.review = lambda seen: [item('第9题', 'incorrect')]
+        self.rounds(model, 5)
+        upload = self.upload('m1', 'legacy-manual-key-0001')
+        code, out = self.request('/api/wrong/save', dict(child='示例甲', day='2026-11-03', subject='数学', request_key='legacy-manual-key-00002',
+                                                         items=[dict(attachment=upload, label='第1题', text='虚构手记', answer='3', correction='')]))
+        self.assertEqual(code, 200, out)
+        rows = self.day_wrong()
+        unlocated = [r for r in rows.values() if r['title'].endswith('第9题')]
+        self.assertEqual(len(unlocated), 1)
+        self.assertTrue(unlocated[0]['photo_basis']['current'], 'no box is no reason to drop the basis')
+        self.assertNotIn('photo_basis', rows[out['saved'][0]['id']], 'a manual record keeps its old shape')
+
     def test_same_physical_question_reuses_the_canonical_record(self):
         first, view, records = self.appended('canonical-same-0001', '35')
         self.assertEqual([r['id'] for r in records], [first['id']])

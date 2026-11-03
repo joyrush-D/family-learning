@@ -1011,6 +1011,10 @@ struct WrongRow: View {
                 Text(record.note.replacingOccurrences(of: "\n", with: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let basis = record.photo_basis {
+                Text(basis.words).font(.system(size: 12.5)).foregroundStyle(basis.current ? Palette.ink2 : Palette.coralInk)
+                    .fixedSize(horizontal: false, vertical: true).probe("wrong-basis-\(record.id)", text: basis.current ? "current" : "stale")
+            }
             Text([record.day, record.task_title.map { "原作业：" + $0 } ?? "未关联原作业"].filter { !$0.isEmpty }.joined(separator: " · "))
                 .font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
         }

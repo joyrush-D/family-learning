@@ -1020,12 +1020,39 @@ def list_batches(app, query):
         return dict(child_id=child_id, batches=[view_row(app, c, row) for row in rows])
 
 
+def basis_map(c):
+    """只读：每条批次原错题按同孩同批、该记录最新保存依据的具体状态（与能否画原图框无关）：当前第几版、原文字属第几版、
+    是否当前与一句短说明。原记录、订正与手动状态都不改；没有批次依据的旧记录不在其中。"""
+    if not _table(c):
+        return {}
+    out = {}
+    for row in c.execute('SELECT id,understanding FROM photo_batches ORDER BY created,id').fetchall():
+        u = json.loads(row['understanding'])
+        basis = {p['paper_id']: p.get('based_on_version') for p in u['papers']}
+        entries = {}
+        for saved in u['saved'].values():
+            if saved.get('record_id'):
+                entries.setdefault(saved['record_id'], []).append(saved)
+        for record_id, items in entries.items():
+            items.sort(key=lambda s: s['version'])
+            first, last = items[0], items[-1]
+            current = basis.get(last['paper_id']) == last['version']
+            words = ('依据已变：这是照片批次第%d版的旧判断，待核；原记录与订正保留。' % last['version'] if not current else
+                     '原文字是第%d版AI判断；本批第%d版AI判断为同一道题（当前）。' % (first['version'], last['version'])
+                     if first['version'] != last['version'] else 'AI判断（照片批次第%d版，当前）。' % last['version'])
+            out[record_id] = dict(batch_id=row['id'], version=last['version'], text_version=first['version'], current=current, words=words)
+    return out
+
+
 def read_regions(app, c, records, names):
     """只读：批次中自动记录的错题附带原图整题框；原图字节、孩子或记录来源变化，或依据已变待更新，即为旧依据。"""
     if not _table(c):
         return
     by_id = {r['id']: r for r in records}
     owners = {p['id']: p['name'] for p in app.profiles(c)}
+    for record_id, basis in basis_map(c).items():
+        if record_id in by_id:
+            by_id[record_id]['photo_basis'] = basis
     for row in c.execute('SELECT id,child_id,understanding FROM photo_batches'):
         u = json.loads(row['understanding'])
         # 当前/旧依据按每条记录最新的保存依据判断：同一物理题在新版本复用时以新版本为当前依据，不按全局编号集合判旧。

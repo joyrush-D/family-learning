@@ -1176,7 +1176,16 @@ def snapshot(app,start,end):
     for offset in range(count):
         day=(first+dt.timedelta(days=offset)).isoformat()
         agenda.extend(dict(item,day=day) for item in items if visible_on(item,day))
-    return dict(agenda=agenda,study=study,inbox=items+plans,**({'plan_error':plan_error} if plan_error else {}))
+    # Batch photo wrong records' concrete basis (read only), carried on the same inbox list to this module's day_view.
+    inbox=_Inbox(items+plans)
+    try:
+        import family_photo_batch
+        with app.connect() as c:
+            c.row_factory=__import__('sqlite3').Row
+            inbox.photo_basis=family_photo_batch.basis_map(c)
+    except (__import__('sqlite3').Error,ValueError,KeyError,TypeError):
+        inbox.photo_basis={}
+    return dict(agenda=agenda,study=study,inbox=inbox,**({'plan_error':plan_error} if plan_error else {}))
 
 
 # B4: a teacher's later notice about one saved affair (change update/append, its target a listed task of the same child) is
@@ -1887,6 +1896,11 @@ def _merged_progress(a, b):
     return out
 
 
+class _Inbox(list):
+    """The inbox items as before (a plain list for every caller and for JSON), plus the read-only photo basis map."""
+    photo_basis = {}
+
+
 def day_view(inbox, tasks, records, child, day, today, wrong_source):
     """The list and each row's own facts for one child and day; closed rows that day stay findable in their own list."""
     by_task = {t['id']: t for t in tasks}
@@ -1919,6 +1933,8 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
     def wrong_row(r):
         later = sorted(followups.get(r['id'], []), key=lambda f: (f.get('created') or '', f['id']))
         row = _record_row(r); row['followups'] = [_record_row(f) for f in later]
+        basis = getattr(inbox, 'photo_basis', {}).get(r['id'])
+        if basis: row['photo_basis'] = basis
         row['state'] = {'订正': '已订正', '复测': '已复测', '独立复测': '已复测'}[later[-1]['followup_kind']] if later else '待订正'
         # The original homework only through the record's explicit link, and only a task of this same child.
         task = by_task.get(r.get('linked_task_id') or '')
