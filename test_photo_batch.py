@@ -421,6 +421,43 @@ class PhotoBatchTest(unittest.TestCase):
         code, state = self.request('/api/state')
         self.assertIn('题面：虚构题面第一行\n第二行', next(r['note'] for r in state['records'] if r['id'] == out['saved'][0]['id']))
 
+    def test_a_saves_only_round_never_claims_or_counts_an_unsent_model_step(self):
+        # Root's counterexample through ordinary HTTP batches: an earlier batch waits on a model step, a later one on a save.
+        model = Model(self.ids)
+        _, (code, a) = self.batch('cross-batch-old-model-000001', ['m1'])
+        model.fail = {fwq.TASK_NAME}
+        with patch.object(family_llm, '_chat_json', side_effect=model):
+            self.assertEqual(fpb.advance(app, budget=1)['failed'], 1)
+        model.fail = set()
+        _, (code, b) = self.batch('cross-batch-new-save-000001', ['m1'])
+        model.group = dict(papers=[dict(subject='数学', title='虚构', basis='', pages=[dict(page_id='p01', order=1, role='answered')])],
+                           pending=[], same_pages=[])
+        model.review = lambda seen: [item('第2题', 'incorrect')]
+        with patch.object(family_llm, '_chat_json', side_effect=model):
+            for _ in range(2):
+                fpb.advance(app, budget=1)
+            with patch.object(fpb, '_save_questions', side_effect=OSError('虚构一次存储失败')):
+                fpb.advance(app, budget=1)
+        for batch in (b, a):
+            self.assertEqual(self.request('/api/photo-batch/continue', dict(batch_id=batch['id'], version=1))[0], 200)
+        def rows():
+            with app.connect() as c:
+                return {r[0]: json.loads(r[1]) for r in c.execute('SELECT id,understanding FROM photo_batches')}
+        before, calls = rows(), list(model.calls)
+        self.assertTrue(any(s['kind'] == 'read' and s['state'] == 'todo' for s in before[a['id']]['steps']))
+        self.assertTrue(any(s['kind'] == 'save' and s['state'] == 'todo' for s in before[b['id']]['steps']))
+        with patch.object(family_llm, '_chat_json', side_effect=model):
+            out = fpb.advance(app, budget=0)  # the round's model budget is spent: only record writes may run
+        after = rows()
+        self.assertEqual((out['used'], model.calls), (0, calls), 'no model step dispatched')
+        old, new = before[a['id']], after[a['id']]
+        self.assertEqual((new['attempts'], new['calls'], new['steps']), (old['attempts'], old['calls'], old['steps']),
+                         'the unsent model step is neither claimed nor counted as an actual attempt')
+        self.assertEqual(new['attempts']['1'], dict(all=1, followup=0), 'the real failed read still counts')
+        self.assertTrue(all(s['state'] == 'done' for s in after[b['id']]['steps'] if s['kind'] == 'save'))
+        code, state = self.request('/api/state')
+        self.assertEqual(sum(r['source'] == '错题照片核对' for r in state['records']), 1)
+
     def test_grouping_cannot_turn_a_questions_only_page_into_an_answered_page(self):
         info = {'p01': dict(evidence=dict(page_kind='questions_only')), 'p02': dict(evidence=dict(page_kind='answered'))}
         raw = dict(papers=[dict(subject='数学', title='甲', basis='', pages=[dict(page_id='p01', order=1, role='answered'),

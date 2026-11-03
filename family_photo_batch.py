@@ -750,7 +750,9 @@ def _resumable(u, step):
     return step['state'] in ('failed', 'unknown') and spent['all'] < TOTAL_LIMIT and not (step.get('followup') and spent['followup'] >= FOLLOWUP_LIMIT)
 
 
-def _claim(app, now):
+def _claim(app, now, saves_only=False):
+    """领取下一步并在同一事务内记账。saves_only 只领取确定性的错题写入段，绝不领取模型步骤：
+    没有发出的调用不进入实际尝试账目，也无需事后回退。"""
     with app.connect() as c:
         c.row_factory = sqlite3.Row
         c.execute('BEGIN IMMEDIATE')
@@ -772,7 +774,7 @@ def _claim(app, now):
                 continue
             # 确定性的错题写入段先做；模型步骤按原顺序。
             step = (next((s for s in u['steps'] if s['state'] == 'todo' and s['kind'] == 'save'), None)
-                    or next((s for s in u['steps'] if s['state'] == 'todo'), None))
+                    or (None if saves_only else next((s for s in u['steps'] if s['state'] == 'todo'), None)))
             if step is None:
                 if changed:
                     _write(c, row, u, now)
@@ -856,27 +858,8 @@ def advance(app, now=None, budget=1):
 
 
 def _claim_saves_only(app, now):
-    with app.connect() as c:
-        c.row_factory = sqlite3.Row
-        if not _table(c):
-            return None
-        pending = c.execute("SELECT 1 FROM photo_batches WHERE understanding LIKE '%\"kind\":\"save\"%\"state\":\"todo\"%' LIMIT 1").fetchone()
-    if pending is None:
-        return None
-    claim = _claim(app, now)
-    if claim is not None and claim['kind'] != 'save':
-        # 预算已用完：把刚领取的模型步骤放回待处理，不在本轮调用。
-        with app.connect() as c:
-            c.row_factory = sqlite3.Row
-            c.execute('BEGIN IMMEDIATE')
-            row = c.execute('SELECT * FROM photo_batches WHERE id=?', (claim['batch_id'],)).fetchone()
-            u = json.loads(row['understanding'])
-            step = next(s for s in u['steps'] if s['id'] == claim['step_id'])
-            step.update(state='todo', attempts=step['attempts'] - 1)
-            u['calls']['used'] -= 1
-            _write(c, row, u, now)
-        return None
-    return claim
+    # 模型预算已用完：只做写入段；较早批次的模型步骤留在待处理，不被领取、不计尝试。
+    return _claim(app, now, saves_only=True)
 
 
 # ---------------------------------------------------------------- read-only views
