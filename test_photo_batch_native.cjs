@@ -122,7 +122,7 @@ async function eventually(check,label,timeout=30000){const until=Date.now()+time
   }
   const app=execFileSync('sh',[path.join(__dirname,'packaging/macos/build.sh'),path.join(out,'build')],{encoding:'utf8'}).trim().split('\n').pop();
   const steps=[
-   {name:'wrong notebook',click:'mode-wrong'},{name:'import entry',until:'photo-import'},
+   {name:'wrong notebook',click:'mode-错题本'},{name:'import entry',until:'photo-import'},
    {name:'pick 3 mixed out of order',pick:files.slice(0,3)},{name:'first upload fails',faults:['fail_before_send']},{name:'import',click:'photo-import'},
    {name:'upload failure kept',until:'photo-notice',contains:'前0张原件已保存'},{name:'create receipt lost',faults:['drop_reply']},{name:'retry same',click:'photo-retry'},
    {name:'unknown receipt',until:'photo-notice',contains:'同一提交重试'},{name:'no discard for a sent draft',find_text:'放弃这次导入',absent:true,timeout:3},
@@ -133,7 +133,7 @@ async function eventually(check,label,timeout=30000){const until=Date.now()+time
    {name:'original answer apart',find_text:'原答（孩子写的）'},{name:'AI signature',find_text:'署名：AI判断'},{name:'result 1440',native:'snapshot'},
    {name:'open record',click_prefix:'photo-open-record-'},{name:'correct',click_prefix:'wrong-correct-'},{name:'note',click:'correction-note'},{name:'type',type:'虚构：重算得25。'},
    {name:'save correction',click:'sheet-save'},{name:'corrected',find_text:'重算得25',timeout:15},
-   {name:'reopen cold',native:'reopen'},{name:'wrong notebook again',click:'mode-wrong'},{name:'batch kept',find_text:'数学 · 虚构数学练习',timeout:20},
+   {name:'reopen cold',native:'reopen'},{name:'wrong notebook again',click:'mode-错题本'},{name:'batch kept',find_text:'数学 · 虚构数学练习',timeout:20},
    {name:'append',pick:[files[3]]},{name:'add photo',click_prefix:'photo-append-'},{name:'appended',until:'photo-notice',contains:'已补进同一批',timeout:20},
    {name:'narrow 900',width:900,native:'snapshot'},
    {name:'other child',key:'2',modifiers:['command']},{name:'isolation',find_text:'虚构数学练习',absent:true,timeout:8},{name:'back',key:'1',modifiers:['command']}];
