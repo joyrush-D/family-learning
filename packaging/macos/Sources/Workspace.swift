@@ -369,6 +369,8 @@ extension DayItem {
     var showsWhen: Bool { !whenLabel.isEmpty && !(when == "unknown" && dayRoles.contains { !$0.known }) }
     /// 来源消息按唯一原消息 ref 计：原布置、更正都只是一条来源消息，不统称“提醒”。
     var sourceRefs: [Publication] { var seen = Set<String>(); return (publications ?? []).filter { seen.insert($0.ref).inserted } }
+    /// 行内完整标准：各句照原文接起来，句末已有标点的不再补“；”（不出现“。；”）。
+    var standardWords: String { lines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
     var sourceWords: String { sourceRefs.count > 1 ? "来源消息\(sourceRefs.count)条" : "" }
     /// 老师与完整发布时间：有发布事实就照写它的原值（未知照写它的原话，如“发布 待核对”）；没有时用原始发布时间的完整日期与时刻。
     var publishWords: String? {
@@ -564,7 +566,7 @@ struct WorkspaceView: View {
         let side = open && !compact, page = open && compact
         return ZStack {
             HStack(spacing: 0) {
-                SubjectList(store: store)
+                SubjectList(store: store, side: side)
                     .frame(maxWidth: side ? 440 : 860)
                     .frame(maxWidth: side ? 440 : .infinity)
                     .opacity(page ? 0 : 1).allowsHitTesting(!page).accessibilityHidden(page)
@@ -646,6 +648,8 @@ func factWords(_ f: DayFact) -> String {
 
 struct SubjectList: View {
     @ObservedObject var store: WorkspaceStore
+    /// 宽窗里所选项的详情在右侧时清单变窄：行高要按新宽度重算。
+    var side = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -801,6 +805,7 @@ struct SubjectList: View {
     }
 
     var itemList: some View {
+        ScrollViewReader { proxy in
         List(selection: Binding(get: { store.selection }, set: { store.select($0) })) {
             // 课表与日程只属于这一天的待办；日期未定、已办不混入当天课程和计划。换段走 setScope 的 reviewHold：未确认保存的复习卡片
             // 留在待办可见可重试，草稿仍在 reviewDrafts。
@@ -834,7 +839,11 @@ struct SubjectList: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
+        // 整宽与右侧详情之间换宽度时按新宽度重排整张清单（表格不会自己重算行高，长标准会被截成省略号），再滚回所选/刚看过的那一项。
+        .id(side)
+        .onAppear { if let id = store.selection ?? store.lastOpened { proxy.scrollTo(id, anchor: .center) } }
         .probe("subject-list")
+        }
     }
 }
 
@@ -850,7 +859,7 @@ struct ItemRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let first = item.lines.first {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
-                    Text(item.lines.joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
+                    Text(item.standardWords).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
                         .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
                     if let v = item.version {
                         // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
