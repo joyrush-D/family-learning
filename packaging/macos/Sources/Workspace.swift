@@ -1691,12 +1691,14 @@ extension WorkspaceStore {
         save.busy = true; save.message = ""; save.conflict = false
         if save.body == nil {
             do {
-                let data = try await client.get("/api/calendar", ["start": from, "end": from])
+                // 读卡片依据的那一天连同正看的这一天：自己确认过的保存可能已把它改到别的日子，而重读失败时页面仍停在旧的一天；别处改过仍按下面的核对算冲突。
+                let o = draft.origin
+                let range = o.day.isEmpty || o.day == from ? (from, from) : (min(from, o.day), max(from, o.day))
+                let data = try await client.get("/api/calendar", ["start": range.0, "end": range.1])
                 let events = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["events"] as? [[String: Any]] ?? []
                 guard let e = events.first(where: { $0["id"] as? String == id && $0["editable"] as? Bool == true && $0["review"] != nil }) else {
                     save.busy = false; save.message = "这条家庭复习在 \(from) 读不到（可能已改期或删除）；没有改动任何记录，请刷新后核对。"; return
                 }
-                let o = draft.origin
                 guard WorkspaceStore.reviewSnapshotMatches(day: o.day, start: o.start, end: o.end, status: o.status, version: draft.version, e) else {
                     save.busy = false; save.conflict = true
                     save.message = "这条复习已在别处改过（现在是 \(e["day"] as? String ?? "") \(e["start_time"] as? String ?? "")），这里的改动没有保存、仍保留；请核对后按最新的重新开始。"
@@ -1716,11 +1718,11 @@ extension WorkspaceStore {
         var outcome = await client.post("/api/calendar/save", body)
         var done = ""
         if case .saved(let object) = outcome {
-            if let text = WorkspaceStore.reviewSaved(body, object) { done = text }
+            // 核对过的自己回执在重读之前就成为这条复习的新依据：重读中或重读失败时，旧页面里的旧一版也刷不回去。
+            if let text = adoptReviewACK(id, body, object) { done = text }
             else { outcome = .unknown("服务端的保存回执对不上这次提交（编号、版本、日期、时间或状态），不确定是否已按它保存；这次提交原样保留，请用同一次提交核对。") }
         }
         if case .unknown = outcome {} else { save.body = nil }
-        if case .saved = outcome { reviewDrafts[id] = nil }
         await finish(outcome, save, done: done)
         if case .refused(let status, _, _) = outcome, status == 409 { save.conflict = true }  // newer saved version: draft kept, explicit restart
     }
@@ -1732,9 +1734,22 @@ extension WorkspaceStore {
     }
 
     /// 这条复习的卡片草稿：第一次取已存的日期/时间；之后收起、换日或换孩子再回来仍是同一份（含回执不明的原请求与提示）。
+    /// 版本更低或相同的读取结果（如重读失败后旧页面里的这条安排）不换掉它；真正更新的版本只重建没有改动、没在编辑、没在保存或回执不明的卡片，
+    /// 否则保留原依据与输入，保存时按冲突处理。
     func reviewDraft(_ plan: PlanItem, day: String) -> ReviewDraft {
-        if let d = reviewDrafts[plan.id] { return d }
+        if let d = reviewDrafts[plan.id] {
+            guard let newer = plan.version as Int?, let basis = d.version, newer > basis, !d.editing, !d.dirty, !d.locked else { return d }
+        }
         let d = ReviewDraft(day: day, start: plan.start_time, end: plan.end_time, status: plan.status, version: plan.version); reviewDrafts[plan.id] = d; return d
+    }
+
+    /// 自己这次保存的回执：只有 reviewSaved 核对过（同编号、版本恰好+1、日期/时间/状态与这次提交一致、仍带原关联）才成为这条复习新的卡片依据
+    /// （回执里的日期/时间/状态与版本，收起、没有未保存改动）；对不上就不动原卡片与这次提交，返回 nil（按回执不明处理）。
+    func adoptReviewACK(_ id: String, _ body: [String: Any], _ object: [String: Any]) -> String? {
+        guard let text = WorkspaceStore.reviewSaved(body, object), let e = object["event"] as? [String: Any] else { return nil }
+        reviewDrafts[id] = ReviewDraft(day: e["day"] as? String ?? "", start: e["start_time"] as? String ?? "", end: e["end_time"] as? String ?? "",
+                                       status: e["status"] as? String ?? "", version: (e["version"] as? NSNumber)?.intValue)
+        return text
     }
 
     /// 家庭复习保存回执：只认同一编号、版本恰好+1、日期/时间/状态与这次提交一致且仍带原关联的回执，并按回执写提示；否则 nil（按回执不明处理）。

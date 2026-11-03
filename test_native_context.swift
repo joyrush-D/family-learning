@@ -198,6 +198,60 @@ import Foundation
         expect(store.hasUnsavedInput && !store.reviewLocked, "只是有改动的复习草稿：关闭前仍要确认，但不锁换孩子/日期（草稿按编号保留）")
         store.reviewDrafts = [:]
         expect(!store.hasUnsavedInput, "没有改动的复习：不算未保存")
+        // P4 自己核对过的保存回执成为这条复习的卡片依据（纯状态，不发请求）：原卡片 v1（11月5日、没写时间）改到 11月7日 19:10–19:30，回执 v2。
+        let ownID = String(repeating: "b", count: 32)
+        func ownPlan(_ version: Int, _ start: String, _ end: String) -> PlanItem {
+            PlanItem(id: ownID, title: "虚构家庭复习", start_time: start, end_time: end, location: "", note: "", status: "confirmed", source: "", repeat: false, shared: false,
+                     task_id: "", unmerged: nil, review: PlanReview(child_id: "child-1", record_id: 8, topic_id: "", task_id: "", basis_state: "current"), version: version)
+        }
+        func basis(_ d: ReviewDraft?) -> String {
+            guard let d else { return "none" }
+            return [reviewDayFormat.string(from: d.day), d.start, d.end, d.origin.day, d.origin.start, d.origin.end, d.origin.status, "v\(d.version ?? -1)"].joined(separator: " ")
+        }
+        let moving = store.reviewDraft(ownPlan(1, "", ""), day: "2026-11-05")
+        moving.editing = true; moving.day = reviewDayFormat.date(from: "2026-11-07")!; moving.start = "19:10"; moving.end = "19:30"
+        let ownBody: [String: Any] = ["id": ownID, "version": 1, "day": "2026-11-07", "start_time": "19:10", "end_time": "19:30", "status": "confirmed"]
+        let ownAck: [String: Any] = ["event": ownBody.merging(["version": 2, "review": ["record_id": 8]]) { $1 }]
+        expect(store.adoptReviewACK(ownID, ownBody, ["event": ownBody.merging(["version": 3, "review": ["record_id": 8]]) { $1 }]) == nil
+               && store.reviewDrafts[ownID] === moving && moving.editing && moving.dirty, "回执版本不是恰好+1：不当自己的保存，原卡片和改动原样留着")
+        expect(store.adoptReviewACK(ownID, ownBody, ownAck) == "家庭复习已改到 2026-11-07。", "核对过的自己回执：提示写回执里的日期")
+        let acked = store.reviewDrafts[ownID]
+        let v2 = "2026-11-07 19:10 19:30 2026-11-07 19:10 19:30 confirmed v2"
+        expect(basis(acked) == v2 && acked !== moving && acked?.editing == false && acked?.dirty == false && acked?.locked == false && !store.hasUnsavedInput,
+               "自己的回执成为依据：v2、11月7日 19:10–19:30，收起、干净，不算未保存")
+        expect(store.reviewDraft(ownPlan(1, "", ""), day: "2026-11-05") === acked && basis(acked) == v2, "回执后重读失败、旧页面仍画着 v1：不能把自己已确认的 v2 刷回去")
+        // 回执丢失后同一请求的重放回执同样成为 v2 依据；接着在同一会话编辑/完成，按已存的 v2 核对，不误报“别处改过”。
+        let canonical: [String: Any] = ["version": 2, "day": "2026-11-07", "start_time": "19:10", "end_time": "19:30", "status": "confirmed"]
+        expect(store.adoptReviewACK(ownID, ownBody, ownAck) != nil, "同一请求的重放回执：仍按核对过的自己回执")
+        let following = store.reviewDraft(ownPlan(2, "19:10", "19:30"), day: "2026-11-07")
+        expect(basis(following) == v2 && WorkspaceStore.reviewSnapshotMatches(day: following.origin.day, start: following.origin.start, end: following.origin.end,
+                                                                               status: following.origin.status, version: following.version, canonical),
+               "重放回执后同一会话接着编辑/完成：按已存的 v2 核对")
+        // 别处真正更新的 v3（18:00）：只换没有改动、没在编辑、没在保存/回执不明的卡片；否则保留原依据、输入和冻结的原请求，保存时按冲突处理。
+        let v3 = ownPlan(3, "18:00", "19:30")
+        following.editing = true
+        expect(store.reviewDraft(v3, day: "2026-11-07") === following && following.version == 2, "正在编辑（还没改）：不吸收别处的新版本")
+        following.editing = false; following.start = "19:15"
+        expect(store.reviewDraft(v3, day: "2026-11-07") === following && following.start == "19:15" && following.version == 2, "有未保存的改动：保留输入和原依据")
+        following.start = "19:10"; following.save.unknown = true; following.save.body = ownBody
+        expect(store.reviewDraft(v3, day: "2026-11-07") === following && (following.save.body?["version"] as? Int) == 1 && following.version == 2,
+               "回执不明：保留冻结的原请求和原依据")
+        following.save.unknown = false; following.save.body = nil
+        expect(store.reviewDraft(ownPlan(2, "19:10", "19:30"), day: "2026-11-07") === following, "同一版本重读：仍是同一份卡片")
+        let external = store.reviewDraft(v3, day: "2026-11-07")
+        expect(external !== following && basis(external) == "2026-11-07 18:00 19:30 2026-11-07 18:00 19:30 confirmed v3", "干净、收起的卡片读到真正更新的 v3：按新版本重建依据")
+        expect(store.reviewDraft(ownPlan(2, "19:10", "19:30"), day: "2026-11-07") === external, "更旧的读取不回滚")
+        // 完成/取消的回执：卡片干净，关闭/离开不再提示未保存。
+        for status in ["completed", "cancelled"] {
+            store.reviewDrafts = [:]
+            let card = store.reviewDraft(v3, day: "2026-11-07"); card.editing = true
+            let body: [String: Any] = ["id": ownID, "version": 3, "day": "2026-11-07", "start_time": "18:00", "end_time": "19:30", "status": status]
+            let text = store.adoptReviewACK(ownID, body, ["event": body.merging(["version": 4, "review": ["record_id": 8]]) { $1 }])
+            let after = store.reviewDrafts[ownID]
+            expect(text != nil && after !== card && after?.origin.status == status && after?.version == 4 && after?.editing == false && !store.hasUnsavedInput && !store.reviewLocked,
+                   "\(status) 的回执：卡片干净，关闭/离开不再提示未保存")
+        }
+        store.reviewDrafts = [:]
 
         let counts = await backend("")
         expect(counts["posts"] == 0, "整个过程没有任何写入")
