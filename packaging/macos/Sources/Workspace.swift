@@ -524,6 +524,8 @@ struct HighlightOff: NSViewRepresentable {
                 if let table = v as? NSTableView {
                     if table.selectionHighlightStyle != .none { table.selectionHighlightStyle = .none }
                     if table.backgroundColor != .clear { table.backgroundColor = .clear }
+                    // 清单换宽度时是新表格：原表格移出窗口时焦点落回窗口，交给新表格，上下键照旧选行（别处有焦点时不抢）。
+                    if let w = table.window, w.firstResponder === w { w.makeFirstResponder(table) }
                     return
                 }
                 next = v.superview
@@ -544,7 +546,7 @@ struct WorkspaceView: View {
             let compact = geo.size.width < 1180
             VStack(spacing: 0) {
                 HeaderBar(store: store, compact: compact)
-                if store.mode == .calendar { calendar(compact) } else {
+                if store.mode == .calendar { calendar(compact, width: geo.size.width) } else {
                     // 错题本/学习进展：左栏同宽、位置不动，右栏是所选那一道原错题。
                     HStack(spacing: 0) {
                         SubjectList(store: store).frame(width: compact ? 340 : 400)
@@ -561,14 +563,17 @@ struct WorkspaceView: View {
 
     /// 日历：没选事项时清单用主要宽度（最宽 860、居中），不留空的右栏。选中后宽窗（≥1180）右侧是这一项的详情；窄窗是带
     /// “返回清单”的详情页，清单只是隐去、不重建，返回时所选项、滚动位置、孩子与日期原样。窗口大小与位置不随之改变。
-    func calendar(_ compact: Bool) -> some View {
+    func calendar(_ compact: Bool, width: CGFloat) -> some View {
         let open = store.selected != nil
         let side = open && !compact, page = open && compact
+        // 清单给确切宽度（与原来固定 340/400 同一做法），不只给上限：系统列表按收到的宽度给每行量高度，只有上限时会按不限宽
+        // 量成一行，之后在窄处排开也不重量，长完成标准就被截成省略号。整宽时外层再居中。
+        let list: CGFloat = side ? 440 : max(320, min(860, width))
         return ZStack {
             HStack(spacing: 0) {
                 SubjectList(store: store, side: side)
-                    .frame(maxWidth: side ? 440 : 860)
-                    .frame(maxWidth: side ? 440 : .infinity)
+                    .frame(width: list)
+                    .frame(maxWidth: side ? nil : .infinity)
                     .opacity(page ? 0 : 1).allowsHitTesting(!page).accessibilityHidden(page)
                 if side {
                     Rectangle().fill(Palette.line).frame(width: 1)
@@ -839,7 +844,8 @@ struct SubjectList: View {
         }
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
-        // 整宽与右侧详情之间换宽度时按新宽度重排整张清单（表格不会自己重算行高，长标准会被截成省略号），再滚回所选/刚看过的那一项。
+        // 整宽与右侧详情之间换一张清单：每张只在自己的确切宽度下量行高、不在使用中改宽；随即滚回所选/刚看过的那一项，
+        // 键盘焦点由行里的 HighlightOff 交给新表格。
         .id(side)
         .onAppear { if let id = store.selection ?? store.lastOpened { proxy.scrollTo(id, anchor: .center) } }
         .probe("subject-list")
@@ -860,7 +866,7 @@ struct ItemRow: View {
                 if let first = item.lines.first {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
                     Text(item.standardWords).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
-                        .fixedSize(horizontal: false, vertical: true).accessibilityHint(first)
+                        .fixedSize(horizontal: false, vertical: true).accessibilityHint(first).modifier(FitProbe(id: "row-fit-" + item.id))
                     if let v = item.version {
                         // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
                         let words = v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")
@@ -890,6 +896,25 @@ struct ItemRow: View {
         .background(HighlightOff())
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// 只在原生验收里：这段文字实际排开的高度与同宽下完整排开所需的高度（同一 SwiftUI 排版，隐藏副本量），给出 fits/cut 与两者数值；
+/// 量的是几何高度，不凭文字内容判断有没有截断。正式使用时不加任何视图。
+struct FitProbe: ViewModifier {
+    let id: String
+    @State private var shown: CGFloat = 0
+    @State private var need: CGFloat = 0
+    func body(content: Content) -> some View {
+        if TestTargets.enabled {
+            content
+                .background(GeometryReader { g in Color.clear.onAppear { shown = g.size.height }.onChange(of: g.size.height) { shown = $0 } })
+                .overlay(alignment: .topLeading) {
+                    content.fixedSize(horizontal: false, vertical: true).hidden()
+                        .background(GeometryReader { g in Color.clear.onAppear { need = g.size.height }.onChange(of: g.size.height) { need = $0 } })
+                }
+                .probe(id, text: (need > 0 && shown + 0.5 >= need ? "fits" : "cut") + " h=\(Int(shown.rounded())) need=\(Int(need.rounded(.up)))")
+        } else { content }
     }
 }
 
