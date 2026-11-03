@@ -768,7 +768,9 @@ struct SubjectList: View {
 
     var itemList: some View {
         List(selection: Binding(get: { store.selection }, set: { store.select($0) })) {
-            if !store.showDone { scheduleSection }
+            // 课表与日程只属于这一天的待办；日期未定、已办不混入当天课程和计划。换段走 setScope 的 reviewHold：未确认保存的复习卡片
+            // 留在待办可见可重试，草稿仍在 reviewDrafts。
+            if !store.showDone && !store.showUndated { scheduleSection }
             ForEach(store.groups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { item in
