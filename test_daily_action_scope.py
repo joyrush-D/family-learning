@@ -78,7 +78,6 @@ class ActionScopeTest(unittest.TestCase):
                     self.assertTrue(row['pending_review'], title)
                     self.assertIn(goal, row['lines'])
                     self.assertNotIn('material', row)
-                self.assertIn('体育：绕圈慢跑', rows, 'a read action due tonight is the day\'s work')
                 self.assertNotIn('体育：定点投球', rows)
                 self.assertEqual(kept['体育：定点投球']['when'], 'unknown')
                 self.assertFalse(kept['体育：定点投球']['today'])
@@ -121,9 +120,11 @@ class ActionScopeTest(unittest.TestCase):
         finally: conn.close()
         self.assertEqual(code, 200, wire)
         local = app.day_view(C, DAY)
-        for key in ('groups', 'materials', 'counts', 'upcoming', 'week'):
+        for key in ('groups', 'undated', 'materials', 'counts', 'upcoming', 'week'):
             self.assertEqual(wire[key], local[key], key)
-        self.assertEqual((wire['counts']['material'], wire['counts']['open']), (2, 4))
+        # The day's work is the overdue handback; the three undated actions are kept apart under 日期未定, by the same ids.
+        self.assertEqual((wire['counts']['material'], wire['counts']['open'], wire['counts']['undated']), (3, 1, 3))
+        self.assertIn('PE01', {i['task_id'] for g in wire['undated'] for i in g['items']})
         with app.connect() as c: self.assertEqual(before, '\n'.join(c.iterdump()), 'GET /api/day writes nothing')
 
     def test_web_and_mac_read_one_projection(self):
@@ -174,15 +175,18 @@ class DateRoleTest(unittest.TestCase):
         self.assertEqual({k: v['when'] for k, v in friday.items()}, dict.fromkeys(friday, 'today'))
         saturday = self.view(inbox, '2026-11-14')
         rows = {i['id']: i for g in saturday['groups'] for i in g['items']}
-        self.assertEqual({k: v['when'] for k, v in rows.items()},
-                         {'DEV-PE-SHOES': 'passed', 'DEV-CN-RECEIPT': 'overdue', 'DEV-SCI-DEADLINE': 'overdue'})
-        self.assertEqual((saturday['counts']['overdue'], saturday['counts']['passed'], saturday['counts']['today']), (2, 1, 0))
+        # The lesson day is that day's history (listed on Friday with the same id), no open work on Saturday; deadline and
+        # handback stay overdue there. The shared role still names the passed day 已过.
+        self.assertEqual({k: v['when'] for k, v in rows.items()}, {'DEV-CN-RECEIPT': 'overdue', 'DEV-SCI-DEADLINE': 'overdue'})
+        self.assertIn('DEV-PE-SHOES', friday)
+        self.assertNotIn('DEV-PE-SHOES', {i['id'] for g in saturday['undated'] + saturday['closed'] for i in g['items']})
+        self.assertEqual(agenda.day_role(inbox[0]['agenda'], '2026-11-14'), 'passed')
+        self.assertEqual((saturday['counts']['overdue'], saturday['counts']['passed'], saturday['counts']['today'], saturday['counts']['open']), (2, 0, 0, 2))
         for r in rows.values():
             due = next(f for f in r['facts'] if f['role'] == 'due')
             self.assertEqual(due['value'], '2026-11-13')
             self.assertEqual(due['state'] == 'passed', r['when'] == 'passed', r['id'])
             self.assertEqual(due['state'] == 'overdue', r['when'] == 'overdue', r['id'])
-        self.assertEqual(list(rows)[-1], 'DEV-PE-SHOES', 'a passed lesson day sorts after open work')
         self.assertEqual([x['agenda']['due_on'] for x in inbox], ['2026-11-13'] * 3, 'no saved date changes')
         # Closed, the overdue handback leaves the open list and stays findable on the day it was closed.
         done = [dict(x, closed=True, status='已完成', closed_on='2026-11-14') if x['id'] == 'DEV-CN-RECEIPT' else x for x in inbox]
@@ -212,9 +216,9 @@ class DateRoleTest(unittest.TestCase):
                          ('DEV-PE-01', '家长自定练习标题', 'today', True, progress))
         undated = school_row('DEV-PE-01', '体育：跳绳练习', '体育')
         later = self.view([undated], '2026-12-31', [dict(tasks[0], title='体育：跳绳练习')])
-        row = next(i for g in later['groups'] for i in g['items'])
+        row = next(i for g in later['undated'] for i in g['items'])  # kept under 日期未定 with its progress, never dropped for age
         self.assertEqual((row['task_id'], row['when'], row['progress']), ('DEV-PE-01', 'unknown', progress), 'never dropped for age')
-        self.assertEqual((later['groups'][0]['undated'], later['counts']['today']), (1, 0))
+        self.assertEqual((later['counts']['undated'], later['counts']['today'], later['counts']['open']), (1, 0, 0))
 
 
 if __name__ == '__main__':
@@ -228,9 +232,10 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.role = role; self.case = role.SchoolDateRoleTests('run_one'); self.case.setUp()
         self.addCleanup(self.case.doCleanups)
 
-    def one(self, text, purpose, due, sent):
+    def one(self, text, purpose, due, sent, days):
         import copy
         import family_agent as agent
+        self.case.setUp()  # one original per fresh fictional store
         c = self.case; c.fixture.source.update(self.role.SOURCE); c.fixture.config()
         c.fixture.now = c.now = dt.datetime.fromisoformat(sent).replace(tzinfo=agent.TZ) + dt.timedelta(minutes=30)
         payload = c.fixture.payload(cursor='1')
@@ -244,27 +249,24 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.assertEqual(agent.run_once(c.app, c.now)['failed'], 0)
         with c.store._db() as db:
             row = dict(db.execute("SELECT * FROM agent_items WHERE kind='school'").fetchone())
-        return row
+        with c.app.connect() as db:
+            agenda = {t['id']: t for t in c.app.tasks(db)}[row['task_id']]['agenda']
+        return row, agenda, {d: c.app.day_view(row['child_id'], d) for d in days}
 
     def ids(self, view, key):
         return {i['task_id'] or i['id'] for g in view[key] for i in g['items']}
 
     def test_a_restated_weekday_keeps_a_lesson_bring_day_and_only_a_due_handback_stays_overdue(self):
-        future = self.one('11月10日（周二）美术课带一张白色卡纸，不用今晚画画。', 'admin', '2026-11-10', '2026-11-03T16:20:00+08:00')
-        past = self.one('11月2日（周一）音乐课带一个干净纸杯。', 'admin', '2026-11-02', '2026-11-01T17:00:00+08:00')
-        back = self.one('请家长签字，11月2日交回活动回执。', 'admin', '2026-11-02', '2026-11-01T17:00:00+08:00')
-        with self.case.app.connect() as db:
-            tasks = {t['id']: t for t in self.case.app.tasks(db)}
-        agenda = {k: tasks[r['task_id']]['agenda'] for k, r in (('future', future), ('past', past), ('back', back))}
-        self.assertEqual((agenda['future']['due_on'], agenda['future']['due_kind']), ('2026-11-10', 'arranged'), 'the negated 今晚 lends no day')
-        self.assertEqual((agenda['past']['due_on'], agenda['past']['due_kind']), ('2026-11-02', 'arranged'))
-        self.assertEqual((agenda['back']['due_on'], agenda['back']['due_kind']), ('2026-11-02', 'handback'))
-        child = future['child_id']
-        on2, on3 = self.case.app.day_view(child, '2026-11-02'), self.case.app.day_view(child, '2026-11-03')
-        self.assertIn(past['task_id'], self.ids(on2, 'groups'), 'its own day lists it with the same id')
-        self.assertNotIn(past['task_id'], self.ids(on3, 'groups') | self.ids(on3, 'undated'), 'a passed lesson day is no open work later')
-        self.assertIn(back['task_id'], self.ids(on3, 'groups'))
-        self.assertEqual(next(i['when'] for g in on3['groups'] for i in g['items'] if i['task_id'] == back['task_id']), 'overdue')
-        self.assertNotIn(future['task_id'], self.ids(on3, 'groups'))
-        self.assertIn('2026-11-10', [u['day'] for u in on3['upcoming']], 'named once before its lesson day')
-        self.assertEqual(on3['counts']['open'], sum(len(g['items']) for g in on3['groups']))
+        future, a, v = self.one('11月10日（周二）美术课带一张白色卡纸，不用今晚画画。', 'admin', '2026-11-10', '2026-11-03T16:20:00+08:00', ('2026-11-03', '2026-11-10'))
+        self.assertEqual((a['due_on'], a['due_kind']), ('2026-11-10', 'arranged'), 'the negated 今晚 lends no day')
+        self.assertNotIn(future['task_id'], self.ids(v['2026-11-03'], 'groups') | self.ids(v['2026-11-03'], 'undated'))
+        self.assertIn('2026-11-10', [u['day'] for u in v['2026-11-03']['upcoming']], 'named once before its lesson day')
+        self.assertIn(future['task_id'], self.ids(v['2026-11-10'], 'groups'))
+        past, a, v = self.one('11月2日（周一）音乐课带一个干净纸杯。', 'admin', '2026-11-02', '2026-11-01T17:00:00+08:00', ('2026-11-02', '2026-11-03'))
+        self.assertEqual((a['due_on'], a['due_kind']), ('2026-11-02', 'arranged'))
+        self.assertIn(past['task_id'], self.ids(v['2026-11-02'], 'groups'), 'its own day lists it with the same id')
+        self.assertNotIn(past['task_id'], self.ids(v['2026-11-03'], 'groups') | self.ids(v['2026-11-03'], 'undated'), 'no open work later')
+        self.assertEqual(v['2026-11-03']['counts']['open'], 0)
+        back, a, v = self.one('请家长签字，11月2日交回活动回执。', 'admin', '2026-11-02', '2026-11-01T17:00:00+08:00', ('2026-11-03',))
+        self.assertEqual((a['due_on'], a['due_kind']), ('2026-11-02', 'handback'))
+        self.assertEqual([(i['task_id'], i['when']) for g in v['2026-11-03']['groups'] for i in g['items']], [(back['task_id'], 'overdue')])

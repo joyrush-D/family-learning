@@ -281,7 +281,7 @@ function groveVersionHTML(v){if(!v)return '';const list=l=>`<ul class="grove-sta
   +(v.state==='latest'?`<p class="small">${esc(v.change||'')}；以上显示老师后发的最新要求。</p><p class="small muted">原要求（${esc(v.previous?.title||'')}）：</p>${list(v.previous?.lines)}`:`<p class="grove-unclear" role="note">${esc(v.note||'')}</p>`)
   +(v.notices||[]).map(n=>`<p class="small muted">${v.state==='latest'?'更新通知':'新通知（待在待核对里确认）'}：${esc(who(n))} ${esc((n.published_at||'').slice(0,16).replace('T',' '))}</p>${v.state==='latest'?'':list(n.lines)}`).join('')+'</section>'}
 // A subject tag counts its dated rows and its undated ones apart (server group.undated); undated rows are never this day's.
-function groveGroupCount(g){const u=g.undated||0,n=g.items.length-u;return [n?n+' 项':'',u?'日期未定 '+u:''].filter(Boolean).join(' · ')}
+function groveGroupCount(g){const u=g.undated??g.items.filter(r=>r.when==='unknown').length,n=g.items.length-u;return [n?n+' 项':'',u?'日期未定 '+u:''].filter(Boolean).join(' · ')}
 // School material with no read action yet (server view.materials): one line naming each subject's count, not the day's work;
 // every original stays in the school information page.
 function groveMaterialLineHTML(view){const m=view.materials||[];return m.length?`<p class="grove-upcoming small muted" data-grove-materials>学校资料待整理，不算当天要做：${m.map(g=>`${esc(g.subject)} ${g.items.length} 条`).join('；')}。<button type="button" data-page="agent">查看原消息与整理状态</button></p>`:''}
@@ -392,7 +392,7 @@ function todayTasksHTML(){
  // Actions with no exact date (server view.undated): one line beside 已办, not this day's count; each keeps its subject, id and
  // detail. It stays open while its selected row is inside, so a selection survives the re-render.
  const undated=view.undated||[],undatedN=undated.reduce((a,g)=>a+(g.items||[]).length,0);
- const undatedHTML=undatedN?`<details class="grove-closed grove-undated" data-grove-undated${undated.some(g=>g.items.some(r=>r.id===groveSelected))?' open':''}><summary>日期未定/待安排 ${undatedN} 项 · 不算这一天</summary>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${g.items.length} 项</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</details>`:'';
+ const undatedHTML=undatedN?`<details class="grove-closed grove-undated" data-grove-undated${undated.some(g=>g.items.some(r=>r.id===groveSelected))?' open':''}><summary>日期未定/待安排 ${undatedN} 项 · 不算这一天</summary>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</details>`:'';
  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
  return `<div class="grove" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}" data-tab="${esc(groveTab)}"><section class="grove-list" aria-labelledby="groveListTitle">`
