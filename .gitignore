@@ -144,6 +144,7 @@
 !/test_school_completion_today_ui.cjs
 !/test_school_saved_reread.py
 !/test_school_same_affair.py
+!/test_school_same_ready_notice.py
 !/test_p1a_requirement_units.py
 !/test_p1b_material_completeness.py
 !/test_p1a_requirement_units.json

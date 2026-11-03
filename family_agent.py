@@ -591,6 +591,8 @@ def _school_step_chars(text):
 
 _SCHOOL_STEP_NEGATIVE=r'不(?:需要?|用|必|要|再)?|无需|无须|免|勿|毋|别'
 _SCHOOL_STEP_REMINDER=r'(?:不要|不|别|切勿|勿)(?:忘(?:记)?|漏(?:掉)?)(?:了)?'
+# Words saying the named steps stay as before (签字、周五交回都不变); they restate the step and negate nothing.
+_SCHOOL_STEP_UNCHANGED=r'不变(?!更)'
 
 
 def _school_step_names(clause, anchor):
@@ -611,7 +613,7 @@ def _school_step_negated(clause):
     """Whether a teacher clause says a negation outside its reminders (不要忘记、别忘了) and closed names. Its own words, not a
     summary of them, are then the requirement: 家长签名不需要 and 家长不用签字 are kept as written, and so is 签字后不用交,
     whose step stays in those words instead of being lost to a guess at the negation's scope."""
-    return bool(re.search(_SCHOOL_STEP_NEGATIVE,re.sub(_SCHOOL_STEP_REMINDER,'',re.sub(r'《[^》]*》','',clause))))
+    return bool(re.search(_SCHOOL_STEP_NEGATIVE,re.sub(_SCHOOL_STEP_UNCHANGED,'',re.sub(_SCHOOL_STEP_REMINDER,'',re.sub(r'《[^》]*》','',clause)))))
 
 
 def _school_step_owned(goal, step, texts, others=()):
@@ -7906,6 +7908,10 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                     state=proposal.get('task_state')),[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],proposal.get('due',''),title)
         if (routing and not historical and proposal.get('task_change') in ('update','same','append','cancel') and proposal.get('task_state')=='review'
                 and (pending_link or proposal.get('task_target_id') in {t['id'] for t in school_tasks})):notice=[]
+        # A ready repeat of one saved item (same) is that item's notice as well: the saved item already covers its located
+        # outcome, and the saved-repeat checks below still prove its object, count, day and steps or keep it for review.
+        elif (routing and not historical and proposal.get('task_change')=='same' and proposal.get('task_state')=='ready'
+                and proposal.get('task_target_id') in {t['id'] for t in school_tasks}):notice=[]
         if native_actions:
             proposal,native_action=_school_native_bind(proposal,native_actions,native_assigned,{e['ref']:e for e in evidence},native_spans,
                                                        notice=notice,noticed=native_noticed)
