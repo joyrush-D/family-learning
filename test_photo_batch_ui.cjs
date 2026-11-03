@@ -178,6 +178,11 @@ const batchView = (p, id) => p.evaluate(async id => (await (await fetch('/api/ph
         await again.locator('[data-batch-box]').waitFor();
         await delay(1500);
         assert.equal((await batchView(p, id)).progress.calls, calls, 'reopening and refreshing make no model call');
+        // A settled, unchanged batch is not read back again: two more mounts of the page make no /api/state reload.
+        let stateReads = 0;
+        p.on('request', request => { if (new URL(request.url()).pathname === '/api/state') stateReads++; });
+        for (let round = 0; round < 2; round++) { await p.locator('nav [data-page="home"]').click(); await openWrong(p); await delay(800); }
+        assert.equal(stateReads, 0, 'repeated settled reads make no extra records reload');
         await fit(p);
         await proof(p, 'photo-batch-reopened-' + width);
         assert.doesNotMatch(host.errors(), /round error/, host.errors());
