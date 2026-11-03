@@ -386,6 +386,11 @@
 !/packaging/macos/backend.py
 !/packaging/macos/build_bundle.py
 !/packaging/macos/runtime.lock.json
+!/packaging/macos/Assets/
+/packaging/macos/Assets/*
+!/packaging/macos/Assets/AppIcon.png
+!/packaging/macos/Assets/AppIcon.icns
+!/packaging/macos/Assets/render_icon.swift
 !/packaging/macos/Sources/
 /packaging/macos/Sources/*
 !/packaging/macos/Sources/DesktopPolicy.swift

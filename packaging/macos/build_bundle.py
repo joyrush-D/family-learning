@@ -18,7 +18,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from backend import FORMAT, file_sha256, tree_digest  # noqa: E402
 
-EXCLUDED = ('.gitignore', 'packaging/macos/Sources/', 'packaging/macos/build.sh', 'packaging/macos/Info.plist')
+EXCLUDED = ('.gitignore', 'packaging/macos/Sources/', 'packaging/macos/build.sh', 'packaging/macos/Info.plist', 'packaging/macos/Assets/')
 
 
 def safe(name):

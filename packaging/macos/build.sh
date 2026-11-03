@@ -12,6 +12,7 @@ app="$out/一起成长.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$here/Info.plist" "$app/Contents/Info.plist"
+cp "$here/Assets/AppIcon.icns" "$app/Contents/Resources/AppIcon.icns"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${FAMILY_MAC_BUILD_NUMBER:-1}" "$app/Contents/Info.plist"
 xcrun swiftc -O -swift-version 5 -target arm64-apple-macos13.0 -framework AppKit -framework WebKit -framework SwiftUI \
   "$here/Sources/DesktopPolicy.swift" "$here/Sources/SelfTest.swift" "$here/Sources/WorkspaceAPI.swift" "$here/Sources/Workspace.swift" \
