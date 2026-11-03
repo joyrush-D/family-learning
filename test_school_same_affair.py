@@ -17,6 +17,7 @@ READING_QQ = 'Unit 3课文读两遍，朗读录音上传班级作业区，明天
 READING_WECHAT = '提醒一下，明天要交Unit 3朗读录音，课文读两遍再上传。'
 PE_CARD = '体育：这一张《纸鹤体能卡》只做A栏：左右脚交替跳2组，每组10下。'
 PE_REMINDER = '提醒：这一张《纸鹤体能卡》只做A栏：左右脚交替跳2组，每组10下。'
+PE_AGAIN = '再次提醒：这一张《纸鹤体能卡》仍只做A栏：左右脚交替跳2组，每组10下，要求不变。'
 
 
 class SchoolSameAffairTests(unittest.TestCase):
@@ -448,6 +449,98 @@ class SchoolSameAffairTests(unittest.TestCase):
             self.assertIn('进行中', [m.get('status') for m in rows[0]['members']])
         self.assertEqual(self._tables(), whole)
         self.assertEqual(self._tick(proposal('same', keep), must=(ref, keep), never=(member,)).count('reconcile'), 0)
+
+    def _card_reply(self, ref, text, target, change='same'):
+        return dict(proposals=[school_proposal(title_quote=text, focus='school', due='', evidence=[dict(ref=ref)], learning_subject='体育',
+                                               task_title='体育：体能卡交替跳', task_goal='《纸鹤体能卡》A栏：左右脚交替跳2组，每组10下。', task_state='ready',
+                                               task_reason='虚构：同一张卡同一栏同一数量的再次提醒。', task_change=change,
+                                               task_target_id=target if change == 'same' else '', task_purpose='learning')])
+
+    def _tick_each(self, replies):
+        """One ordinary run_once; a reconciliation reading gets the reply of the one saved original it reads (ref: reply, must, never)."""
+        calls = []
+        def model(messages, schema, name, **kwargs):
+            content = messages[-1]['content']
+            mine = [ref for ref, (reply, must, never) in replies.items() if name == 'family_agent_selection' and '独立行动补漏' not in messages[0]['content']
+                    and ref in content and all(m in content for m in must) and not any(n in content for n in never)]
+            calls.append(mine[0] if len(mine) == 1 else name)
+            if len(mine) == 1: return replies[mine[0]][0]
+            raise agent.AgentError('synthetic: no other model call')
+        with patch.object(agent.family_llm, '_chat_json', side_effect=model), patch.object(agent, '_now', return_value=self.now):
+            agent.run_once(self.app, now=self.now)
+        self.assertLessEqual(len(calls), 3)
+        return [c for c in calls if c.startswith('message:')]
+
+    def _three_saved_cards(self):
+        """ROOT three-old: three formal undated tasks of one named card saved side by side before any reconciliation (none linked),
+        the second with its own feedback. Each later reading's reply names the first task; the business tables are kept."""
+        first, keep = self._undated_card(501, PE_CARD)
+        member = dict(title='体育：体能卡交替跳', goal='《纸鹤体能卡》A栏：左右脚交替跳2组，每组10下。')
+        later = []
+        for index, source, text, publisher in ((502, 'synthetic-group', PE_REMINDER, 'synthetic-teacher-b'), (503, 'synthetic-qq-remind', PE_AGAIN, 'synthetic-teacher-c')):
+            row, task = self._undated_card(index, text, source=source, platform='wechat' if source == 'synthetic-group' else 'qq', publisher=publisher, **member)
+            ref = 'message:%s:%d' % (source, index)
+            later.append((row, task, ref, self._card_reply(ref, text, keep)))
+        old = self.app.save_task_feedback(dict(task_id=later[0][1], child='示例甲', day=self.now.date().isoformat(), note='虚构：A栏只做完第一组。',
+                                               request_key='synthetic-three-old'))
+        business = self._tables(lambda n: n in ('manual_tasks', 'task_updates', 'records') or any(w in n for w in ('wrong', 'correct', 'review', 'feedback')))
+        return keep, later, old, business
+
+    def _assert_one_card_of_three(self, keep, later, old, business, replies):
+        (two, two_task, two_ref, _), (three, three_task, three_ref, _) = later
+        tasks = [keep, two_task, three_task]
+        with self.app.connect() as c:
+            jobs = sorted((r['id'], r['done'], r['attempts']) for r in c.execute("SELECT * FROM agent_jobs WHERE id LIKE 'school-same:%'"))
+            links = [json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (r['id'],)).fetchone()[0])['school_same_task']['task_id'] for r in (two, three)]
+        self.assertEqual(jobs, sorted([('school-same:' + two['id'], 1, 1), ('school-same:' + three['id'], 1, 1)]))
+        self.assertEqual(links, [keep, keep])
+        self.assertEqual(self._tables(lambda n: n in business), business)  # no task, status, date, feedback or record moves
+        whole = self._tables()
+        for _ in range(2):  # reopened: one card, the three originals each under its own task, the member's own feedback
+            rows = [r for r in self._open_school(self.app.day_view('child-1', self.now.date().isoformat())) if r['task_id'] in tasks]
+            self.assertEqual([r['task_id'] for r in rows], [keep])
+            self.assertEqual((rows[0]['same_affair']['state'], sorted(rows[0]['same_affair']['task_ids'])), ('grouped', sorted(tasks)))
+            self.assertEqual({(p['ref'], p['task_id']) for p in rows[0]['publications']}, {('message:synthetic-qq:501', keep), (two_ref, two_task), (three_ref, three_task)})
+            self.assertEqual([(r['id'], r['task_id']) for r in rows[0]['records']], [(old['record_id'], two_task)])
+        self.assertEqual(self._tables(), whole)  # reading writes nothing
+        self.assertEqual([c for _ in range(2) for c in self._tick_each(replies)], [])  # an unchanged basis is never asked again
+
+    def test_three_saved_repeats_of_one_undated_card_are_each_asked_once_and_listed_as_one_affair(self):
+        keep, later, old, business = self._three_saved_cards()
+        (two, two_task, two_ref, two_reply), (three, three_task, three_ref, three_reply) = later
+        # Each reading is judged among the tasks saved before it only: the third task never stands beside the second's reading
+        # as a rival, nor the verified second beside the third's.
+        replies = {two_ref: (two_reply, (keep,), (two_task, three_task)), three_ref: (three_reply, (keep,), (three_task, two_task))}
+        self.assertEqual([c for _ in range(4) for c in self._tick_each(replies)], [two_ref, three_ref])
+        self._assert_one_card_of_three(keep, later, old, business, replies)
+
+    def test_three_saved_repeats_judged_before_without_their_context_are_read_again_once_each(self):
+        keep, later, old, business = self._three_saved_cards()
+        (two, two_task, two_ref, two_reply), (three, three_task, three_ref, three_reply) = later
+        targets = {t['id']: t for t in agent.school_targets(self.app, self.store, 'child-1', limit=None)}
+        fp = lambda task: targets[task]['append_basis']['fingerprint']
+        for row, task, candidates in ((two, two_task, [keep]), (three, three_task, [keep, two_task])):
+            # As fa76d76 left them: each read among every other task, its context unrecorded, done without a relation.
+            key = 'school-same:' + row['id']
+            self.assertTrue(self.store._job(key, [row['id'], fp(task), sorted([t, fp(t)] for t in candidates), agent.SCHOOL_TASK_POLICY], self.now, model=True))
+            with self.app.connect() as c: c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=?", (key,))
+        replies = {two_ref: (two_reply, (keep,), (two_task, three_task)), three_ref: (three_reply, (keep,), (three_task, two_task))}
+        self.assertEqual([c for _ in range(4) for c in self._tick_each(replies)], [two_ref, three_ref])
+        self._assert_one_card_of_three(keep, later, old, business, replies)
+
+    def test_a_reminder_fitting_two_earlier_tasks_told_apart_stays_for_the_parent(self):
+        keep, later, old, business = self._three_saved_cards()
+        (two, two_task, two_ref, _), (three, three_task, three_ref, three_reply) = later
+        # The second card is read as another affair: both earlier tasks then fit the third's reminder, so none is chosen.
+        replies = {two_ref: (self._card_reply(two_ref, PE_REMINDER, keep, change='new'), (keep,), (two_task, three_task)),
+                   three_ref: (three_reply, (keep, two_task), (three_task,))}
+        self.assertEqual([c for _ in range(4) for c in self._tick_each(replies)], [two_ref, three_ref])
+        with self.app.connect() as c:
+            for row in (two, three): self.assertNotIn('school_same_task', json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (row['id'],)).fetchone()[0]))
+        rows = [r for r in self._open_school(self.app.day_view('child-1', self.now.date().isoformat())) if r['task_id'] in (keep, two_task, three_task)]
+        self.assertEqual(sorted(r['task_id'] for r in rows), sorted([keep, two_task, three_task]))
+        self.assertEqual(self._tables(lambda n: n in business), business)
+        self.assertEqual([c for _ in range(2) for c in self._tick_each(replies)], [])
 
     def test_undated_saved_tasks_of_a_new_round_a_swapped_role_or_another_child_are_not_offered(self):
         self._undated_card(311, PE_CARD.replace('纸鹤', '松果'), title='体育：《松果体能卡》A栏', goal='《松果体能卡》只做A栏：左右脚交替跳2组，每组10下。')

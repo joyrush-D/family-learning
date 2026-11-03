@@ -3276,8 +3276,9 @@ def _reconcile_school_same(app, store, now, budget):
     """Already saved repeats of one affair (PRD 3.2 same-affair merging; S07 is knowledge reuse), revisited by the ordinary tick within its existing call budget.
 
     At most one bounded re-reading per tick, through the same school selection call: a later saved task's own originals
-    against this child's other listed tasks (the same ≤24 window). Only a later task the program cannot already tell apart
-    from an earlier one is asked, once per unchanged basis (job fingerprint). A verified same relation is kept on the later
+    against this child's tasks saved before it, each verified affair once (the same ≤24 window). Only a later task the program
+    cannot already tell apart from an earlier one is asked, once per unchanged basis (job fingerprint: the task, its candidates
+    and that whole context). A verified same relation is kept on the later
     task's own item (school_same_task) and only groups the shared day list; no task, record, status, focus or original moves.
     """
     used=failed=0
@@ -3296,10 +3297,13 @@ def _reconcile_school_same(app, store, now, budget):
                 try: evidence,_=_school_material(store,c,row)
                 except AgentError: continue
                 evidence=[dict(e,publisher=_publisher(e['ref'][8:].rsplit(':',1)[0],e),content_incomplete=bool(e.get('unread'))) for e in evidence]
+                # One scope for the candidates and the whole reading: the tasks saved before this one, each verified affair once
+                # (a linked member is its own task's repeat, never a rival beside it). A task saved later is asked on its own turn,
+                # this one among its earlier tasks, so it never blocks this reading; earlier tasks not told apart still do.
+                earlier=[t for t in targets if order(t)<order(later) and not json.loads(rows[t['id']]['plan']).get('school_same_task')]
                 candidates=[];refs={e['ref'] for e in evidence};said='\n'.join(e.get('text','') for e in evidence)
                 scope={t['id']:t for t in _school_scope(targets,[said],None)}
-                for target in (scope[t['id']] for t in targets):
-                    if target['id']==later['id'] or order(target)>=order(later) or json.loads(rows[target['id']]['plan']).get('school_same_task'): continue
+                for target in (scope[t['id']] for t in earlier):
                     # Outcomes split from one notice are separate by definition; otherwise the model is asked only about a
                     # task naming the same concrete object (never because nothing contradicts it).
                     if refs & {e['ref'] for e in json.loads(rows[target['id']]['evidence'])}: continue
@@ -3322,17 +3326,21 @@ def _reconcile_school_same(app, store, now, budget):
                             and not _school_same_due(target['due'],target,evidence)):
                         candidates.append(target)
                 if not candidates: continue
+                context=_school_scope(earlier,[said])
                 key='school-same:'+row['id']
-                value=[row['id'],later['append_basis']['fingerprint'],sorted([t['id'],t['append_basis']['fingerprint']] for t in candidates),SCHOOL_TASK_POLICY]
+                # The basis is the reading's whole input: the tasks it is judged among decide as much as its candidates, so a
+                # changed context (a member verified meanwhile, another earlier task) is read once more; an unchanged one never.
+                value=[row['id'],later['append_basis']['fingerprint'],sorted([t['id'],t['append_basis']['fingerprint']] for t in candidates),SCHOOL_TASK_POLICY,
+                       sorted([t['id'],t['append_basis']['fingerprint']] for t in context)]
                 if store._job(key,value,now,model=True,claim=False):
-                    chosen=(later,row,evidence,candidates,key,value,_school_scope(targets,[said]));break
+                    chosen=(later,row,evidence,candidates,key,value,context);break
         if chosen is None: continue
-        later,row,evidence,candidates,key,value,targets=chosen
+        later,row,evidence,candidates,key,value,context=chosen
         fp=store._job(key,value,now,model=True)
         if not fp: continue
         try:
             items=_select('school',evidence,as_of=now.date().isoformat(),data_path=store.data,school_goals=[],
-                          school_tasks=[t for t in targets if t['id']!=later['id']],school_saved_same=True)
+                          school_tasks=context,school_saved_same=True)
             used+=1
             found=[i for i in items if (i.get('plan') or {}).get('school_task',{}).get('change')=='same' and i['plan']['school_task'].get('state')=='ready'
                    and i['plan']['school_task'].get('target_basis') and i['plan']['school_task'].get('target_id') in {t['id'] for t in candidates}]
@@ -3344,7 +3352,8 @@ def _reconcile_school_same(app, store, now, budget):
                     saved=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
                     target=current.get(brief['target_id']);mine=current.get(later['id'])
                     if (saved is None or saved['updated']!=row['updated'] or saved['plan']!=row['plan'] or not target or not mine
-                            or target.get('same_basis')!=brief['target_basis'] or mine['append_basis']!=later['append_basis']):
+                            or target.get('same_basis')!=brief['target_basis'] or mine['append_basis']!=later['append_basis']
+                            or any((current.get(t['id']) or {}).get('same_basis')!=t['same_basis'] for t in context)):
                         raise AgentError('原事项在整理期间已变化，同一事项关系未保存',409)
                     if _school_same_material(store,c,saved,target): raise AgentError('同一事项的资料在整理期间有未读清或不同的文件，未归并；两项原记录保留',409)
                     plan=json.loads(saved['plan'])
