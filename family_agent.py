@@ -3101,7 +3101,7 @@ def _school_same_changes(text, facts):
         if phrase not in facts and phrase not in plain:
             # Excusing a step the affair never asks for (不用背诵 beside a reading) changes nothing; one any word of which it states keeps the guard.
             excused=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',phrase)
-            if excused and _school_excuse_unrequired(excused[1],plain):continue
+            if excused and _school_excuse_unrequired(excused[1],plain,text):continue
             return True
     return False
 
@@ -3151,10 +3151,14 @@ _SCHOOL_CHANGED_REASON='提醒原文含更正、取消、新一轮或另外的�
 _SCHOOL_EXCUSABLE_OPERATION=r'(?:背诵|抄写|默写|听写|跟读|订正|预习|复习)'
 
 
-def _school_excuse_unrequired(operation, plain):
-    """Whether an excused operation is positively one the affair never asks: a whole specific learning operation (背诵) no
-    character of which the affair states. Sharing no character proves nothing else (不用动笔 beside 默写 may withdraw it)."""
-    return bool(re.fullmatch(_SCHOOL_EXCUSABLE_OPERATION,operation)) and not any(c in plain for c in operation)
+def _school_excuse_unrequired(operation, plain, said=''):
+    """Whether an excused operation is positively one the affair never asks. Absence proves nothing (把《山溪》誊到本子上 is
+    copying though it shares no character with 抄写): the affair's own words and the reminder beside the excuse must both
+    name one same recognized learning operation (朗读…，不用背诵), and the excused one must be another whole specific
+    operation sharing none of its characters. Anything less (不用抄写。 alone, 不用动笔) stays for the change check."""
+    if not re.fullmatch(_SCHOOL_EXCUSABLE_OPERATION,operation) or any(c in plain for c in operation):return False
+    own=set(re.findall(_SCHOOL_OUTCOME_LEARN,plain))-{'完成','做'}
+    return bool(own&set(re.findall(_SCHOOL_OUTCOME_LEARN,said)))
 
 
 def _school_unrequired_excuses_dropped(text, facts):
@@ -3164,7 +3168,7 @@ def _school_unrequired_excuses_dropped(text, facts):
     plain=re.sub(r'[“”「」『』"]','',facts)
     def kept(m):
         found=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',m[1])
-        return '' if found and _school_excuse_unrequired(found[1],plain) else m[0]
+        return '' if found and _school_excuse_unrequired(found[1],plain,text) else m[0]
     return re.sub(r'([^，,。；;！!？?\n]*)([，,。；;！!？?\n]|$)',kept,text)
 
 

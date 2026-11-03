@@ -106,5 +106,22 @@ class Run3RegressionTest(unittest.TestCase):
         self.assertIn('周五交给我', found[2])
 
 
+class CopyingExcuseTest(unittest.TestCase):
+    FACTS = '把《山溪》誊到本子上。'
+
+    def test_excusing_an_unnamed_copying_requirement_is_no_proof_of_irrelevance(self):
+        self.assertFalse(agent._school_excuse_unrequired('抄写', self.FACTS))
+        self.assertFalse(agent._school_excuse_unrequired('抄写', self.FACTS, '不用抄写。'))
+        self.assertEqual(agent._school_unrequired_excuses_dropped('不用抄写。', self.FACTS), '不用抄写。')
+        self.assertTrue(agent._school_restated_reason('不用抄写。', self.FACTS, '不用抄写。'))
+
+    def test_reading_restated_beside_an_unasked_recitation_stays_positive(self):
+        facts = '语文：朗读《溪边》第2、3自然段\n今晚朗读《溪边》第2、3自然段，各读两遍，读给家长听；明早我抽听'
+        said = '朗读仍是《溪边》第2、3自然段各两遍，不用背诵，明早抽听。'
+        self.assertTrue(agent._school_excuse_unrequired('背诵', facts, said))
+        self.assertEqual(agent._school_unrequired_excuses_dropped(said, facts), '朗读仍是《溪边》第2、3自然段各两遍，明早抽听。')
+        self.assertFalse(agent._school_excuse_unrequired('背诵', facts, '不用背诵。'))
+
+
 if __name__ == '__main__':
     unittest.main()
