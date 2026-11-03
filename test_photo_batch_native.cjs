@@ -7,6 +7,8 @@
 // Guard self-test (no app, no window):  node test_photo_batch_native.cjs --self-test
 // Store contract (real Swift Store/Client compiled with the macOS SDK, loopback fixture, no NSApplication or window, no POST):
 //   node test_photo_batch_native.cjs --store-contract   (optional PHOTO_POSITIVE_PNG: a fictional PNG served on the successful re-read)
+//   The only POST is one explicit continue whose reply the client drops; its unknown notice must survive failed, foreign,
+//   other-version, unfinished and late reads and resolve only on a same child/batch/version done read (no re-send).
 // Evidence labels: the pages are synthetic 1x1 placeholder PNGs (no real photo pixels or box placement is proven), the
 // "reopen" step is the app's in-memory view remount (not a cold process restart), and picks are test-declared files (not
 // the system picker or drag-in). Real 900/1440 photos and cold App restarts are Root's independent evidence.
@@ -171,7 +173,8 @@ const CONTRACT=`import AppKit
 import Foundation
 @main struct PhotoImageRecoveryContract {
  @MainActor static func main() async {
-  let store = WorkspaceStore(client: WorkspaceClient(origin: ServiceOrigin.parse(CommandLine.arguments[1])!, ephemeral: true))
+  let client = WorkspaceClient(origin: ServiceOrigin.parse(CommandLine.arguments[1])!, ephemeral: true)
+  let store = WorkspaceStore(client: client)
   await store.load()
   var checks: [String: Bool] = [:]
   let first = await store.photoImage("QA-recover-original")
@@ -182,20 +185,70 @@ import Foundation
   let image = store.photoImages["QA-recover-original"]
   checks["explicit_retry_reads_same_image"] = image != nil && store.photoRecovery.isEmpty && store.photoProblems.isEmpty
   let size = image?.representations.first.map { [$0.pixelsWide, $0.pixelsHigh] } ?? []
+  // 继续失败部分：一次明确 continue 的回执丢失；只有同孩同批同版本读回已结束才恢复，其余读回都保原未知。
+  func list(_ mode: String) async { _ = try? await client.get("/__fixture/list/" + mode) }
+  let unknown = "没有收到回执，结果未知；不会自动重发。", settled = "已读回这批最新结果，处理已结束。"
+  func stillUnknown() -> Bool { store.photoNotice == unknown && store.photoProblems["batch"] != nil && !store.photoContinueUnknown.isEmpty }
+  await list("attention"); await store.loadPhotoBatches()
+  if let target = store.photoBatchesShown.first(where: { $0.id == "pb-qa-existing" && $0.can_continue }) {
+   workspaceTestFaults = ["drop_reply"]
+   await store.continuePhotoBatch(target)
+  }
+  checks["continue_receipt_unknown"] = stillUnknown()
+  for mode in ["fail503", "garbled", "other", "version", "child", "running", "attention"] {
+   await list(mode); await store.loadPhotoBatches()
+   checks["continue_unknown_kept_" + mode] = stillUnknown() && store.photoBatchesShown.allSatisfy { $0.state != "done" || $0.id != "pb-qa-existing" || $0.version != 1 }
+  }
+  await list("slowdone")
+  async let late: Void = store.loadPhotoBatches()
+  try? await Task.sleep(nanoseconds: 300_000_000)
+  store.photoSequence += 1
+  await late
+  checks["continue_unknown_kept_late_read"] = stillUnknown()
+  store.photoProblems["image:QA-other"] = "原图暂时读不到；点“重新读取”再试，结果不受影响。"
+  store.photoProblems["day"] = "错题已保存，原错题清单待更新；点“重新读取”再读。"
+  store.photoDraft = PhotoImportDraft(child: "child-1", key: "qa-sent-key", urls: [], sent: true)
+  await list("done"); await store.loadPhotoBatches()
+  let resolved = store.photoNotice == settled && store.photoProblems["batch"] == nil && store.photoContinueUnknown.isEmpty
+   && store.photoBatchesShown.first(where: { $0.id == "pb-qa-existing" })?.state == "done"
+  checks["continue_done_readback_resolves"] = resolved
+  checks["done_keeps_image_day_and_sent_draft"] = store.photoProblems["image:QA-other"] != nil && store.photoProblems["day"] != nil
+   && store.photoDraft?.sent == true && store.photoDraft?.key == "qa-sent-key"
+  await store.loadPhotoBatches()
+  checks["repeat_done_read_stable"] = store.photoNotice == settled && store.photoProblems.keys.sorted() == ["day", "image:QA-other"]
+  // include 的未知共用同一提示：批次已结束不证明那道题已纳入，不能替它核对。
+  store.applyPhotoOutcome(.unknown("x"), done: "", continued: PhotoContinueOrigin(child: "child-1", batch: "pb-qa-existing", version: 1))
+  store.applyPhotoOutcome(.unknown("x"), done: "")
+  await store.loadPhotoBatches()
+  checks["include_unknown_not_cleared_by_done"] = store.photoNotice == unknown && store.photoContinueUnknown.isEmpty
   let report: [String: Any] = ["checks": checks, "pixels": size, "windows": NSApp == nil ? 0 : -1]
   print(String(decoding: try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
   exit(checks.values.allSatisfy { $0 } ? 0 : 1)
  }
 }`;
-const FIXTURE=`import hashlib, json, sys, threading
+const FIXTURE=`import hashlib, json, sys, threading, time
 sys.dont_write_bytecode = True
 import test_native_context as t
 png = open(sys.argv[2], 'rb').read() if len(sys.argv) > 2 and sys.argv[2] else None
-counts = dict(image_reads=0, list_reads=0, posts=0, served_sha256='')
+counts = dict(image_reads=0, list_reads=0, posts=0, continue_posts=0, served_sha256='')
+LIST = dict(mode='empty')
+def batch(bid, child, version, state):
+    return dict(id=bid, child_id=child, version=version, created='2026-01-01T19:00:00', state=state, pages=[], papers=[], pending=[], stale=[],
+                progress=dict(done=1, total=2, failed=[]), can_continue=state == 'needs_attention')
+LISTS = dict(empty=('child-1', []), attention=('child-1', [batch('pb-qa-existing', 'child-1', 1, 'needs_attention')]),
+             running=('child-1', [batch('pb-qa-existing', 'child-1', 1, 'running')]), other=('child-1', [batch('pb-qa-other', 'child-1', 1, 'done')]),
+             version=('child-1', [batch('pb-qa-existing', 'child-1', 2, 'done')]), child=('child-2', [batch('pb-qa-existing', 'child-2', 1, 'done')]),
+             done=('child-1', [batch('pb-qa-existing', 'child-1', 1, 'done')]), slowdone=('child-1', [batch('pb-qa-existing', 'child-1', 1, 'done')]))
 original_get, original_post = t.Backend.do_GET, t.Backend.do_POST
 def do_get(self):
+    if self.path.startswith('/__fixture/list/'):
+        LIST['mode'] = self.path.rsplit('/', 1)[1]; return self.reply(200, {'ok': True})
     if self.path.startswith('/api/photo-batches'):
-        counts['list_reads'] += 1; return self.reply(200, {'child_id': 'child-1', 'batches': []})
+        counts['list_reads'] += 1; mode = LIST['mode']
+        if mode == 'fail503': return self.reply(503, {'error': '虚构：读取暂时失败'})
+        if mode == 'garbled': return self.reply(200, {'unexpected': True})
+        if mode == 'slowdone': time.sleep(1)
+        child, batches = LISTS[mode]; return self.reply(200, {'child_id': child, 'batches': batches})
     if self.path == '/upload/QA-recover-original':
         counts['image_reads'] += 1
         if counts['image_reads'] == 1: return self.reply(503, {'error': '虚构：这张原图暂不可用'})
@@ -203,7 +256,10 @@ def do_get(self):
         self.send_response(200); self.send_header('Content-Type', 'image/png'); self.send_header('Content-Length', str(len(png))); self.end_headers(); self.wfile.write(png); return
     return original_get(self)
 def do_post(self):
-    counts['posts'] += 1; return original_post(self)
+    counts['posts'] += 1
+    if self.path.startswith('/api/photo-batch/continue'):
+        counts['continue_posts'] += 1; return self.reply(200, batch('pb-qa-existing', 'child-1', 1, 'queued'))
+    return original_post(self)
 t.Backend.do_GET, t.Backend.do_POST = do_get, do_post
 server = t.ThreadingHTTPServer(('127.0.0.1', 0), t.Backend)
 threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -227,7 +283,7 @@ async function storeRun(){
  fixture.stdin.end('done\n');await eventually(async()=>lines.split('\n').filter(Boolean).length>=2,'fixture counts',10000);
  const counts=JSON.parse(lines.split('\n').filter(Boolean)[1]),report=JSON.parse(text.trim().split('\n').pop());
  const sha=crypto.createHash('sha256').update(fs.readFileSync(png)).digest('hex');
- assert.equal(code,0,'contract checks: '+text);assert.equal(counts.posts,0,'no POST');assert.equal(counts.image_reads,2,'one failed read and one explicit re-read of the same image');
+ assert.equal(code,0,'contract checks: '+text);assert.equal(counts.posts,1,'the only POST is the one explicit continue');assert.equal(counts.continue_posts,1,'the lost continue receipt is never re-sent');assert.equal(counts.image_reads,2,'one failed read and one explicit re-read of the same image');
  assert.equal(counts.served_sha256,sha,'the re-read served exactly the fictional PNG');
  return finish(0,'passed',{store_contract:true,checks:report.checks,pixels:report.pixels,http:counts,png_sha256:sha,windows:0,provider_calls:0});
 }
