@@ -173,7 +173,8 @@ class PhotoBatchTest(unittest.TestCase):
         math, chinese = done['papers']
         self.assertEqual((math['subject'], [p['page_id'] for p in math['pages']]), ('数学', ['p03', 'p01', 'p05']))
         self.assertEqual(chinese['subject'], '语文')
-        self.assertEqual(done['pending'], [dict(page_id='p06', reason='看不清')])
+        # the unreadable page is marked by its own read and kept out of grouping; only that page waits
+        self.assertEqual((done['pages'][5]['status'], done['pending']), ('unreadable', []))
         states = {q['label']: q['state'] for q in math['questions']}
         self.assertEqual(states, {'第1题': 'correct', '第2题': 'wrong', '第5题': 'suspected', '第6题': 'unknown'})
         wrong = next(q for q in math['questions'] if q['label'] == '第2题')
