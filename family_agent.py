@@ -3201,6 +3201,9 @@ def _school_same_brief(brief, evidence, targets, others=()):
         uncertain('原事项已标为不参加或不适用，再次提醒是否改变决定待家长核对；原决定和提醒原文都保留。');return
     texts=[];attached=False
     for entry in evidence:
+        # Another publisher's reminder is never proven the same affair here (PRD 3.2): one card, both originals, for review.
+        if selected.get('publisher') and entry.get('publisher')!=selected['publisher']:
+            uncertain('提醒的发布者与原事项不同，是否同一事项待核对；原事项和提醒原文都保留。');return
         if (not entry.get('ref','').startswith('message:') or entry.get('kind','text')!='text' or entry.get('unread') or entry.get('content_incomplete')
                 or not entry.get('text','').strip()):
             uncertain('提醒含未读全的内容，可能带来新要求；原事项和提醒原文都保留。');return
