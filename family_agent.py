@@ -4092,11 +4092,15 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
             roles=_school_clause_roles(clause) if own_day else set()
             sent_work=(own_day==published and not re.search(r'交|检查',clause) and re.search(work,_titles_read_as_objects(clause)))
+            # A later day's own work clause with no role of its own (明晚原地高抬腿30次；后天体育课检查) is that day's completion as
+            # the sending day's is: its one day, no hand-in or check; the one due and every guard below still decide.
+            later_work=bool(own_day and own_day>published and not roles and not re.search(r'交|检查',clause)
+                            and re.search(work,_titles_read_as_objects(clause)))
             # A dated step with no role of its own (今晚请家长在《研学活动回执》勾选选项) ends in the same sentence's directly
             # following undated step that only finishes it (然后签字, 签字后拍照上传), with or without a connector: that is its
             # finish on its day, never a day of its own.
-            step=bool(own_day and not roles and not sent_work and continued(si,n,clause))
-            if own_day and (roles or sent_work or step):
+            step=bool(own_day and not roles and not sent_work and not later_work and continued(si,n,clause))
+            if own_day and (roles or sent_work or later_work or step):
                 # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
                 # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day); so does the
                 # sending day's own work clause (请监护人今天阅读…), the completion read below.
@@ -4108,7 +4112,7 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
             # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
             # 签名 alone may be a name (交回签名回执、《家长签名确认单》): read as a predicate only by _school_clause_roles.
-            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|签字|签上|签好',clause) or 'finish' in _school_clause_roles(clause) or step
+            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|签字|签上|签好',clause) or 'finish' in _school_clause_roles(clause) or step or later_work
                         or days=={published} and not back and re.search(work,clause) or prepared and n==prepared[0])
             if len(days)!=1 or (finish and back):return None
             if not finish and back and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):
