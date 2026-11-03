@@ -210,10 +210,11 @@ function imageUploads() {
 function html() {
   return `<div class="wrong-wrap">
     <div class="wrong-heading"><div><h1>试卷错题集</h1>
-    <p class="muted">拍照或选择已上传的作业/试卷照片（每次1–3张），模型先框出疑似错题，你在原图上逐题核对、修改后才保存为学习记录。</p></div></div>
+    <p class="muted">当前孩子一次导入一批作业/试卷照片，系统自动分科、分卷、检查，并在原图上标出错题；单张照片逐题核对与手记在下方备用。</p></div></div>
     ${batchHTML()}
     <section class="card wrong-setup">
       <h2 class="pb-manual">单张核对与手记（备用）</h2>
+      <p class="small muted">拍照或选择已上传的作业/试卷照片（每次1–3张），模型先框出疑似错题，你在原图上逐题核对、修改后才保存为学习记录。</p>
       <div class="formrow">
         <label>孩子<select data-wrong-child required>${(ctx.children || []).map(c => `<option value="${esc(c.name)}" ${state.child === c.name ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
         <label>发生日期<input data-wrong-day type="date" value="${esc(state.day)}" required></label>
