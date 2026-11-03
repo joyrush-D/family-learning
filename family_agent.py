@@ -3140,12 +3140,24 @@ def _school_same_own(text, others, own):
 _SCHOOL_CHANGED_REASON='提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。'
 
 
+def _school_unrequired_excuses_dropped(text, facts):
+    """The reminder's words without each whole clause excusing a step the affair never states (不用背诵 beside a reading
+    only): such an excuse takes away nothing the affair asks and adds nothing to do. An excuse any character of which the
+    affair states (不用读给家长听, 不用读了) stays and keeps every guard."""
+    plain=re.sub(r'[“”「」『』"]','',facts)
+    def kept(m):
+        found=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',m[1])
+        return '' if found and not any(c in plain for c in found[1]) else m[0]
+    return re.sub(r'([^，,。；;！!？?\n]*)([，,。；;！!？?\n]|$)',kept,text)
+
+
 def _school_restated_reason(said, facts, summary):
     """Why a reminder's own requirement words do not restate the affair, '' when they do: a change, new round or extra
     requirement it says itself, a requirement or standard the affair does not state, a swapped doer, or a unit, title, number
     or count the affair's own words and originals do not state, in its words or in the summary shown. One contract for a saved
     task (_school_same_brief) and a still-pending item (family_agenda._one_pending_affair): a restatement reads the same before
     and after acceptance."""
+    said=_school_unrequired_excuses_dropped(said,facts)
     if _school_same_changes(said,facts):return _SCHOOL_CHANGED_REASON
     if _school_same_unstated(said,facts):return '提醒写了原事项没有的要求或完成标准，不能只当作重复提醒；原事项和提醒原文都保留。'
     if _school_units_differ(said,facts):return '提醒中由谁做哪一步与原事项不一致（主体和动作对调或改变），不能当作重复提醒；原事项和提醒原文都保留。'
@@ -3195,7 +3207,7 @@ def _school_same_brief(brief, evidence, targets, others=()):
         attached=attached or bool(entry.get('attachments'));texts.append(entry['text'])
     text=own;facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
     # Requirement units only: the reminder's proven relation clauses (元话语) state no change, count or step of this affair.
-    said,relation=_school_relation_body(text)
+    said,relation=_school_relation_body(text);said=_school_unrequired_excuses_dropped(said,facts)
     problem=(_SCHOOL_CHANGED_REASON if brief.get('purpose') not in ('learning','admin') else
              _school_restated_reason(said,facts,brief['title']+' '+_school_relation_body(brief['goal'])[0]))
     if problem:
