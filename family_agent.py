@@ -3049,10 +3049,16 @@ def _school_relation_unit(clause):
                 or re.search(_SCHOOL_UNIT_ACTORS[0][1]+'|'+_SCHOOL_UNIT_ACTORS[1][1],rest))
 
 
+# 要求不变 (其他要求不变、原来的要求都不变) as a whole clause closing its sentence only says nothing changed: relation words, never a
+# requirement. Followed within its sentence (要求不变，但第二栏也要填) or saying a change (要求改为3组、不要求签字) it stays a requirement.
+_SCHOOL_RELATION_UNCHANGED=re.compile(r'(?:(?:其[他它余]|原来?|以上|上述)的?)?要求(?:都|均|仍然?|依然|还是)?不变')
+
+
 def _school_relation_body(text):
     """The reminder's requirement words with its proven relation clauses set aside, and those clauses verbatim."""
     parts=re.split(r'([，,。；;！!？?\n])',text);clauses=[(parts[i],parts[i+1] if i+1<len(parts) else '') for i in range(0,len(parts),2)]
-    judged=[(c,mark)+(_school_relation_clause(c) if _school_relation_clause(c)[0] or not _school_relation_unit(c) else (True,'')) for c,mark in clauses]
+    judged=[(c,mark)+((True,'') if mark in '。；;！!\n' and _SCHOOL_RELATION_UNCHANGED.fullmatch(re.sub(r'\s+','',c)) else
+                      _school_relation_clause(c) if _school_relation_clause(c)[0] or not _school_relation_unit(c) else (True,'')) for c,mark in clauses]
     body=''.join(c+mark for c,mark,meta,_ in judged if not meta)
     kept=[]
     for c,mark,meta,repeat in judged:
@@ -3267,7 +3273,7 @@ def _school_same_material(store, c, row, target):
 
 
 def _reconcile_school_same(app, store, now, budget):
-    """Already saved repeats of one affair (S07), revisited by the ordinary tick within its existing call budget.
+    """Already saved repeats of one affair (PRD 3.2 same-affair merging; S07 is knowledge reuse), revisited by the ordinary tick within its existing call budget.
 
     At most one bounded re-reading per tick, through the same school selection call: a later saved task's own originals
     against this child's other listed tasks (the same ≤24 window). Only a later task the program cannot already tell apart
@@ -3306,8 +3312,12 @@ def _reconcile_school_same(app, store, now, budget):
                     # not adoptable (changed, conflicting, borrowed) stays unknown. The fresh reading must resolve the same date.
                     named=[w for e in evidence for w in _SCHOOL_DATE_MENTION.findall(e.get('text',''))]
                     words=bool(named) and all(w in target['title']+' '+target['goal']+' '+str(target.get('facts') or '') for w in named)
+                    # Two tasks with no date at all (no due, no day kept as not adoptable on either) whose later originals name no
+                    # day the target does not are asked too: the unknown date stays unknown, a relation never sets or borrows one.
+                    undated=(not row['due'] and not target.get('due') and not plan.get('school_unadopted_due')
+                             and not json.loads(rows[target['id']]['plan']).get('school_unadopted_due') and (not named or words))
                     # The same material proof as a fresh reminder: an unread or different file is never taken as understood.
-                    if trial['state']=='ready' and target.get('due') and not _school_same_material(store,c,row,target) and (not _school_same_due(row['due'],target,evidence)
+                    if trial['state']=='ready' and (target.get('due') or undated) and not _school_same_material(store,c,row,target) and (not _school_same_due(row['due'],target,evidence)
                             or not row['due'] and not plan.get('school_unadopted_due') and target.get('due') and words
                             and not _school_same_due(target['due'],target,evidence)):
                         candidates.append(target)
