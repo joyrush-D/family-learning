@@ -266,7 +266,8 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.assertIn(row['task_id'], self.ids(v['2026-11-04'], 'groups'), 'its check day lists the same task')
         with self.case.app.connect() as db:
             task = {t['id']: t for t in self.case.app.tasks(db)}[row['task_id']]
-        self.assertIn('30次', task['goal']); self.assertIn('每10次休息半分钟', task['goal'])
+        self.assertEqual(a['due_kind'], 'inspection', 'the next-morning lesson check, not a handback')
+        self.assertIn('30次', task['action']); self.assertIn('每10次休息半分钟', task['action'])  # the saved original words keep quantity and rest
         later, a, v = self.one('体育作业：明晚原地高抬腿30次；后天体育课检查。', 'learning', '2026-11-05', '2026-11-03T16:00:00+08:00', ('2026-11-03', '2026-11-04'))
         self.assertEqual((a['complete_on'], a['due_on']), ('2026-11-04', '2026-11-05'), 'not tonight: 明晚 is its own work day')
         self.assertNotIn(later['task_id'], self.ids(v['2026-11-03'], 'undated'))
