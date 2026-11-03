@@ -10,6 +10,193 @@ let ctx, root, busy = false;
 let state, childID = '';
 const drafts = new Map();
 
+// ---- 批量导入照片（PRD 5.1 W1）：当前孩子一次多选 → 原件按原上传守卫保存（逐张派生提交标识）→ 登记批次 →
+// 产品后台读图/组卷/检查 → 按科目每卷结果。本页只读取结果，打开/刷新不调用模型。
+const BATCH_MAX = 30;
+const BATCH_STATE = {queued: '排队中，产品后台会自动处理', running: '正在读取和检查', needs_attention: '部分步骤未完成', done: '已完成'};
+const batchStates = new Map();
+let pollTimer = 0;
+
+function bstate() {
+  if (!batchStates.has(childID)) batchStates.set(childID, {batches: null, error: '', status: '', pending: null, open: '', busy: false, records: new Set()});
+  return batchStates.get(childID);
+}
+
+function pageNo(batch, page) { return page ? batch.pages.findIndex(p => p.page_id === page.page_id) + 1 : 0; }
+
+function thumb(page) {
+  return page ? `<img class="pb-thumb" src="${ctx.endpoint('/upload/')}${encodeURIComponent(page.upload_id)}" alt="" loading="lazy">` : '';
+}
+
+function batchHTML() {
+  const b = bstate();
+  const list = b.batches === null ? '<p class="small muted">正在读取已导入的照片…</p>'
+    : b.batches.length ? b.batches.map(batchCardHTML).join('') : '<p class="small muted">还没有导入的照片。</p>';
+  return `<section class="card pb-import" data-batch-root>
+    <div class="pb-import-head"><div><h2>导入照片</h2>
+      <p class="small muted">为${esc(state.child)}一次选最多${BATCH_MAX}张作业/试卷照片，不同科目、乱序或同一份的多页都可以一起选；系统在后台自动分科、分卷、排页和检查，不用先填科目、题号或建作业。</p></div>
+      <label class="filebutton pb-pick">选择照片<input type="file" accept="image/jpeg,image/png,image/webp" multiple data-batch-pick ${b.busy ? 'disabled' : ''}></label></div>
+    <p class="small ${b.error ? 'error' : 'muted'}" role="status" data-batch-status>${esc(b.error || b.status)}</p>
+    ${b.pending && !b.busy ? '<div class="wrong-actions"><button type="button" data-batch-retry>用同一提交标识重试未完成部分</button></div>' : ''}
+    <div data-batch-list>${list}</div>
+  </section>`;
+}
+
+function batchCardHTML(batch) {
+  const papers = [...batch.papers].sort((a, b) => a.subject.localeCompare(b.subject, 'zh'));
+  const find = id => batch.pages.find(p => p.page_id === id);
+  const wait = [...batch.pages.filter(p => ['unreadable', 'unsupported'].includes(p.status)).map(p => [p, p.reason]),
+                ...batch.pending.map(p => [find(p.page_id), p.reason])];
+  const dup = batch.pages.filter(p => p.status === 'duplicate');
+  const progress = batch.state === 'done' ? '' : `（${batch.progress.done}/${batch.progress.total || '…'}步）`;
+  return `<article class="pb-batch" data-batch-id="${esc(batch.id)}" data-batch-state="${esc(batch.state)}">
+    <header><strong>${esc(batch.created.slice(0, 16).replace('T', ' '))} 导入 · ${batch.pages.length}张</strong><span class="small">${esc(BATCH_STATE[batch.state] || batch.state)}${progress}</span></header>
+    ${batch.can_continue ? `<div class="pb-failed"><p class="small error">${batch.progress.failed.map(f => esc(f.error || '处理失败')).join('；')}</p>
+      <p class="small muted">已完成的部分保留，只重做未完成的步骤。</p>
+      <div class="wrong-actions"><button type="button" data-batch-continue="${esc(batch.id)}" data-batch-version="${batch.version}">继续失败部分</button></div></div>` : ''}
+    ${papers.map(p => paperHTML(batch, p)).join('')}
+    ${wait.length ? `<div class="pb-wait"><strong>待补的页</strong><ul>${wait.map(([p, r]) => `<li>${thumb(p)}第${pageNo(batch, p)}张：${esc(r || '待补')}</li>`).join('')}</ul></div>` : ''}
+    ${dup.length ? `<p class="small muted">${dup.map(p => `第${pageNo(batch, p)}张与第${pageNo(batch, find(p.duplicate_of))}张是同一张照片，只读一次`).join('；')}</p>` : ''}
+    ${batch.stale.length ? `<p class="small muted">${batch.stale.map(s => esc(s.subject + ' ' + s.title + '：' + s.reason)).join('；')}</p>` : ''}
+  </article>`;
+}
+
+function paperHTML(batch, paper) {
+  const c = paper.counts, open = bstate().open;
+  const counts = paper.checked ? `AI判错${c.wrong}处 · 疑似${c.suspected}处 · 未判定${c.unknown}题 · 与参考一致${c.correct}题` : paper.note ? '' : '检查中';
+  return `<section class="pb-paper" data-paper-id="${esc(paper.paper_id)}">
+    <h3>${esc(paper.subject)} · ${esc(paper.title || '未识别标题')}</h3>
+    <p class="small">${paper.pages.length}页${counts ? ' · ' + counts : ''}${paper.unlocated ? ` · ${paper.unlocated}处未定位到原图题框` : ''}</p>
+    ${paper.note ? `<p class="small muted">${esc(paper.note)}</p>` : ''}
+    ${paper.coverage ? `<p class="small muted">${esc(paper.coverage)}</p>` : ''}
+    ${paper.unchecked_pages.length ? `<p class="small muted">尚未检查：${paper.unchecked_pages.map(id => '第' + pageNo(batch, batch.pages.find(p => p.page_id === id)) + '张').join('、')}</p>` : ''}
+    <ul class="pb-questions">${paper.questions.filter(q => q.state !== 'correct').map(q => questionHTML(batch, q, open === q.key)).join('')}</ul>
+  </section>`;
+}
+
+function questionHTML(batch, q, isOpen) {
+  const page = batch.pages.find(p => p.page_id === q.page_id);
+  const saved = q.record_id ? `<p class="small">已记入错题${q.chosen ? '（家长选择纳入练习）' : '（AI判断）'}${q.followups.length ? ' · ' + q.followups.map(f => esc((f.followup_kind || '跟进') + ' ' + f.day)).join('、') : ''}</p>
+      <div class="wrong-actions"><button type="button" data-followup="${q.record_id}" data-followup-kind="订正">记订正 / 复测</button></div>`
+    : q.state === 'suspected' ? `<div class="wrong-actions"><button type="button" data-batch-include="${esc(q.key)}" data-batch-id="${esc(batch.id)}" data-batch-version="${batch.version}">纳入练习</button></div>` : '';
+  return `<li class="pb-q" data-state="${esc(q.state)}" data-question-key="${esc(q.key)}">
+    <button type="button" class="pb-q-head" data-batch-open="${esc(q.key)}" aria-expanded="${isOpen}"><span class="pb-tag">${esc(q.state_word)}</span>${esc(q.label)}${q.located ? '' : '<span class="small muted">· 未定位</span>'}</button>
+    ${isOpen ? `<div class="pb-q-body">
+      ${page && q.box ? `<div class="pb-figure"><img src="${ctx.endpoint('/upload/')}${encodeURIComponent(page.upload_id)}" alt="原图第${pageNo(batch, page)}张"><span class="pb-box" data-batch-box style="${boxStyle({...q.box, kind: 'wrong_item'})}"></span></div>`
+        : '<p class="small muted">没有可靠对应的原图题框，未定位；原图已关联到这道题。</p>'}
+      ${q.question ? `<p><b>题面</b> ${esc(q.question)}</p>` : ''}
+      <p><b>原答</b> ${esc(q.student_answer || '未能确认')}</p>
+      ${q.answer ? `<p><b>参考</b> ${esc(q.answer)}</p>` : ''}
+      ${q.error_reason ? `<p><b>依据</b> ${esc(q.error_reason)}</p>` : ''}
+      ${q.uncertainty || q.conflict ? `<p class="small muted">不确定：${esc([q.conflict, q.uncertainty].filter(Boolean).join('；'))}</p>` : ''}
+      <p class="small muted">署名：AI判断，未经老师或家长核定；不代表掌握程度。</p>${saved}
+    </div>` : ''}
+  </li>`;
+}
+
+function paintBatch() {
+  const el = root?.querySelector('[data-batch-root]');
+  if (el) el.outerHTML = batchHTML();
+}
+
+function schedulePoll() {
+  clearTimeout(pollTimer);
+  const b = bstate();
+  if (root?.isConnected && (b.batches || []).some(x => ['queued', 'running'].includes(x.state))) pollTimer = setTimeout(loadBatches, 2500);
+}
+
+async function loadBatches() {
+  const b = bstate(), id = childID;
+  if (!id || !root?.isConnected) return;
+  try {
+    const r = await ctx.apiFetch('/api/photo-batches?child_id=' + encodeURIComponent(id), {headers: {'X-Family-Token': ctx.token}});
+    const out = await r.json();
+    if (!r.ok) throw new Error(out.error || ('HTTP ' + r.status));
+    if (id !== childID) return;
+    b.batches = out.batches;
+    if (b.error.startsWith('读取导入结果失败')) b.error = '';
+    const ids = out.batches.flatMap(x => x.papers.flatMap(p => p.questions.map(q => q.record_id).filter(Boolean)));
+    const fresh = ids.filter(i => !b.records.has(i));
+    fresh.forEach(i => b.records.add(i));
+    paintBatch();
+    // 新记下的错题进入原记录列表，原“记订正 / 复测”链才能找到它。
+    if (fresh.length) await ctx.reload?.();
+  } catch (e) {
+    b.error = '读取导入结果失败，可刷新重试：' + (e.message || '网络错误');
+    paintBatch();
+  }
+  schedulePoll();
+}
+
+function updateBatch(view) {
+  const b = bstate();
+  b.batches = [view, ...(b.batches || []).filter(x => x.id !== view.id)].sort((x, y) => y.created.localeCompare(x.created));
+}
+
+async function postBatch(path, body) {
+  const r = await ctx.apiFetch(path, {method: 'POST', headers: {'X-Family-Token': ctx.token, 'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const out = await r.json();
+  if (!r.ok) { const error = new Error(out.error || ('HTTP ' + r.status)); error.refused = true; throw error; }
+  return out;
+}
+
+async function importPhotos(files) {
+  const b = bstate();
+  if (files.length > BATCH_MAX) { b.error = `每批最多${BATCH_MAX}张，本次选了${files.length}张；请分批导入。`; return paintBatch(); }
+  b.pending = {key: 'pb' + uid(), child: childID, files, uploads: files.map(() => null)};
+  return runImport();
+}
+
+async function runImport() {
+  const b = bstate(), job = b.pending;
+  if (!job) return;
+  b.busy = true; b.error = '';
+  let failed = 0, last = '';
+  for (let i = 0; i < job.files.length; i++) {
+    if (job.uploads[i]) continue;
+    const file = job.files[i];
+    b.status = `正在保存原件 ${i + 1}/${job.files.length}…`; paintBatch();
+    try {
+      if (!file.size || file.size > 20 * 1024 * 1024) throw new Error('为空或超过20MB');
+      const r = await ctx.apiFetch('/api/upload', {method: 'POST', headers: {'X-Family-Token': ctx.token, 'X-File-Name': encodeURIComponent(file.name),
+        'X-Request-Key': job.key + '-' + String(i + 1).padStart(2, '0'), 'Content-Type': 'application/octet-stream'}, body: file});
+      const out = await r.json();
+      if (!r.ok) throw new Error(out.error || ('HTTP ' + r.status));
+      job.uploads[i] = out.attachment.id;
+    } catch (e) { failed++; last = file.name + '：' + (e.message || '上传失败'); }
+  }
+  if (failed) {
+    b.busy = false; b.status = '';
+    b.error = `${failed}张照片未保存（${last}）；已保存的原件保留，可用同一提交标识重试。`;
+    return paintBatch();
+  }
+  b.status = '原件已保存，正在登记这一批…'; paintBatch();
+  let view = null;
+  for (let attempt = 0; attempt < 2 && !view; attempt++) {
+    try { view = await postBatch('/api/photo-batch/create', {child_id: job.child, request_key: job.key, uploads: job.uploads}); }
+    catch (e) {
+      if (e.refused) { b.busy = false; b.status = ''; b.error = e.message; return paintBatch(); }
+      b.status = '没有收到登记回执，正在用同一提交标识查询…'; paintBatch();
+    }
+  }
+  b.busy = false;
+  if (!view) { b.status = ''; b.error = '没有收到登记回执；原件已保存，可用同一提交标识重试，不会重复建批次。'; return paintBatch(); }
+  b.pending = null;
+  b.status = view.replayed ? '已找到这一批（同一提交标识），没有重复登记。' : '已登记，产品后台会自动读图、分卷和检查；离开本页也会继续，回来即可看到结果。';
+  updateBatch(view);
+  paintBatch();
+  schedulePoll();
+}
+
+async function batchAction(button, path, body) {
+  const b = bstate();
+  button.disabled = true;
+  try { updateBatch(await postBatch(path, body)); b.error = ''; }
+  catch (e) { b.error = (e.message || '操作失败') + '；原批次和原图保留，可刷新后重试。'; }
+  paintBatch();
+  await loadBatches();
+}
+
 function freshState() {
   return {child: '', day: new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10),
           subject: '', ids: [], draft: null, review: [], error: '', generation: 0,
@@ -24,7 +211,9 @@ function html() {
   return `<div class="wrong-wrap">
     <div class="wrong-heading"><div><h1>试卷错题集</h1>
     <p class="muted">拍照或选择已上传的作业/试卷照片（每次1–3张），模型先框出疑似错题，你在原图上逐题核对、修改后才保存为学习记录。</p></div></div>
+    ${batchHTML()}
     <section class="card wrong-setup">
+      <h2 class="pb-manual">单张核对与手记（备用）</h2>
       <div class="formrow">
         <label>孩子<select data-wrong-child required>${(ctx.children || []).map(c => `<option value="${esc(c.name)}" ${state.child === c.name ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select></label>
         <label>发生日期<input data-wrong-day type="date" value="${esc(state.day)}" required></label>
@@ -276,6 +465,10 @@ function onClick(e) {
   if (busy) return;
   const t = e.target.closest('button');
   if (!t) return;
+  if (t.hasAttribute('data-batch-retry')) return runImport();
+  if (t.dataset.batchContinue) return batchAction(t, '/api/photo-batch/continue', {batch_id: t.dataset.batchContinue, version: Number(t.dataset.batchVersion)});
+  if (t.dataset.batchInclude) return batchAction(t, '/api/photo-batch/include', {batch_id: t.dataset.batchId, version: Number(t.dataset.batchVersion), question_key: t.dataset.batchInclude});
+  if (t.dataset.batchOpen) { const b = bstate(); b.open = b.open === t.dataset.batchOpen ? '' : t.dataset.batchOpen; return paintBatch(); }
   if (t.hasAttribute('data-wrong-annotate')) return annotate();
   if (t.hasAttribute('data-wrong-save')) return save();
   if (t.hasAttribute('data-wrong-discard')) { state.saveKey = ''; state.draft = null; state.review = []; state.generation++; paint(); }
@@ -292,6 +485,13 @@ function onChange(e) {
     drafts.set(childID, state);
     state.child = owner.name;
     paint();
+    loadBatches();
+    return;
+  }
+  if (e.target.matches('[data-batch-pick]')) {
+    const files = [...(e.target.files || [])];
+    e.target.value = '';
+    if (files.length && !bstate().busy) importPhotos(files);
     return;
   }
   if (e.target.matches('[data-wrong-camera], [data-wrong-pick]')) {
@@ -312,7 +512,7 @@ function onChange(e) {
 }
 
 function canSwitch() {
-  if (busy || state?.saveKey) {
+  if (busy || state?.saveKey || batchStates.get(childID)?.busy) {
     if (root?.isConnected) setError('请先完成上传、标注或核对上次保存，再切换孩子。');
     return false;
   }
@@ -334,6 +534,7 @@ function mount(options) {
   drafts.set(childID, state);
   state.child = owner?.name || state.child;
   paint();
+  loadBatches();
   root.addEventListener('click', onClick);
   root.addEventListener('change', onChange);
   root.addEventListener('input', e => {

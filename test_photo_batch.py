@@ -57,6 +57,13 @@ def item(label, judgment, answer='35', uncertainty='', kind='objective'):
                 steps='按参考重算' if judgment == 'incorrect' else '', uncertainty=uncertainty, question_kind=kind)
 
 
+def original_review(items):
+    raw = dict(items=items, coverage='虚构', question_labels=[i['label'] for i in items])
+    with patch.object(family_llm, '_chat_json', return_value=raw):
+        out = family_llm.homework_reference_draft([dict(mime='image/png', data=PNG)], review=True)
+    return [q['judgment'] for q in out['questions']]
+
+
 class Model:
     """Fixed raw replies by task name; counts calls so tests prove no hidden retries."""
 
@@ -65,6 +72,8 @@ class Model:
         self.calls = []
         self.fail = set()
         self.group = None
+        self.review = None
+        self.fail_review_once = set()
 
     def images(self, messages):
         found = []
@@ -96,6 +105,12 @@ class Model:
                         dict(subject='语文', title='虚构语文小测', basis='语文题面', pages=[dict(page_id='p02', order=1, role='answered')])],
                 pending=[dict(page_id='p06', reason='看不清')], same_pages=[])
         assert name == 'family_homework_reference', name
+        if tags[0] in self.fail_review_once:
+            self.fail_review_once.discard(tags[0])
+            raise family_llm.LLMDraftError('模型暂时不可用（虚构）')
+        if self.review:
+            items = self.review(tags)
+            return dict(items=items, coverage='虚构覆盖说明', question_labels=[i['label'] for i in items])
         if 'c1' in tags:
             items = [item('第2题', 'incorrect'), item('第3题', 'correct')]
         else:
@@ -176,7 +191,12 @@ class PhotoBatchTest(unittest.TestCase):
         # the unreadable page is marked by its own read and kept out of grouping; only that page waits
         self.assertEqual((done['pages'][5]['status'], done['pending']), ('unreadable', []))
         states = {q['label']: q['state'] for q in math['questions']}
-        self.assertEqual(states, {'第1题': 'correct', '第2题': 'wrong', '第5题': 'suspected', '第6题': 'unknown'})
+        # 第5题 arrives as 'incorrect' with an uncertainty note. The original review contract — the same
+        # homework_reference_draft(review=True) the homework feedback check uses, probed here independently of the batch
+        # code — itself returns it as unknown. The batch keeps that unknown: no AI wrong, no suspected, no record.
+        self.assertEqual(original_review([item('第5题', 'incorrect', uncertainty='字迹不清')]), ['unknown'])
+        self.assertEqual(states, {'第1题': 'correct', '第2题': 'wrong', '第5题': 'unknown', '第6题': 'unknown'})
+        self.assertTrue(all(q['record_id'] is None for q in math['questions'] if q['state'] != 'wrong'))
         wrong = next(q for q in math['questions'] if q['label'] == '第2题')
         self.assertEqual((wrong['page_id'], wrong['upload_id'], wrong['located']), ('p03', uploads[2], True))
         same_label = next(q for q in chinese['questions'] if q['label'] == '第2题')
@@ -194,19 +214,6 @@ class PhotoBatchTest(unittest.TestCase):
         math_record = next(r for r in records if r['subject'] == '数学')
         self.assertEqual(math_record['attachments'], [uploads[2]])
         self.assertAlmostEqual(math_record['wrong_region']['y'], 0.24)
-        # suspected stays in the report until the parent includes it; a repeated click reads back the same record
-        suspected = next(q for q in math['questions'] if q['state'] == 'suspected')
-        self.assertIsNone(suspected['record_id'])
-        body = dict(batch_id=done['id'], version=done['version'], question_key=suspected['key'])
-        code, first = self.request('/api/photo-batch/include', body)
-        code2, again = self.request('/api/photo-batch/include', body)
-        self.assertEqual((code, code2), (200, 200), first)
-        ids = [q['record_id'] for p in (first, again) for q in p['papers'][0]['questions'] if q['key'] == suspected['key']]
-        self.assertTrue(ids[0] and ids[0] == ids[1])
-        code, state = self.request('/api/state')
-        chosen = [r for r in state['records'] if r['id'] == ids[0]]
-        self.assertIn('家长选择纳入练习', chosen[0]['note'])
-        self.assertEqual(sum(r['source'] == '错题照片核对' for r in state['records']), 3)
         # an unknown / blank answer is never a wrong record; reruns make no calls and no duplicates
         calls = len(model.calls)
         self.rounds(model, 2)
@@ -221,6 +228,102 @@ class PhotoBatchTest(unittest.TestCase):
         self.assertEqual((code, other['batches']), (200, []))
         code, mine = self.request('/api/photo-batches?child_id=child-1')
         self.assertEqual([b['id'] for b in mine['batches']], [done['id']])
+
+    def paper_of(self, tags, title, kinds=None):
+        for i, tag in enumerate(tags, 1):
+            kind = (kinds or {}).get(tag, 'answered')
+            PAGES.setdefault(tag, dict(evidence=evidence('数学', title, str(i), kind=kind),
+                                       regions=[region('第3题', 300)] if i == 1 and kind == 'answered' else []))
+        return dict(papers=[dict(subject='数学', title=title, basis='同标题与连续页码',
+                                 pages=[dict(page_id='p%02d' % i, order=i, role=(kinds or {}).get(t, 'answered'))
+                                        for i, t in enumerate(tags, 1)])], pending=[], same_pages=[])
+
+    def test_long_paper_over_eight_pages_stays_one_paper_and_only_a_cross_segment_conflict_is_suspected(self):
+        tags = ['L%02d' % i for i in range(1, 11)]
+        model = Model(self.ids)
+        model.group = self.paper_of(tags, '虚构长卷')
+        model.review = lambda seen: ([item('第3题', 'incorrect'), item('第4题', 'correct')] if seen[0] == 'L01'
+                                     else [item('第3题', 'correct'), item('第9题', 'correct')])
+        model.fail_review_once = {'L09'}
+        _, (code, created) = self.batch('batch-key-0000000008', tags)
+        self.rounds(model, 10)
+        self.assertEqual(model.calls, [fwq.TASK_NAME] * 4 + [fpb.GROUP_TASK] + ['family_homework_reference'] * 2)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        self.assertEqual((view['state'], [f['kind'] for f in view['progress']['failed']]), ('needs_attention', ['check']))
+        self.assertEqual(view['papers'][0]['unchecked_pages'], ['p09', 'p10'], 'the failed segment is not reported as checked')
+        code, _ = self.request('/api/photo-batch/continue', dict(batch_id=created['id'], version=1))
+        self.rounds(model, 3)
+        self.assertEqual(model.calls[7:], ['family_homework_reference'], 'only the failed segment is redone')
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        (paper,) = view['papers']
+        self.assertEqual((view['state'], paper['paper_id'], len(paper['pages']), paper['unchecked_pages']), ('done', 'paper-p01', 10, []))
+        self.assertIn('已检查10页', paper['coverage'])
+        third = next(q for q in paper['questions'] if q['label'] == '第3题')
+        self.assertEqual((third['state'], third['record_id']), ('suspected', None), third)
+        self.assertIn('不一致', third['conflict'])
+        self.assertEqual(sum(q['label'] == '第3题' for q in paper['questions']), 1, 'a question across segments is one question')
+        body = dict(batch_id=view['id'], version=view['version'], question_key=third['key'])
+        code, first = self.request('/api/photo-batch/include', body)
+        code2, again = self.request('/api/photo-batch/include', body)
+        ids = [q['record_id'] for out in (first, again) for q in out['papers'][0]['questions'] if q['key'] == third['key']]
+        self.assertEqual((code, code2), (200, 200))
+        self.assertTrue(ids[0] and ids[0] == ids[1])
+        code, state = self.request('/api/state')
+        saved = [r for r in state['records'] if r['source'] == '错题照片核对']
+        self.assertEqual(len(saved), 1)
+        self.assertIn('家长选择纳入练习', saved[0]['note'])
+        self.assertEqual(saved[0]['wrong_region']['page_id'], 'p01')
+
+    def test_more_than_thirty_wrongs_save_in_stable_chunks_and_a_failed_chunk_resumes_without_duplicates(self):
+        tags = ['W%02d' % i for i in range(1, 10)]
+        model = Model(self.ids)
+        model.group = self.paper_of(tags, '虚构大卷')
+        model.review = lambda seen: [item('第%d题' % n, 'incorrect') for n in (range(1, 21) if seen[0] == 'W01' else range(21, 41))]
+        original, fired = app.save_record, []
+        def flaky(record, **kw):
+            if record['title'].endswith('第35题') and not fired:
+                fired.append(1)
+                raise app.RecordError('虚构写入失败')
+            return original(record, **kw)
+        _, (code, created) = self.batch('batch-key-0000000009', tags)
+        with patch.object(app, 'save_record', side_effect=flaky):
+            self.rounds(model, 8)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        code, state = self.request('/api/state')
+        wrong = [r for r in state['records'] if r['source'] == '错题照片核对']
+        self.assertEqual((view['state'], len(wrong)), ('needs_attention', 30), 'the failed chunk wrote nothing; the first chunk stays')
+        self.assertEqual(view['progress']['failed'][0]['kind'], 'save')
+        calls = len(model.calls)
+        code, _ = self.request('/api/photo-batch/continue', dict(batch_id=created['id'], version=1))
+        self.rounds(model, 3)
+        self.assertEqual(len(model.calls), calls, 'record writes need no model call')
+        code, state = self.request('/api/state')
+        wrong = [r for r in state['records'] if r['source'] == '错题照片核对']
+        self.assertEqual(len(wrong), 40)
+        self.assertEqual(len({r['request_key'] for r in wrong}), 40)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        self.assertEqual(view['papers'][0]['counts']['wrong'], 40)
+        self.assertEqual(len({q['record_id'] for q in view['papers'][0]['questions']}), 40)
+
+    def test_questions_only_and_answer_key_pages_never_judge_the_child(self):
+        tags = ['Q01', 'K01']
+        model = Model(self.ids)
+        model.group = self.paper_of(tags, '虚构题面卷', {'Q01': 'questions_only', 'K01': 'answer_key'})
+        _, (code, created) = self.batch('batch-key-0000000010', tags)
+        self.rounds(model, 4)
+        self.assertNotIn('family_homework_reference', model.calls)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        self.assertEqual(view['state'], 'done')
+        self.assertIn('没有学生作答', view['papers'][0]['note'])
+        code, state = self.request('/api/state')
+        self.assertFalse([r for r in state['records'] if r['source'] == '错题照片核对'])
+
+    def test_a_round_with_no_school_budget_left_makes_no_photo_call(self):
+        _, (code, created) = self.batch('batch-key-0000000011', ['m1'])
+        model = Model(self.ids)
+        with patch.object(family_llm, '_chat_json', side_effect=model):
+            out = family_agent._photo_batches(app, None, 0)
+        self.assertEqual((out['used'], model.calls), (0, []))
 
     def test_failure_is_kept_not_retried_and_continue_redoes_only_the_failed_step(self):
         _, (code, created) = self.batch('batch-key-0000000002')
