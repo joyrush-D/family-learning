@@ -458,6 +458,45 @@ class PhotoBatchTest(unittest.TestCase):
         code, state = self.request('/api/state')
         self.assertEqual(sum(r['source'] == '错题照片核对' for r in state['records']), 1)
 
+    def test_native_decodable_fields_match_the_real_batch_view(self):
+        """Readable M1 contract: every field the Mac Photo* Decodable structs declare (parsed from WorkspaceAPI.swift) exists in
+        the real read-only batch view with a JSON type it decodes; optionals may be null."""
+        import re
+        source = (pathlib.Path(__file__).resolve().parent / 'packaging/macos/Sources/WorkspaceAPI.swift').read_text()
+        structs = {}
+        for block in re.split(r'\n(?=struct |extension |// MARK)', source):
+            m = re.match(r'struct (Photo\w+): Decodable', block)
+            if m:
+                structs[m.group(1)] = re.findall(r'let (\w+): ([^;\n]+)', block)
+        self.assertIn('PhotoBatch', structs)
+        def check(value, kind, where):
+            kind = kind.strip()
+            if kind.endswith('?'):
+                if value is None:
+                    return
+                kind = kind[:-1]
+            if kind.startswith('[') and ':' in kind:
+                self.assertIsInstance(value, dict, where)
+            elif kind.startswith('['):
+                self.assertIsInstance(value, list, where)
+                for i, v in enumerate(value):
+                    check(v, kind[1:-1], '%s[%d]' % (where, i))
+            elif kind in structs:
+                self.assertIsInstance(value, dict, where)
+                for name, sub in structs[kind]:
+                    self.assertTrue(name in value or sub.strip().endswith('?'), '%s.%s missing' % (where, name))
+                    check(value.get(name), sub, where + '.' + name)
+            else:
+                expected = {'String': str, 'Int': int, 'Bool': bool}[kind]
+                self.assertIsInstance(value, expected, where)
+                if expected is int:
+                    self.assertNotIsInstance(value, bool, where)
+        _, (code, created) = self.batch('native-contract-key-0001')
+        self.rounds(Model(self.ids))
+        code, listed = self.request('/api/photo-batches?child_id=child-1')
+        check(listed, 'PhotoBatchList', 'list')
+        self.assertTrue(any(q['box'] for p in listed['batches'][0]['papers'] for q in p['questions']), 'a located box is exercised')
+
     def test_grouping_cannot_turn_a_questions_only_page_into_an_answered_page(self):
         info = {'p01': dict(evidence=dict(page_kind='questions_only')), 'p02': dict(evidence=dict(page_kind='answered'))}
         raw = dict(papers=[dict(subject='数学', title='甲', basis='', pages=[dict(page_id='p01', order=1, role='answered'),

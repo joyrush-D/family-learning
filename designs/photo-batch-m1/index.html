@@ -1,0 +1,65 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>错题本 · 导入照片（M1 视觉参照，全虚构）</title>
+<!-- Assumptions: same window frame, child header and three modes as family-grove; one primary action "导入照片…";
+     left = short batch/paper list above the existing wrong records, right = paper result and the original image with the question box.
+     Fictional data only. Not a product shell: the SwiftUI view follows this hierarchy with the native Palette. -->
+<style>
+:root{--paper:#FBF6EA;--card:#FFFDF7;--line:#E7DDC8;--ink:#3B3326;--ink2:#665A48;--leaf:#A8D978;--leaf50:#F2F8E7;--leaf100:#E3F1D0;--leaf400:#86BE59;--leafInk:#1F4A1C;--wood:#F1E2CC;--woodInk:#6B4520;--coral:#FDE6DD;--coralInk:#A13F2A;--hit:44px}
+*{box-sizing:border-box}body{margin:0;background:#EAE0CA;font:15px/1.55 -apple-system,"PingFang SC",sans-serif;color:var(--ink)}
+.states{display:flex;gap:8px;justify-content:center;padding:10px}.states button{min-height:36px;border-radius:999px;border:1px solid var(--line);background:var(--card);padding:0 14px;font:inherit;cursor:pointer}
+.states button[aria-pressed=true]{background:var(--leaf100);border-color:var(--leaf400);color:var(--leafInk);font-weight:600}
+.win{max-width:1440px;margin:0 auto;background:var(--paper);border-radius:14px;overflow:hidden;box-shadow:0 8px 30px #6b452022}
+.head{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--line)}.head b{font-size:18px}
+.modes{margin-left:auto;display:flex;background:var(--wood);border-radius:12px;padding:3px}.modes span{padding:10px 16px;border-radius:10px;color:var(--woodInk)}.modes .on{background:var(--card);color:var(--leafInk);font-weight:600}
+.cols{display:grid;grid-template-columns:400px 1fr;min-height:640px}@media(max-width:1180px){.cols{grid-template-columns:340px 1fr}}
+.left{border-right:1px solid var(--line);padding:14px;display:grid;gap:10px;align-content:start}.right{padding:18px 22px;display:grid;gap:12px;align-content:start}
+.btn{min-height:var(--hit);border-radius:12px;border:1px solid var(--line);background:var(--card);padding:0 16px;font:inherit;font-weight:600;cursor:pointer}.btn.primary{background:var(--leaf);border-color:transparent;color:var(--leafInk)}
+.drop{border:1.5px dashed var(--leaf400);border-radius:16px;padding:12px;background:var(--leaf50);display:grid;gap:6px}
+.small{font-size:13px;color:var(--ink2)}.err{color:var(--coralInk)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:10px 12px;box-shadow:0 2px 4px #6b452021}
+.paper{display:block;width:100%;text-align:left;font:inherit;color:inherit;cursor:pointer;margin-top:6px}.paper.sel{background:var(--leaf50);border-color:var(--leaf400)}
+.tag{display:inline-block;font-size:12.5px;padding:1px 8px;border-radius:999px;background:var(--wood);color:var(--woodInk)}.tag.wrong{background:var(--coral);color:var(--coralInk)}.tag.ok{background:var(--leaf100);color:var(--leafInk)}
+.figure{position:relative;width:min(100%,520px);aspect-ratio:3/4;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.figure .line{position:absolute;left:8%;right:8%;height:2.4%;background:#ece6d8;border-radius:3px}.box{position:absolute;border:3px solid #E98A6E;border-radius:6px}
+.pair{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}.pair .card p{margin:4px 0}
+.q{display:flex;gap:8px;align-items:center;min-height:var(--hit);width:100%;border-radius:12px;border:1px solid var(--line);background:var(--card);font:inherit;text-align:left;padding:6px 12px;cursor:pointer}
+.bar{height:6px;border-radius:6px;background:var(--wood)}.bar i{display:block;height:100%;border-radius:6px;background:var(--leaf400)}
+</style></head><body>
+<div class="states" role="group" aria-label="切换状态"><button data-s="import">① 导入中</button><button data-s="result" aria-pressed="true">② 两科两卷 · 原图框</button><button data-s="fail">③ 失败恢复</button></div>
+<div class="win"><div class="head"><b>小树</b><span class="small">四年级 · 当前孩子</span><div class="modes"><span>日历</span><span class="on">错题本</span><span>学习进展</span></div></div>
+<div class="cols"><div class="left" id="left"></div><div class="right" id="right"></div></div></div>
+<script>
+const S={state:'result',paper:'math',q:'m2'};
+const papers={math:{subject:'数学',title:'虚构单元练习（第三单元）',pages:'3页 · 跨第1–3页',counts:'AI判错 1 · 疑似 0 · 未判定 2',cover:'已检查3页作答页、逐题列出12题；未列出的题目仍未检查，没有错题不代表全卷正确。',qs:[
+ {k:'m2',label:'第2题',tag:'AI判错',cls:'wrong',said:'42 − 17 = 35',ref:'25',why:'个位 2 不够减 7，没有向十位借 1。',box:[10,22,62,12]},
+ {k:'m7',label:'第7题',tag:'未判定',cls:'',said:'（空白）',ref:'—',why:'答题格空白，不判孩子对错。',box:null},
+ {k:'m11',label:'第11题（主观题）',tag:'未判定',cls:'',said:'用两句话写出你的想法……',ref:'—',why:'主观题没有评分要求，保持未判定。',box:[10,58,80,20]}]},
+ chinese:{subject:'语文',title:'虚构小测',pages:'1页',counts:'AI判错 1 · 未判定 0',cover:'已检查1页作答页、逐题列出6题；没有错题不代表全卷正确。',qs:[
+ {k:'c3',label:'第3题',tag:'AI判错',cls:'wrong',said:'窗处',ref:'窗外',why:'“外”写成了“处”。',box:[12,40,48,10]}]}};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function left(){
+ const head=`<button class="btn primary" data-act="pick">导入照片…</button><div class="drop small">可多选或把照片拖到这里；不用先填科目、题号或建作业。</div>`;
+ if(S.state==='import')return head+`<div class="card"><b>今天 19:48 导入 · 6张</b><p class="small">正在保存原件 4/6…已完成的部分可以先看</p><div class="bar"><i style="width:66%"></i></div>
+  <button class="card paper sel" data-p="math"><b>数学 · 虚构单元练习</b><br><span class="small">3页 · 检查中</span></button></div><p class="small">原错题</p><div class="card">数学错题：第5题 <span class="tag wrong">待订正</span></div>`;
+ if(S.state==='fail')return head+`<div class="card"><b>今天 19:48 导入 · 6张</b><p class="small err">第6张没有保存（网络中断）；前5张原件已保存，选择不变。</p>
+  <button class="btn" data-act="retry">用同一提交重试未完成部分</button><p class="small err">组卷请求暂时失败，已完成的读图保留。</p><button class="btn" data-act="cont">继续失败部分</button>
+  <p class="small">待补的页：第4张看不清，请补拍；第5张与第2张是同一张照片，只读一次。</p></div>`;
+ return head+`<div class="card"><b>今天 19:48 导入 · 6张</b> <span class="tag ok">已完成</span>
+  ${Object.entries(papers).map(([id,p])=>`<button class="card paper ${S.paper===id?'sel':''}" data-p="${id}"><b>${p.subject} · ${esc(p.title)}</b><br><span class="small">${p.pages} · ${p.counts}</span></button>`).join('')}
+  <p class="small">待补：第4张看不清；第5张与第2张相同，只读一次。</p></div><p class="small">原错题</p><div class="card">数学错题：第2题 <span class="tag">AI判断</span> <span class="tag wrong">待订正</span></div>`;}
+function right(){
+ if(S.state==='fail')return `<b style="font-size:18px">已完成的部分照常可读</b><p class="small">失败的步骤只在你点“继续失败部分”后重做一次；不会自动重发，已到调用上限时不再提供继续。</p>`;
+ const p=papers[S.paper],q=p.qs.find(x=>x.k===S.q)||p.qs[0];
+ return `<div><b style="font-size:20px">${p.subject} · ${esc(p.title)}</b><p class="small">${p.pages} · ${p.counts}</p><p class="small">${esc(p.cover)}</p></div>
+ <div style="display:grid;gap:6px">${p.qs.map(x=>`<button class="q" data-q="${x.k}"><span class="tag ${x.cls}">${x.tag}</span>${esc(x.label)}${x.box?'':' <span class="small">· 未定位</span>'}</button>`).join('')}</div>
+ <div class="figure">${Array.from({length:14},(_,i)=>`<span class="line" style="top:${6+i*6.5}%"></span>`).join('')}${q.box?`<span class="box" style="left:${q.box[0]}%;top:${q.box[1]}%;width:${q.box[2]}%;height:${q.box[3]}%"></span>`:''}</div>
+ ${q.box?'':'<p class="small">没有可靠对应的题框，未定位；上面是完整原图。</p>'}
+ <div class="pair"><div class="card"><p class="small">原答（孩子写的）</p><p>${esc(q.said)}</p></div><div class="card"><p class="small">参考答案</p><p>${esc(q.ref)}</p></div></div>
+ <div class="card"><p class="small">判断依据 · <span class="tag">AI判断</span> 未经老师或家长核定</p><p>${esc(q.why)}</p></div>
+ ${q.cls==='wrong'?'<button class="btn primary">打开原错题 · 记订正</button>':''}`;}
+function paint(){document.getElementById('left').innerHTML=left();document.getElementById('right').innerHTML=right();
+ document.querySelectorAll('.states button').forEach(b=>b.setAttribute('aria-pressed',b.dataset.s===S.state));}
+document.addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;
+ if(b.dataset.s){S.state=b.dataset.s}else if(b.dataset.p){S.paper=b.dataset.p;S.q=papers[S.paper].qs[0].k}else if(b.dataset.q){S.q=b.dataset.q}else if(b.dataset.act==='cont'||b.dataset.act==='retry'){S.state='result'}paint();});
+paint();
+</script></body></html>
