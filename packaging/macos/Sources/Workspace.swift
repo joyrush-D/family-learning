@@ -700,7 +700,7 @@ struct SubjectList: View {
     }
 
     /// 所选日的课表节次与日程，排在按科事项之前；读不到时如实说明，不当作没课。
-    @ViewBuilder func scheduleSection(reveal: @escaping (PlanListKey) -> Void) -> some View {
+    @ViewBuilder var scheduleSection: some View {
         if let text = store.current?.schedule_error, !text.isEmpty {
             Section {
                 Text(text).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
@@ -715,8 +715,7 @@ struct SubjectList: View {
                     let row = PlanRow(plan: p, openReview: { r in store.openTopic(r.record_id, r.child_id) },
                                       draft: p.review == nil ? nil : store.reviewDraft(p, day: store.day),
                                       edit: { d, status in await store.saveReview(p.id, from: store.day, draft: d, status: status) },
-                                      restart: { store.reviewDrafts[p.id] = nil; Task { await store.load() } },
-                                      reveal: { reveal(p.listKey) })
+                                      restart: { store.reviewDrafts[p.id] = nil; Task { await store.load() } })
                         .listRowSeparator(.hidden)
                     if p.review == nil { row.tag(p.id) } else { row }
                 }
@@ -748,11 +747,8 @@ struct SubjectList: View {
     }
 
     var itemList: some View {
-        // 家庭复习卡片展开改期时先把整张卡滚进可见区（按行键 PlanListKey）：出错/保存提示压低列表后卡片下沿被截断，
-        // 点时间框时列表会先把这一行滚进来，控件从指针下移走、焦点留在列表；展开时先滚好，之后的点击直接落到控件上。
-        ScrollViewReader { proxy in
         List(selection: Binding(get: { store.selection }, set: { store.select($0) })) {
-            if !store.showDone { scheduleSection(reveal: { key in proxy.scrollTo(key) }) }
+            if !store.showDone { scheduleSection }
             ForEach(store.groups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { item in
@@ -776,7 +772,6 @@ struct SubjectList: View {
         .listStyle(.sidebar)
         .scrollContentBackground(.hidden)
         .probe("subject-list")
-        }
     }
 }
 
@@ -1135,8 +1130,6 @@ struct PlanRow: View {
     var draft: ReviewDraft? = nil
     var edit: (ReviewDraft, String) async -> Void = { _, _ in }
     var restart: () -> Void = {}
-    /// 展开改期后把这张卡整张滚进列表可见区（列表按行键定位）。
-    var reveal: () -> Void = {}
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
@@ -1155,7 +1148,7 @@ struct PlanRow: View {
             // The review editor takes the card's whole width under the title (the list column is 340pt in a 900 window), in rows
             // that each fit that width, so the date, both times and every action stay inside the column.
             if let review = plan.review, let draft {
-                ReviewEditor(plan: plan, review: review, draft: draft, save: draft.save, openReview: openReview, edit: edit, restart: restart, reveal: reveal)
+                ReviewEditor(plan: plan, review: review, draft: draft, save: draft.save, openReview: openReview, edit: edit, restart: restart)
             }
         }
         .padding(12).frame(maxWidth: .infinity, alignment: .leading)
@@ -1177,7 +1170,6 @@ struct ReviewEditor: View {
     var openReview: (PlanReview) -> Void
     var edit: (ReviewDraft, String) async -> Void
     var restart: () -> Void
-    var reveal: () -> Void = {}
     var state: String { save.busy ? "busy" : save.unknown ? "unknown" : save.conflict ? "conflict" : draft.dirty ? "dirty" : "idle" }
     /// 回执不明时冻结的那次提交：它的日期与操作（不是卡片里后来改的值）。
     var frozen: String {
@@ -1191,7 +1183,7 @@ struct ReviewEditor: View {
             VStack(alignment: .leading, spacing: 4) {
                 Button { openReview(review) } label: { Label("打开原错题与知识点", systemImage: "leaf") }
                     .probe("plan-review-open-" + plan.id, text: "打开原错题与知识点")
-                Button { draft.editing.toggle(); if draft.editing { DispatchQueue.main.async { reveal() } } } label: { Label(draft.editing ? "收起" : "改期 / 取消 / 完成", systemImage: "calendar") }
+                Button { draft.editing.toggle() } label: { Label(draft.editing ? "收起" : "改期 / 取消 / 完成", systemImage: "calendar") }
                     .probe("plan-review-edit-" + plan.id, text: draft.editing ? "收起" : "改期 / 取消 / 完成")
             }
             .disabled(draft.locked)
