@@ -120,18 +120,24 @@ def _evidence(raw, number):
     out = {}
     for key, limit in EVIDENCE_LIMITS.items():
         value = raw[key]
-        out[key] = _clean_text(' '.join(value.split()) if isinstance(value, str) else value, limit, '读图证据')
+        # 题号/页码类证据不跨换行拼接（含换行即拒绝）；其余证据文字按原样把排版空白归一为空格。
+        strict = key in ('first_label', 'last_label', 'printed_page')
+        out[key] = _clean_text(value if strict or not isinstance(value, str) else ' '.join(value.split()), limit, '读图证据')
     out.update(page_kind=raw['page_kind'], readability=raw['readability'])
     return out
 
 
-def _clean_text(value, limit, name):
+def _clean_text(value, limit, name, multiline=False):
+    """multiline 只用于转写/作答/订正/说明等可读文字：CRLF/CR 统一为 LF、Tab 为空格，段落换行保留；
+    其他控制字符（NUL、ESC、DEL 等）与题号/标签里的换行仍拒绝，不把两个题号拼成一个。"""
     if not isinstance(value, str):
         raise family_llm.LLMDraftError('错题标注中%s不是文字，请重试或手动录入' % name)
+    if multiline:
+        value = value.replace('\r\n', '\n').replace('\r', '\n').replace('\t', ' ')
     value = value.strip()
     if len(value) > limit:
         raise family_llm.LLMDraftError('错题标注中%s过长，请缩小本次资料范围' % name)
-    if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+    if any(ord(ch) < 32 and not (multiline and ch == '\n') or ord(ch) == 127 for ch in value):
         raise family_llm.LLMDraftError('错题标注中%s含有异常字符' % name)
     return value
 
@@ -183,9 +189,9 @@ def _validated(result, page_count, evidence=False):
                 'kind': raw['kind'],
                 'box': dict(x=x, y=y, w=w, h=h),
                 'label': _clean_text(raw['label'], LIMITS['label'], '题号'),
-                'text': _clean_text(raw['text'], LIMITS['text'], '题面转写'),
-                'answer': _clean_text(raw['answer'], LIMITS['answer'], '学生作答'),
-                'correction': _clean_text(raw['correction'], LIMITS['correction'], '订正内容'),
+                'text': _clean_text(raw['text'], LIMITS['text'], '题面转写', multiline=True),
+                'answer': _clean_text(raw['answer'], LIMITS['answer'], '学生作答', multiline=True),
+                'correction': _clean_text(raw['correction'], LIMITS['correction'], '订正内容', multiline=True),
                 'uncertain': raw['uncertain'],
                 'topic_hint': _clean_text(raw.get('topic_hint', ''), LIMITS['topic_hint'], '知识点候选'),
                 'error_hint': _clean_text(raw.get('error_hint', ''), LIMITS['error_hint'], '错误类型候选'),
@@ -212,7 +218,7 @@ def _validated(result, page_count, evidence=False):
     uncertainties = result['uncertainties']
     if not isinstance(uncertainties, list) or len(uncertainties) > MAX_UNCERTAINTIES:
         raise family_llm.LLMDraftError('错题待核对信息数量无法核对')
-    cleaned = [_clean_text(value, LIMITS['uncertainty'], '待核对说明') for value in uncertainties]
+    cleaned = [_clean_text(value, LIMITS['uncertainty'], '待核对说明', multiline=True) for value in uncertainties]
     return dict(pages=normalized_pages, uncertainties=[value for value in cleaned if value])
 
 
