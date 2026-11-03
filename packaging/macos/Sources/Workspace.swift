@@ -1511,7 +1511,7 @@ struct Inspector: View {
         let urgent = f.state == "next_morning" || f.state == "overdue"
         return VStack(alignment: .leading, spacing: 4) {
             Label(f.label, systemImage: factIcon(f.role)).font(.system(size: 12.5)).foregroundStyle(Palette.ink2)
-            Text((f.today == true ? "今天 " : "") + f.value).font(Palette.round(15, .bold))
+            Text((f.today == true ? "今天 " : "") + (f.known ? f.value : "时间未明确")).font(Palette.round(15, .bold))
                 .foregroundStyle(!f.known ? Palette.ink2 : urgent ? Palette.coralInk : Palette.ink).italic(!f.known)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             if f.state == "next_morning" { Badge(text: "明天", tone: Palette.coral, ink: Palette.coralInk) }
