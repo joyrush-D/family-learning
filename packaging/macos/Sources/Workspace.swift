@@ -709,7 +709,7 @@ struct HeaderBar: View {
                 .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("前一天").help("前一天 ⌘[").probe("day-prev")
             VStack(spacing: 1) {
                 Text(store.dayTitle).font(Palette.round(17, .bold)).foregroundStyle(Palette.ink)
-                Text(store.daySub).font(.system(size: 12)).foregroundStyle(Palette.ink2).lineLimit(1)
+                Text(store.daySub).font(Palette.small).foregroundStyle(Palette.ink2).lineLimit(1)
             }
             .frame(minWidth: compact ? 120 : 150).accessibilityElement(children: .combine)
             .probe("day-title", text: store.day + " " + store.daySub)
@@ -817,10 +817,6 @@ struct SubjectList: View {
                 let words = "学校消息的读取状态暂时无法核对，清单可能不完整。"
                 Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 18).padding(.vertical, 6).probe("school-read-unknown", text: words)
-            }
-            if store.mode == .wrong, store.current != nil, store.wrongItems.isEmpty, store.selectedPhotoPaper == nil {
-                Text("还没有错题。可在下面记一道，或在日历里那一项的反馈下记。").font(Palette.body).foregroundStyle(Palette.ink2)
-                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18).padding(.vertical, 4).probe("wrong-empty")
             }
             switch store.mode {
             case .calendar: itemList
@@ -1046,15 +1042,15 @@ struct WrongRow: View {
                 stateBadge(record.state)
             }
             if !record.note.isEmpty {
-                Text(record.note.replacingOccurrences(of: "\n", with: "；")).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                Text(record.note.replacingOccurrences(of: "\n", with: "；")).font(Palette.body).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true).geoProbe("wrong-note-\(record.id)", text: "body15 lines<=2")
             }
             if let basis = record.photo_basis {
-                Text(basis.words).font(.system(size: 12.5)).foregroundStyle(basis.current ? Palette.ink2 : Palette.coralInk)
+                Text(basis.words).font(Palette.small).foregroundStyle(basis.current ? Palette.ink2 : Palette.coralInk)
                     .fixedSize(horizontal: false, vertical: true).probe("wrong-basis-\(record.id)", text: basis.current ? "current" : "stale")
             }
             Text([record.day, record.task_title.map { "原作业：" + $0 } ?? "未关联原作业"].filter { !$0.isEmpty }.joined(separator: " · "))
-                .font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                .font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).geoProbe("wrong-meta-\(record.id)", text: "small13")
         }
         .padding(EdgeInsets(top: 10, leading: 12, bottom: 12, trailing: 12))
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1201,7 +1197,7 @@ struct RecordDetail: View {
                     }
                     ForEach(Array((entry?.lines ?? []).enumerated()), id: \.offset) { _, line in
                         HStack(alignment: .top, spacing: 8) {
-                            Text(line.first ?? "").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.woodInk).frame(width: 78, alignment: .leading)
+                            Text(line.first ?? "").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.woodInk).frame(width: 78, alignment: .leading)
                             Text(line.count > 1 ? line[1] : "").font(Palette.small).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -1252,7 +1248,7 @@ struct WeekStrip: View {
                         Text(isToday ? "今天" : WorkspaceStore.weekday(d.day)).font(.system(size: 13, weight: isToday ? .bold : .medium))
                         Text(WorkspaceStore.dayNumber(d.day)).font(Palette.round(22, .bold))
                         HStack(spacing: 4) {
-                            if d.today > 0 { Text("\(d.today)项").font(.system(size: 13, weight: .semibold)) }
+                            if d.today > 0 { Text("当天要做 \(d.today)").font(.system(size: 13, weight: .semibold)).fixedSize().geoProbe("week-count-" + d.day, text: "当天要做 \(d.today)") }
                             if (d.schedule ?? 0) > 0 { Circle().fill(Palette.leaf400).frame(width: 6, height: 6) }
                         }.frame(height: 17)
                     }
@@ -1473,7 +1469,7 @@ struct LearningCard: View {
             }
             ForEach(Array((entry.lines ?? []).enumerated()), id: \.offset) { _, line in
                 HStack(alignment: .top, spacing: 8) {
-                    Text(line.first ?? "").font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Palette.woodInk).frame(width: 78, alignment: .leading)
+                    Text(line.first ?? "").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.woodInk).frame(width: 78, alignment: .leading)
                     Text(line.count > 1 ? line[1] : "").font(Palette.small).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
                 }
             }
