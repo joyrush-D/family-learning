@@ -77,5 +77,33 @@ class ExcusedStepTest(unittest.TestCase):
         self.assertTrue(agent._school_same_changes('朗读仍是《溪边》第2、3自然段，不用读给家长听，明早抽听。', self.FACTS))
 
 
+class Run3RegressionTest(unittest.TestCase):
+    FACTS = '今晚朗读《溪边》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听'
+
+    def test_paragraph_numbers_never_stand_for_a_count(self):
+        self.assertNotIn((3, ''), agent._school_counts('朗读《溪边》第2、3自然段，各读两遍'))
+        said = '朗读《溪边》第2、3自然段，各读三遍，读给家长听；不用录音，也不用上传，明早抽听。'
+        self.assertTrue(agent._school_restated_reason(said, self.FACTS, said))
+        same = '朗读《溪边》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早抽听。'
+        self.assertEqual(agent._school_restated_reason(same, self.FACTS, same), '')
+
+    def test_same_title_of_another_subject_leads_no_step(self):
+        text = '语文《每日练习》今晚完成，做完放进语文夹里。\n\n英语《每日练习》\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。'
+        goal = '完成英语《每日练习》：一、看图选词第1—3题；二、标星单词 under、near 各抄写一遍。\n做完放进语文夹里。'
+        self.assertFalse(agent._school_step_owned(goal, '做完放进语文夹里。', [text])[0])
+
+    def test_a_paraphrased_waiver_keeps_the_change_review(self):
+        said = '《溪边》仍默写两遍，不用动笔。'
+        self.assertIn('不用动笔', agent._school_unrequired_excuses_dropped(said, '语文：默写《溪边》两遍。'))
+        self.assertTrue(agent._school_restated_reason(said, '语文：默写《溪边》两遍。', '默写《溪边》两遍，不用动笔。'))
+
+    def test_unchanged_correction_keeps_the_role_words(self):
+        home = ev('m:a', RoleDaysTest.HOME, '2026-11-04T15:40:00+08:00')
+        fix = ev('m:b', '更正今天数学《星河练习》的范围：第12页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。', '2026-11-04T17:00:00+08:00')
+        found = agent._school_role_days(RoleDaysTest.LEAD, [home, fix], [], words=True)
+        self.assertEqual(found[:2], ({'2026-11-04'}, '2026-11-06'))
+        self.assertIn('周五交给我', found[2])
+
+
 if __name__ == '__main__':
     unittest.main()

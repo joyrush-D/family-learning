@@ -676,7 +676,9 @@ def _school_step_owned(goal, step, texts, others=()):
         if not heading or c[0]!=anchor[0] or c[1]>=sentence:return False
         text=texts[c[0]];a=max(text.rfind(stop,0,c[1]) for stop in '。；;！!？?\n')+1
         b=min([i for i in (text.find(stop,c[1]) for stop in '。；;！!？?\n') if i!=-1] or [len(text)])
-        return bool(_school_named_objects(text[a:b])&_school_named_objects(heading))
+        # The same thing of the same subject: 语文《每日练习》 never leads 英语《每日练习》's list.
+        return (bool(_school_named_objects(text[a:b])&_school_named_objects(heading))
+                and set(re.findall(_SCHOOL_NATIVE_SUBJECTS,text[a:b]))==set(re.findall(_SCHOOL_NATIVE_SUBJECTS,heading)))
     if added:
         def stated(pattern,clause):return set(re.findall(pattern,re.sub(r'《[^》]*》','',clause)))
         def before(c):  # An earlier sentence of the item's own original states the same requirement (同书同页) or nothing of it.
@@ -2867,6 +2869,10 @@ def _school_counts(value):
     value=_SCHOOL_CLOCK.sub(' ',_SCHOOL_NAMED.sub(' ',value.lower()))
     # An explicit numeric range states each number in it (第1-3段 = 第1、2、3段); long or reversed ranges stay as written.
     value=re.sub(r'(\d+)\s*[-–—~～至到]\s*(\d+)',lambda m:'、'.join(str(n) for n in range(int(m[1]),int(m[2])+1)) if 0<int(m[2])-int(m[1])<=30 else m[0],value)
+    # A numbered list ends in its one unit (第2、3自然段 = 第2段、第3段): each of its numbers counts in that unit, never unitless,
+    # so a paragraph number can never stand for a count of readings (各读三遍).
+    value=value.replace('自然段','段')
+    value=re.sub(r'\d+(?:\s*[、，,和及与]\s*\d+)+\s*('+_SCHOOL_COUNT_UNITS+r')',lambda m:'、'.join(n+m[1] for n in re.findall(r'\d+',m[0][:len(m[0])-len(m[1])])),value)
     found=set()
     for number,unit in re.findall(r'(\d+)\s*('+_SCHOOL_COUNT_UNITS+')?',value): found.add((int(number),unit))
     for lead,word,unit in re.findall(r'(第|练习|习题)?([一二两三四五六七八九十]+)\s*('+_SCHOOL_COUNT_UNITS+')?',value):
@@ -3094,7 +3100,7 @@ def _school_same_changes(text, facts):
         if phrase not in facts and phrase not in plain:
             # Excusing a step the affair never asks for (不用背诵 beside a reading) changes nothing; one any word of which it states keeps the guard.
             excused=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',phrase)
-            if excused and not any(c in plain for c in excused[1]):continue
+            if excused and _school_excuse_unrequired(excused[1],plain):continue
             return True
     return False
 
@@ -3140,6 +3146,16 @@ def _school_same_own(text, others, own):
 _SCHOOL_CHANGED_REASON='提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。'
 
 
+# Whole learning operations a reminder may excuse as never asked: specific ones only, never 做/写/读/完成 or a paraphrase (动笔).
+_SCHOOL_EXCUSABLE_OPERATION=r'(?:背诵|抄写|默写|听写|跟读|订正|预习|复习)'
+
+
+def _school_excuse_unrequired(operation, plain):
+    """Whether an excused operation is positively one the affair never asks: a whole specific learning operation (背诵) no
+    character of which the affair states. Sharing no character proves nothing else (不用动笔 beside 默写 may withdraw it)."""
+    return bool(re.fullmatch(_SCHOOL_EXCUSABLE_OPERATION,operation)) and not any(c in plain for c in operation)
+
+
 def _school_unrequired_excuses_dropped(text, facts):
     """The reminder's words without each whole clause excusing a step the affair never states (不用背诵 beside a reading
     only): such an excuse takes away nothing the affair asks and adds nothing to do. An excuse any character of which the
@@ -3147,7 +3163,7 @@ def _school_unrequired_excuses_dropped(text, facts):
     plain=re.sub(r'[“”「」『』"]','',facts)
     def kept(m):
         found=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',m[1])
-        return '' if found and not any(c in plain for c in found[1]) else m[0]
+        return '' if found and _school_excuse_unrequired(found[1],plain) else m[0]
     return re.sub(r'([^，,。；;！!？?\n]*)([，,。；;！!？?\n]|$)',kept,text)
 
 
@@ -4220,7 +4236,7 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
                 or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,named))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,own))
                 or _school_role_days(body,[dict(e,text=body)],[])!=(done,next(iter(due)))):return None
     if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]
-                                                                         and all(e is not r for r,_ in restated)]):return None
+                                                                         and all(e is not r for r,_ in restated) and not unchanged(e)]):return None
     return (done,next(iter(due)),span) if words else (done,next(iter(due)))
 
 
@@ -7791,8 +7807,10 @@ def _school_native_saved(items,evidence):
         plan=item.get('plan',{});saved=plan.get('school_native_action');brief=plan.get('school_task',{})
         notice=plan.get('school_native_notice')
         if notice:
-            # Located words kept as a review notice of one listed original (its saved task, or a program-bound pending item).
-            if (saved or plan.get('school_native_cover') or brief.get('state')!='review' or brief.get('change') not in ('update','same','append','cancel')
+            # Located words kept as a review notice of one listed original (its saved task, or a program-bound pending item), or as
+            # the ready repeat the saved-same reading proved on its saved basis (target_basis), which apply_school_same revalidates.
+            proven=brief.get('state')=='ready' and brief.get('change')=='same' and brief.get('target_id') and brief.get('target_basis')
+            if (saved or plan.get('school_native_cover') or brief.get('state')!='review' and not proven or brief.get('change') not in ('update','same','append','cancel')
                     or not (brief.get('target_id') or plan.get('school_pending_of')) or any(lookup.get(n.get('id'),{}).get('quote')!=n.get('quote') for n in notice)):
                 raise AgentError('学校完整要求未按对应行动保存，整批未写入',409,'school_action_coverage')
             assigned.update(n['id'] for n in notice);continue
