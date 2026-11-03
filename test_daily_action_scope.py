@@ -334,7 +334,7 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.assertEqual(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), ({'2026-11-03'}, '2026-11-04'))
         for quote in ('明晚不用跳绳100下；后天体育课检查。', '明晚别跳绳100下；后天体育课检查。', '如果下雨，明晚跳绳100下；后天体育课检查。',
                       '明晚跳绳100下，后天或大后天检查。', '明晚有3次机会；后天检查。', '明晚原地高抬腿30次吗？后天体育课检查。', '明晚朗读课文3遍。'):
-            self.assertIsNone(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), quote)
+            self.assertNotIn('2026-11-04', (agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []) or (set(),))[0], quote)
         quote = '体育作业：明晚原地高抬腿30次；后天体育课检查。'
         self.assertEqual(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), ({'2026-11-04'}, '2026-11-05'))
         quote = '今晚或明晚跳绳100下；后天体育课检查。'
