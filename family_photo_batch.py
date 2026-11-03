@@ -23,7 +23,9 @@ READ_IMAGES = fwq.MAX_IMAGES
 CHECK_IMAGES = 8
 SAVE_CHUNK = fwr.MAX_SAVE_ITEMS
 REVIEW_ITEMS = 25  # homework_reference_draft 每次逐题结果上限（原 schema maxItems）
-FOLLOWUP_LIMIT = 10  # 每批每版本按有据未查题号补查的调用总上限
+FOLLOWUP_LIMIT = 10  # 每批每版本补查的实际模型尝试上限（含失败、结果未知与家长显式继续）
+TOTAL_LIMIT = 51  # 每批每版本全部实际模型尝试硬上限：⌈30/3⌉+1+30+10
+LIMIT_NOTE = '已达本版本模型调用上限（全部%d次、补查%d次，按实际尝试计），未再调用；原图、已完成结果和未查范围保留'
 ROUND_SAVES = 20
 STALE_RUNNING = dt.timedelta(minutes=15)
 READ_TIMEOUT = 150
@@ -112,7 +114,7 @@ def _write(c, row, u, now):
 def _refresh(u):
     states = {s['state'] for s in u['steps']}
     u['state'] = ('running' if 'running' in states else 'queued' if 'todo' in states else
-                  'needs_attention' if states & {'failed', 'unknown'} else 'done')
+                  'needs_attention' if states & {'failed', 'unknown', 'blocked'} else 'done')
     if u['state'] == 'done' and any(p.get('unchecked_questions') for p in u['papers']):
         u['state'] = 'needs_attention'
 
@@ -288,8 +290,10 @@ def resume(app, obj, now=None):
             raise BatchError('这批照片已更新，请刷新后再继续', 409, 'photo_batch_changed')
         u = json.loads(row['understanding'])
         for step in u['steps']:
-            if step['state'] in ('failed', 'unknown'):
+            if _resumable(u, step):
                 step.update(state='todo', error='')
+            elif step['state'] in ('failed', 'unknown'):
+                step.update(state='blocked', error=LIMIT_NOTE % (TOTAL_LIMIT, FOLLOWUP_LIMIT))
         _write(c, row, u, now)
         return view_row(app, c, c.execute('SELECT * FROM photo_batches WHERE id=?', (row['id'],)).fetchone())
 
@@ -489,8 +493,8 @@ def _apply_group(u, papers, pending, issues, step):
 def _classify(q):
     """确定错只限：判 incorrect、有学生原答、无不确定说明、非主观题。只有题面/空白/主观题都不判孩子错。"""
     answered = bool((q.get('student_answer') or '').strip())
-    if q.get('question_kind') == 'subjective':
-        return 'unknown'
+    if q.get('question_kind') != 'objective':
+        return 'unknown'  # 主观题、题型缺失或不明：不判孩子对错，不自动记错题
     if q['judgment'] == 'correct':
         return 'correct' if answered else 'unknown'
     if q['judgment'] == 'incorrect' and answered:
@@ -685,7 +689,7 @@ def _run(app, row, u, step):
     return family_llm.homework_reference_draft(_images(app, row, step['pages']), data_path=app.DATA, timeout=CHECK_TIMEOUT,
                                                review=True, reference_images=_images(app, row, step['refs']),
                                                image_labels=labels, reference_labels=refs, program_coverage=coverage,
-                                               pending_labels=step.get('labels', ()))
+                                               pending_labels=step.get('labels', ()), keep_question_kind=True)
 
 
 def _apply(u, step, outcome):
@@ -712,18 +716,18 @@ def _apply(u, step, outcome):
             known = {_norm_label(q['label']) for q in segment['questions'] + segment.get('followup_questions', [])}
             added = [q for q in judged if _norm_label(q['label']) in wanted and _norm_label(q['label']) not in known]
             segment.setdefault('followup_questions', []).extend(added)
-            got = {_norm_label(q['label']) for q in added}
-            segment['unchecked'] = [l for l in segment.get('unchecked', []) if _norm_label(l) not in got]
+            have = {_norm_label(q['label']) for q in segment['questions'] + segment['followup_questions']}
+            segment['unchecked'] = [l for l in segment.get('unchecked', []) if _norm_label(l) not in have]
             if model_coverage:
                 segment['model_coverage'] = (segment.get('model_coverage', '') + '\n补查：' + model_coverage)[:3000]
-            missing = [label for norm, label in wanted.items() if norm not in got]
+            missing = [label for norm, label in wanted.items() if norm not in have]
             if missing:
                 note = '补查没有返回所选题号（%s），结果未知；未自动重新调用，可点“继续失败部分”' % '、'.join(missing)
         else:
             segment.update(state='done', coverage=outcome['coverage'][:1500], model_coverage=model_coverage, questions=judged)
             gaps = _evidenced_gaps(u['pages'], segment['pages'], judged)
             segment['unchecked'] = gaps
-            used = sum(1 for s in u['steps'] if s.get('followup') and s.get('version') == u['version'])
+            used = _spent(u)['followup'] + sum(1 for s in u['steps'] if s.get('followup') and s.get('version') == u['version'] and s['state'] == 'todo')
             for start in range(0, len(gaps), REVIEW_ITEMS):
                 if used >= FOLLOWUP_LIMIT:
                     break  # 超过本版本补查上限：保留可见未检查，不再安排。
@@ -735,6 +739,15 @@ def _apply(u, step, outcome):
         if all(s['state'] == 'done' for s in paper['segments']):
             _finish_paper(u, paper)
         return note
+
+
+def _spent(u):
+    return (u.get('attempts') or {}).get(str(u['version']), dict(all=0, followup=0))
+
+
+def _resumable(u, step):
+    spent = _spent(u)
+    return step['state'] in ('failed', 'unknown') and spent['all'] < TOTAL_LIMIT and not (step.get('followup') and spent['followup'] >= FOLLOWUP_LIMIT)
 
 
 def _claim(app, now):
@@ -780,6 +793,13 @@ def _claim(app, now):
                 c.execute('RELEASE photo_save')
                 _write(c, row, u, now)
                 return dict(kind='save', batch_id=row['id'])
+            spent = u.setdefault('attempts', {}).setdefault(str(u['version']), dict(all=0, followup=0))
+            if spent['all'] >= TOTAL_LIMIT or step.get('followup') and spent['followup'] >= FOLLOWUP_LIMIT:
+                step.update(state='blocked', at=now.isoformat(), error=LIMIT_NOTE % (TOTAL_LIMIT, FOLLOWUP_LIMIT))
+                _write(c, row, u, now)
+                return dict(kind='blocked', batch_id=row['id'])
+            spent['all'] += 1
+            spent['followup'] += 1 if step.get('followup') else 0
             step.update(state='running', at=now.isoformat(), attempts=step['attempts'] + 1, error='')
             u['calls']['used'] += 1
             _write(c, row, u, now)
@@ -817,7 +837,7 @@ def advance(app, now=None, budget=1):
         claim = _claim(app, now) if used < budget else _claim_saves_only(app, now)
         if claim is None:
             break
-        if claim['kind'] == 'save':
+        if claim['kind'] in ('save', 'blocked'):
             saves += 1
             if saves >= ROUND_SAVES:
                 break
@@ -922,9 +942,9 @@ def view_row(app, c, row):
                 updated=row['updated'], state=u['state'], pages=page_list, papers=papers, pending=u['pending'],
                 stale=u['stale'], issues=u['issues'],
                 progress=dict(done=sum(s['state'] == 'done' for s in model_steps), total=len(model_steps),
-                              failed=[dict(id=s['id'], kind=s['kind'], error=s['error']) for s in steps if s['state'] in ('failed', 'unknown')],
-                              calls=u['calls']['used']),
-                can_continue=any(s['state'] in ('failed', 'unknown') for s in steps))
+                              failed=[dict(id=s['id'], kind=s['kind'], error=s['error']) for s in steps if s['state'] in ('failed', 'unknown', 'blocked')],
+                              calls=u['calls']['used'], attempts=_spent(u)),
+                can_continue=any(_resumable(u, s) for s in steps))
 
 
 def view(app, query):
