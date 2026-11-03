@@ -32,13 +32,15 @@ import family_agent, family_llm, family_photo_batch as fpb, family_wrong_questio
 family_llm.configuration = lambda *a, **k: ('https://example.invalid', 'synthetic')
 PNG = bytes.fromhex('${PNG_HEX}')
 TAGS = {PNG + b'synthetic-' + t.encode(): t for t in ('m1', 'm2', 'c1')}
-def ev(subject, title, printed):
-    return dict(subject=subject, subject_basis='题面内容', title=title, printed_page=printed, first_label='第1题', last_label='第5题',
+def ev(subject, title, printed, first, last):
+    # The fictional read evidence names exactly the questions its own review reply returns, so no evidenced gap is invented.
+    return dict(subject=subject, subject_basis='题面内容', title=title, printed_page=printed, first_label=first, last_label=last,
                 head='虚构开头', tail='虚构结尾', page_kind='answered', readability='clear')
 def reg(label, y):
     return dict(kind='wrong_item', box=dict(x=100, y=y, w=600, h=150), label=label, text='虚构题面', answer='35', correction='', uncertain=False)
-PAGES = {'m1': (ev('数学', '虚构数学练习', '1'), [reg('第2题', 200)]), 'm2': (ev('数学', '虚构数学练习', '2'), [reg('第4题', 400)]),
-         'c1': (ev('语文', '虚构语文小测', '1'), [reg('第2题', 300)])}
+PAGES = {'m1': (ev('数学', '虚构数学练习', '1', '第2题', '第2题'), [reg('第2题', 200)]),
+         'm2': (ev('数学', '虚构数学练习', '2', '第4题', '第5题'), [reg('第4题', 400)]),
+         'c1': (ev('语文', '虚构语文小测', '1', '第2题', '第2题'), [reg('第2题', 300)])}
 failed_group = []
 def item(label, question, said, ref, judgment, reason='', uncertainty=''):
     return dict(label=label, question=question, student_answer=said, answer=ref, judgment=judgment, error_reason=reason,
