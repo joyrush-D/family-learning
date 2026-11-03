@@ -6503,7 +6503,11 @@ def _school_native_errand(clause,owned):
     when=(r'(?:请\s*)?(?:(?:'+lesson+r')\s*(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午|晚上)\s*)?'
           r'|(?:(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*)?(?:(?:早上|上午|中午|下午|晚上)\s*)?(?:(?:'+lesson+r'|到校后?|来校时?)\s*)?)')
     asker=lambda who:r'(?:请\s*)?(?:(?:'+who+r')\s*)?(?:(?:要|需|须|记得|务必)\s*)?'
-    carried=re.fullmatch(when+asker(r'孩子|学生|同学们?')+r'(?:带(?:上|好|齐|来)?|携带)(?![回到去领着读])\s*(\S[^，,]*)',part)
+    # The child asked may also stand before its day (学生11月16日体育课…), as _PREPARED_ASKER reads who is asked, and an ordinary
+    # limiter right before the predicate (只带、仅需携带) still carries a thing of its own; 只要 may open a condition and is none.
+    child=r'孩子|学生|同学们?'
+    carried=re.fullmatch(r'(?:(?:'+child+r')\s*)?'+when+asker(child)+r'(?:(?:只|仅)\s*(?:(?:需要?|须)\s*)?)?'
+                         r'(?:带(?:上|好|齐|来)?|携带)(?![回到去领着读])\s*(\S[^，,]*)',part)
     # A parent may be asked to prepare (今晚请家长准备好一条短绳). The title-blanked copy keeps every position, so the thing
     # is cut from the original words.
     prepared=not carried and re.fullmatch(when+asker(r'家长|孩子|学生|同学们?')+_PREPARE+r'\s*('+_PREPARED_THING+r')\s*',
