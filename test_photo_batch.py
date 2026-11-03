@@ -318,6 +318,84 @@ class PhotoBatchTest(unittest.TestCase):
         self.rounds(model, 3)
         self.assertEqual(len(model.calls), calls, 'no automatic retry')
 
+    def dense_with(self, key, review):
+        PAGES['D01'] = dict(evidence=evidence('数学', '虚构密集页', '1', first='第1题', last='第31题'), regions=[region('第1题', 100)])
+        model = Model(self.ids)
+        model.group = self.paper_of(['D01'], '虚构密集页')
+        model.review = lambda seen: review(model, '第26题' in json.dumps(model.last_messages, ensure_ascii=False))
+        _, (code, created) = self.batch(key, ['D01'])
+        return model, created
+
+    def test_partial_follow_up_then_explicit_continue_accumulates_to_done_without_duplicates(self):
+        asked = []
+        def review(model, followup):
+            if not followup:
+                return [item('第%d题' % n, 'incorrect') for n in range(1, 26)]
+            asked.append(1)
+            return [item('第%d题' % n, 'incorrect') for n in (range(26, 31) if len(asked) == 1 else range(26, 32))]
+        model, created = self.dense_with('batch-key-0000000014', review)
+        self.rounds(model, 6)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        self.assertEqual((view['state'], view['can_continue'], view['papers'][0]['unchecked_questions']), ('needs_attention', True, ['第31题']))
+        self.request('/api/photo-batch/continue', dict(batch_id=created['id'], version=1))
+        self.rounds(model, 4)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        (paper,) = view['papers']
+        self.assertEqual((view['state'], view['can_continue'], paper['unchecked_questions']), ('done', False, []), view['progress'])
+        self.assertEqual(sorted(int(fpb._norm_label(q['label'])) for q in paper['questions']), list(range(1, 32)))
+        calls = len(model.calls)
+        self.rounds(model, 2)
+        code, state = self.request('/api/state')
+        self.assertEqual((len(model.calls), sum(r['source'] == '错题照片核对' for r in state['records'])), (calls, 31))
+
+    def test_follow_up_budget_counts_actual_attempts_including_explicit_continue(self):
+        def review(model, followup):
+            if followup:
+                raise family_llm.LLMDraftError('模型暂时不可用（虚构）')
+            return [item('第%d题' % n, 'incorrect') for n in range(1, 26)]
+        model, created = self.dense_with('batch-key-0000000015', review)
+        with patch.object(fpb, 'FOLLOWUP_LIMIT', 2):
+            self.rounds(model, 4)
+            for _ in range(3):
+                self.request('/api/photo-batch/continue', dict(batch_id=created['id'], version=1))
+                self.rounds(model, 3)
+            code, view = self.request('/api/photo-batch?id=' + created['id'])
+        self.assertEqual(model.calls.count('family_homework_reference'), 1 + 2, 'two actual follow-up attempts, retries included')
+        self.assertEqual((view['state'], view['can_continue'], view['progress']['attempts']['followup']), ('needs_attention', False, 2))
+        self.assertEqual(view['papers'][0]['unchecked_questions'], ['第%d题' % n for n in range(26, 32)])
+        self.assertTrue(any('上限' in f['error'] for f in view['progress']['failed']))
+
+    def test_total_attempt_hard_cap_blocks_without_a_continue_entry(self):
+        _, (code, created) = self.batch('batch-key-0000000016', ['m1', 'c1'])
+        model = Model(self.ids)
+        with patch.object(fpb, 'TOTAL_LIMIT', 1):
+            self.rounds(model, 4)
+            code, view = self.request('/api/photo-batch?id=' + created['id'])
+            self.request('/api/photo-batch/continue', dict(batch_id=created['id'], version=1))
+            self.rounds(model, 2)
+        self.assertEqual(model.calls, [fwq.TASK_NAME], 'the hard cap stops further calls')
+        self.assertEqual((view['state'], view['can_continue']), ('needs_attention', False))
+
+    def test_subjective_or_missing_kind_is_never_an_ai_wrong(self):
+        raw = dict(items=[dict(item('第1题', 'incorrect'), question_kind='subjective')], coverage='虚构', question_labels=['第1题'])
+        with patch.object(family_llm, '_chat_json', return_value=raw):
+            plain = family_llm.homework_reference_draft([dict(mime='image/png', data=PNG)], review=True)
+        with patch.object(family_llm, '_chat_json', return_value=json.loads(json.dumps(raw))):
+            kept = family_llm.homework_reference_draft([dict(mime='image/png', data=PNG)], review=True, keep_question_kind=True)
+        self.assertNotIn('question_kind', plain['questions'][0], 'other callers see the unchanged fields')
+        self.assertEqual((fpb._classify(plain['questions'][0]), kept['questions'][0]['question_kind'], fpb._classify(kept['questions'][0])),
+                         ('unknown', 'subjective', 'unknown'))
+        _, (code, created) = self.batch('batch-key-0000000017', ['m1'])
+        model = Model(self.ids)
+        model.group = dict(papers=[dict(subject='数学', title='虚构', basis='', pages=[dict(page_id='p01', order=1, role='answered')])], pending=[], same_pages=[])
+        model.review = lambda seen: [dict(item('第1题', 'incorrect'), question_kind='subjective'), item('第2题', 'incorrect')]
+        self.rounds(model, 5)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        states = {q['label']: q['state'] for q in view['papers'][0]['questions']}
+        self.assertEqual(states, {'第1题': 'unknown', '第2题': 'wrong'})
+        code, state = self.request('/api/state')
+        self.assertEqual([r['title'] for r in state['records'] if r['source'] == '错题照片核对'], ['数学错题：第2题'])
+
     def test_grouping_cannot_turn_a_questions_only_page_into_an_answered_page(self):
         info = {'p01': dict(evidence=dict(page_kind='questions_only')), 'p02': dict(evidence=dict(page_kind='answered'))}
         raw = dict(papers=[dict(subject='数学', title='甲', basis='', pages=[dict(page_id='p01', order=1, role='answered'),

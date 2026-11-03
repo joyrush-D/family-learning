@@ -2837,9 +2837,11 @@ def _source_question_matches(label,rows,titles,allow_bare):
 def homework_reference_draft(images, *, data_path=None, timeout=90, review=False, reference_images=(),
                              reference_documents=(), image_labels=(), reference_labels=(), program_coverage=(),
                              previous_documents=(), previous_text='', review_instruction='', task_action='', answer_note='',
-                             question_documents=(), pending_labels=(), selected_labels=()):
-    """Ordered worksheet/answer images; printing stays at four, answer review at eight."""
-    if type(review) is not bool: raise ValueError('作业整理用途不正确')
+                             question_documents=(), pending_labels=(), selected_labels=(), keep_question_kind=False):
+    """Ordered worksheet/answer images; printing stays at four, answer review at eight.
+    keep_question_kind (opt-in, review only): each returned question also carries its validated question_kind; added
+    not-checked items carry 'unknown'. Other callers keep the unchanged question fields."""
+    if type(review) is not bool or type(keep_question_kind) is not bool: raise ValueError('作业整理用途不正确')
     limit=MAX_HOMEWORK_REVIEW_IMAGES if review else 4
     question_documents=list(question_documents) if isinstance(question_documents,(list,tuple)) else None
     if (question_documents is None or len(question_documents)>8 or not review and question_documents
@@ -3004,13 +3006,14 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     result={**result,'items':[dict(item) if isinstance(item,dict) else item for item in result['items']]}
     limits=dict(label=80,question=800,student_answer=300,answer=1000,error_reason=600,
                 possible_cause=600,steps=1200,uncertainty=300)
-    seen_question_labels=set()
+    seen_question_labels=set();kinds={}
     for item in result['items']:
         question_kind=None
         if review:
             if not isinstance(item,dict) or item.get('question_kind') not in ('objective','subjective','unknown'):
                 raise LLMDraftError('题型依据无法核对，请补充原题或手动核对')
             question_kind=item.pop('question_kind')
+            kinds[id(item)]=question_kind
         if isinstance(item,dict):
             for key in limits:
                 if isinstance(item.get(key),str): item[key]=re.sub(r'[\r\n\t]+',' ',item[key])
@@ -3212,6 +3215,8 @@ question_kind按实际资料明确的题型写objective、subjective或unknown�
     joined='\n'.join(text)
     if len(joined)>12000: raise LLMDraftError('参考草稿过长，请缩小范围后分批核对')
     coverage=result['coverage']+('\n实际读取范围：'+'；'.join(program_coverage) if program_coverage else '')
+    if review and keep_question_kind:
+        for item in result['items']: item['question_kind']=kinds.get(id(item),'unknown')
     draft=dict(text=joined,coverage=coverage,items=len(result['items']),questions=result['items'],
                wrong_items=len(wrong),unknown_items=sum(i['judgment']=='unknown' for i in result['items']))
     if 'comparison' in result or review and unknown: draft['comparison']=comparison
