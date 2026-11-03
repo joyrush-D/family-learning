@@ -39,7 +39,7 @@ enum Palette {
 enum ListMode: String, CaseIterable, Identifiable { case calendar = "日历", wrong = "错题本", learning = "学习进展"; var id: String { rawValue } }
 
 enum SheetKind: Identifiable {
-    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong, taskWrong(DayItem), source(DayItem, Publication)
+    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong, taskWrong(DayItem), source(DayItem, Publication, String)
     var id: String {
         switch self {
         case .feedback(let i): return "feedback-" + i.id
@@ -48,7 +48,7 @@ enum SheetKind: Identifiable {
         case .correction(let r): return "correction-\(r.id)"
         case .addWrong: return "wrong-add"
         case .taskWrong(let i): return "wrong-task-" + i.id
-        case .source(let i, let p): return "source-\(i.id)-" + p.ref
+        case .source(let i, let p, _): return "source-\(i.id)-" + p.ref
         }
     }
 }
@@ -1600,7 +1600,7 @@ struct Inspector: View {
                 HStack(alignment: .center, spacing: 10) {
                     Text([p.source_name, p.sender].filter { !$0.isEmpty }.joined(separator: " · ")).font(Palette.body).foregroundStyle(Palette.ink)
                         .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
-                    Button { store.sheetDirty = false; store.sheet = .source(item, p) } label: { Label("看原消息", systemImage: "text.bubble") }
+                    Button { store.sheetDirty = false; store.sheet = .source(item, p, store.childID) } label: { Label("看原消息", systemImage: "text.bubble") }
                         .buttonStyle(GroveButtonStyle(kind: .quiet)).help("在这一项里看原文、发布人、时刻与附件").probe("source-open-" + p.ref, text: p.ref)
                 }
             }
@@ -1718,19 +1718,37 @@ struct SheetHost: View {
         case .correction(let record): CorrectionSheet(store: store, record: record)
         case .addWrong: WrongAddSheet(store: store)
         case .taskWrong(let item): WrongAddSheet(store: store, item: item)
-        case .source(let item, let p): SourceSheet(store: store, item: item, publication: p)
+        case .source(let item, let p, let child): SourceSheet(store: store, item: item, publication: p, child: child)
         }
     }
 }
 
-/// 一条来源消息的原文（只读）：发布人、时刻、原文与服务端给出的这一孩子这一条原消息自己的附件；原件用同一查看器打开，关闭回到同一项。
-/// 读取失败保留此前内容并可重试；不写业务、不调用模型。
+/// 一条来源消息的原文（只读）。先带这条出处自己的事项编号读：服务端核对同一孩子、同一事项、这条原消息属于它，只给本事项选用的原件
+/// （本事项已采用）。核对通过后再按同一孩子、来源、消息读这条原消息自己的全部已保存原件，按编号分出“原消息其它附件（未纳入本项检查）”，
+/// 不按文件名猜。核对失败（含 403）只给提示与重试，不改用不带事项的读取；全部附件读不到时保留已读内容、说明并可重试，不说没有附件。
+/// 只读：不写业务、不调用模型，看过不等于采用或读懂。读回时孩子、事项或出处已不是点开时的那个，就丢弃不显示。
+/// 验收锚点：source-item（孩子 事项 出处）、source-attachments（scoped/adopted/other/raw）、source-file-<编号>、source-other-file-<编号>、
+/// source-error/source-retry、source-other-error/source-other-retry、source-no-file。
 struct SourceSheet: View {
     @ObservedObject var store: WorkspaceStore
     let item: DayItem
     let publication: Publication
+    /// 点开时的孩子编号。
+    let child: String
     @State private var message: SourceMessage?
     @State private var error = ""
+    @State private var others: [SourceFile]?
+    @State private var otherUnavailable = 0
+    @State private var otherError = ""
+    @State private var reads = 0
+
+    /// 同组出处按它自己的原事项编号核对归属（较早后台没有时用这一项的编号）。
+    var task: String { publication.task_id ?? item.task_id }
+    var stillHere: Bool {
+        guard store.childID == child, case .source(let i, let p, let c)? = store.sheet else { return false }
+        return i.id == item.id && p.ref == publication.ref && c == child
+    }
+    var rawState: String { !otherError.isEmpty ? "error" : others == nil ? "loading" : "ok" }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1741,25 +1759,37 @@ struct SourceSheet: View {
                     .buttonStyle(GroveButtonStyle()).keyboardShortcut(.cancelAction).probe("source-back")
             }
             Text(store.childName + " · " + item.title).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
-                .probe("source-item", text: item.id)
+                .probe("source-item", text: child + " " + item.id + " " + publication.ref)
             if let m = message {
                 let meta = [m.sender, m.time, m.sourceName].filter { !$0.isEmpty }.joined(separator: " · ")
                 Text(meta.isEmpty ? "发布人与时刻未记录" : meta).font(Palette.round(14)).foregroundStyle(Palette.ink).probe("source-meta", text: meta)
                 ScrollView {
                     Text(m.text).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).probe("source-text", text: m.text)
-                }.frame(maxHeight: 280)
-                if m.files.isEmpty {
-                    Text(m.unavailable > 0 ? "这条消息有 \(m.unavailable) 个附件暂时打不开。" : "这条消息没有附件。").font(Palette.small).foregroundStyle(Palette.ink2).probe("source-no-file")
-                }
-                ForEach(m.files) { f in
-                    HStack(spacing: 10) {
-                        Text(f.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.middle).help(f.name)
-                        Spacer(minLength: 8)
-                        Button { store.openDocument(store.client.url("/upload/" + f.id), f.name) } label: { Label("打开原件", systemImage: "eye") }
-                            .buttonStyle(GroveButtonStyle()).probe("source-file-" + f.id, text: f.name)
+                }.frame(maxHeight: 220)
+                VStack(alignment: .leading, spacing: 8) {
+                    if m.scoped || !m.files.isEmpty {
+                        let head = m.scoped ? "本事项已采用" : "原消息附件"
+                        Text(m.files.isEmpty ? head + "：无" : head).font(Palette.round(14, .bold)).foregroundStyle(Palette.ink)
+                        ForEach(m.files) { f in fileRow(f, "source-file-") }
+                    }
+                    if let o = others, !o.isEmpty {
+                        Text("原消息其它附件（未纳入本项检查）").font(Palette.round(14, .bold)).foregroundStyle(Palette.woodInk)
+                        ForEach(o) { f in fileRow(f, "source-other-file-") }
+                    }
+                    if !otherError.isEmpty {
+                        Text("这条消息的全部附件暂时读不到：" + otherError).font(Palette.small).foregroundStyle(Palette.coralInk)
+                            .fixedSize(horizontal: false, vertical: true).probe("source-other-error", text: otherError)
+                        Button("重新读取附件") { Task { await readOthers() } }.buttonStyle(GroveButtonStyle()).probe("source-other-retry")
+                    } else if others == nil {
+                        Text("正在读取这条消息的全部附件…").font(Palette.small).foregroundStyle(Palette.ink2)
+                    } else if m.files.isEmpty && (others ?? []).isEmpty {
+                        let n = m.unavailable + otherUnavailable
+                        let words = n > 0 ? "这条消息有 \(n) 个附件暂时打不开。" : "未有已保存附件。"
+                        Text(words).font(Palette.small).foregroundStyle(Palette.ink2).probe("source-no-file", text: words)
                     }
                 }
+                .probe("source-attachments", text: "scoped=\(m.scoped) adopted=\(m.files.count) other=\(others.map { String($0.count) } ?? "-") raw=\(rawState)")
             } else if error.isEmpty {
                 Text("正在读取原消息…").font(Palette.body).foregroundStyle(Palette.ink2)
             }
@@ -1773,11 +1803,47 @@ struct SourceSheet: View {
         .task { await read() }
     }
 
-    /// 同组出处按它自己的原事项编号核对归属（较早后台没有时用这一项的编号）；失败只给提示，已读到的原文留着。
+    func fileRow(_ f: SourceFile, _ anchor: String) -> some View {
+        HStack(spacing: 10) {
+            Text(f.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.middle).help(f.name)
+            Spacer(minLength: 8)
+            Button { store.openDocument(store.client.url("/upload/" + f.id), f.name) } label: { Label("打开原件", systemImage: "eye") }
+                .buttonStyle(GroveButtonStyle()).probe(anchor + f.id, text: f.name)
+        }
+    }
+
+    /// 先核归属：失败只给提示与重试（不改用不带事项的读取）；通过后再读这条消息的全部附件。没有事项编号时第一次读的就是整条消息。
     func read() async {
+        reads += 1; let mine = reads
         error = ""
-        do { message = try await store.client.message(child: store.childID, ref: publication.ref, task: publication.task_id ?? item.task_id) }
-        catch { self.error = (error as? WorkspaceError)?.text ?? "暂时读不到原消息，原记录不受影响；请重试。" }
+        do {
+            let m = try await store.client.message(child: child, ref: publication.ref, task: task)
+            guard mine == reads, stillHere else { return }
+            message = m
+        } catch {
+            guard mine == reads, stillHere else { return }
+            self.error = (error as? WorkspaceError)?.text ?? "暂时读不到原消息，原记录不受影响；请重试。"
+            return
+        }
+        if task.isEmpty { others = []; return }
+        await readOthers()
+    }
+
+    /// 归属核对通过后才读：同一孩子、来源、消息的全部已保存原件，去掉上面已列的（按编号）。读不到时已显示的内容都留着。
+    func readOthers() async {
+        guard let shown = message, !task.isEmpty else { return }
+        reads += 1; let mine = reads
+        otherError = ""
+        do {
+            let raw = try await store.client.message(child: child, ref: publication.ref, task: "")
+            guard mine == reads, stillHere else { return }
+            let ids = Set(shown.files.map(\.id))
+            others = raw.files.filter { !ids.contains($0.id) }
+            otherUnavailable = max(0, raw.unavailable - shown.unavailable)
+        } catch {
+            guard mine == reads, stillHere else { return }
+            otherError = (error as? WorkspaceError)?.text ?? "请重试。"
+        }
     }
 }
 
