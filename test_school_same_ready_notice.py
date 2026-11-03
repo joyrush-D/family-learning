@@ -81,7 +81,8 @@ class Run3RegressionTest(unittest.TestCase):
     FACTS = '今晚朗读《溪边》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听'
 
     def test_paragraph_numbers_never_stand_for_a_count(self):
-        self.assertNotIn((3, ''), agent._school_counts('朗读《溪边》第2、3自然段，各读两遍'))
+        self.assertNotIn((3, ''), agent._school_counts('朗读《溪边》第2、3自然段，各读两遍', bound=True))
+        self.assertFalse(agent._school_units_differ('朗读仍是《溪边》第2、3自然段各两遍，明早抽听。', self.FACTS))
         said = '朗读《溪边》第2、3自然段，各读三遍，读给家长听；不用录音，也不用上传，明早抽听。'
         self.assertTrue(agent._school_restated_reason(said, self.FACTS, said))
         same = '朗读《溪边》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早抽听。'
