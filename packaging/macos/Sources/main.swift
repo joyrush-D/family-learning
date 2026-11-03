@@ -1807,14 +1807,16 @@ extension AppDelegate {
             guard let window else { return ["ok": false] }
             await sleep(0.5)
             let w = window.frame, all = nodes()
-            var anchors: [String: [Double]] = [:]
+            var anchors: [String: [Double]] = [:], texts: [String: String] = [:]
             for id in step["ids"] as? [String] ?? [] {
+                if let (_, t) = TestTargets.live(id) { texts[id] = t }
                 if let n = all.first(where: { $0.id == id && $0.frame.width > 0 }) { anchors[id] = [Double(n.frame.minX), Double(n.frame.minY), Double(n.frame.width), Double(n.frame.height)] }
                 else if let (a, _) = TestTargets.live(id), let aw = a.window {
                     let r = aw.convertToScreen(a.convert(a.bounds, to: nil)); anchors[id] = [Double(r.minX), Double(r.minY), Double(r.width), Double(r.height)]
                 }
             }
-            return ["ok": true, "mode": workspace?.mode.rawValue ?? "", "window_frame": [Double(w.minX), Double(w.minY), Double(w.width), Double(w.height)], "anchors": anchors]
+            return ["ok": true, "mode": workspace?.mode.rawValue ?? "", "window_frame": [Double(w.minX), Double(w.minY), Double(w.width), Double(w.height)], "anchors": anchors, "texts": texts,
+                    "content_frame": window.contentView.map { let r = window.convertToScreen($0.frame); return [Double(r.minX), Double(r.minY), Double(r.width), Double(r.height)] } ?? []]
         case "documents":
             // 原件窗口（openDocument 另开的同源窗口）：读回它实际载入的地址与页面类型，不新增入口。
             var docs: [[String: Any]] = []

@@ -264,6 +264,8 @@ final class WorkspaceStore: ObservableObject {
 
     /// 详情的“返回清单/收起详情”：只是不再显示详情，所选项仍在清单里标出，孩子、日期、段落与草稿都不变。
     func closeDetail() { lastOpened = selection ?? lastOpened; selection = nil }
+    /// 错题本/学习进展的“返回清单 / 收起详情”：只取消所选原记录或照片卷，批次、草稿与回执都不动。
+    func closeRecord() { record = nil; photoPaper = nil }
 
     /// 切换孩子/日期：弹出层有未保存内容时默认留下；不带着上一个孩子的提示。
     func change(child: String? = nil, day newDay: String? = nil) {
@@ -573,19 +575,24 @@ struct HighlightOff: NSViewRepresentable {
 struct WorkspaceView: View {
     @ObservedObject var store: WorkspaceStore
 
+    /// 选中事项（或原记录、照片卷）时清单与详情并排的最小窗口宽度 T（pt）。清单至少 520、约占主体 46–47%，详情至少约 560
+    /// （正文 15pt，左右内边 32 后约 500 可读宽）。低于 T（含原生最小 900）选中后只把下方主体换成带“返回清单”的详情页。
+    static let splitWidth: CGFloat = 1100
+    /// 并排时清单宽：主体的 47%、按 10pt 取整（窗口拖动时清单不必每 1pt 重量行高），至少 520。1100→520，1280→600，1440→670。
+    static func masterWidth(_ width: CGFloat) -> CGFloat { max(520, (width * 0.47 / 10).rounded(.down) * 10) }
+
     var body: some View {
         GeometryReader { geo in
-            let compact = geo.size.width < 1180
+            let width = geo.size.width
+            // 全窗固定层级：孩子与日期顶栏 → 模式与周导航 → 本周七天 → 主体。三种模式、选中与否都在同一位置，只有下方主体换排。
             VStack(spacing: 0) {
-                HeaderBar(store: store, compact: compact)
-                if store.mode == .calendar { calendar(compact, width: geo.size.width) } else {
-                    // 错题本/学习进展：左栏同宽、位置不动，右栏是所选那一道原错题。
-                    HStack(spacing: 0) {
-                        SubjectList(store: store).frame(width: compact ? 340 : 400)
-                        Rectangle().fill(Palette.line).frame(width: 1)
-                        RecordDetail(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                }
+                HeaderBar(store: store, compact: width < 1180).geoProbe("context-header")
+                ModeBar(store: store).geoProbe("mode-strip", text: "mode=" + store.mode.id)
+                WeekStrip(store: store).padding(.horizontal, 16).padding(.bottom, 10)
+                    .geoProbe("week-strip", text: "weekday=13 day=22 count=13 minH=66")
+                Rectangle().fill(Palette.line).frame(height: 1)
+                main(width).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .geoProbe("workspace-body", text: "width=\(Int(width)) T=\(Int(Self.splitWidth))")
             }
         }
         .background(Palette.paper)
@@ -593,27 +600,82 @@ struct WorkspaceView: View {
         .sheet(item: $store.sheet) { kind in SheetHost(store: store, kind: kind) }
     }
 
-    /// 日历：没选事项时清单用主要宽度（最宽 860、居中），不留空的右栏。选中后宽窗（≥1180）右侧是这一项的详情；窄窗是带
-    /// “返回清单”的详情页，清单只是隐去、不重建，返回时所选项、滚动位置、孩子与日期原样。窗口大小与位置不随之改变。
-    func calendar(_ compact: Bool, width: CGFloat) -> some View {
-        let open = store.selected != nil
-        let side = open && !compact, page = open && compact
-        // 清单给确切宽度（与原来固定 340/400 同一做法），不只给上限：系统列表按收到的宽度给每行量高度，只有上限时会按不限宽
-        // 量成一行，之后在窄处排开也不重量，长完成标准就被截成省略号。整宽时外层再居中。
-        let list: CGFloat = side ? 440 : max(320, min(860, width))
+    /// 主体：没选时清单用主要宽度（最宽 860、居中），不留空的右栏。选中后宽窗（≥T）清单约 47%、右侧是这一项的详情；窄窗是带
+    /// “返回清单”的详情页，清单只是隐去、不重建，返回时所选项、滚动位置、孩子与日期原样。日历、错题本、学习进展同一做法。
+    /// 窗口大小与位置不随之改变；顶栏、模式与周条不被详情盖住。
+    func main(_ width: CGFloat) -> some View {
+        let open = store.mode == .calendar ? store.selected != nil : (store.selectedRecord != nil || store.selectedPhotoPaper != nil)
+        let side = open && width >= Self.splitWidth, page = open && !side
+        // 清单给确切宽度，不只给上限：系统列表按收到的宽度给每行量高度，只有上限时会按不限宽量成一行，之后在窄处排开也不重量，
+        // 长完成标准就被截成省略号。整宽时外层再居中。
+        let list: CGFloat = side ? Self.masterWidth(width) : max(320, min(860, width))
+        let layout = side ? "split" : page ? "page" : "list"
+        let context = [store.childID, store.day, store.mode.id, store.selection ?? "", store.record.map(String.init) ?? "", store.photoPaper ?? ""].joined(separator: "|")
         return ZStack {
             HStack(spacing: 0) {
                 SubjectList(store: store, side: side, width: list)
                     .frame(width: list)
+                    .geoProbe("master-pane", text: "layout=\(layout) list=\(Int(list))")
                     .frame(maxWidth: side ? nil : .infinity)
                     .opacity(page ? 0 : 1).allowsHitTesting(!page).accessibilityHidden(page)
                 if side {
                     Rectangle().fill(Palette.line).frame(width: 1)
-                    Inspector(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    detail(page: false).frame(maxWidth: .infinity, maxHeight: .infinity).geoProbe("detail-pane", text: "layout=split")
                 }
             }
-            if page { Inspector(store: store, page: true).frame(maxWidth: .infinity, maxHeight: .infinity) }
+            if page { detail(page: true).frame(maxWidth: .infinity, maxHeight: .infinity).geoProbe("detail-pane", text: "layout=page") }
         }
+        .geoProbe("selected-context", text: context)
+    }
+
+    @ViewBuilder func detail(page: Bool) -> some View {
+        if store.mode == .calendar { Inspector(store: store, page: page) } else { RecordDetail(store: store, page: page) }
+    }
+}
+
+/// 全窗模式与周导航（三种模式同一位置）：左边日历 / 错题本 / 学习进展三段，右边这一周的标题与前后周。
+struct ModeBar: View {
+    @ObservedObject var store: WorkspaceStore
+
+    func label(_ mode: ListMode) -> String {
+        guard let v = store.current else { return mode.rawValue }
+        switch mode {
+        case .calendar: return "日历"
+        case .wrong: let n = v.wrong.flatMap(\.items).count; return n > 0 ? "错题本 \(n)" : "错题本"
+        case .learning: return "学习进展"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 4) {
+            modeSwitch.frame(maxWidth: 520)
+            Spacer(minLength: 12)
+            Text(store.weekTitle).font(Palette.round(15, .bold)).foregroundStyle(Palette.ink).lineLimit(1).fixedSize().probe("week-title", text: store.weekTitle)
+            Button { store.shift(-7) } label: { Image(systemName: "chevron.left").font(.system(size: 14, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Rectangle()) }
+                .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("前一周").help("前一周").probe("week-prev")
+            Button { store.shift(7) } label: { Image(systemName: "chevron.right").font(.system(size: 14, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Rectangle()) }
+                .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("后一周").help("后一周").probe("week-next")
+        }
+        .padding(.horizontal, 16).padding(.top, 10).padding(.bottom, 8)
+    }
+
+    /// 日历 / 错题本 / 学习进展：原型的木色分段，每段 44pt 高，选中段是卡片色和绿字。
+    var modeSwitch: some View {
+        HStack(spacing: 3) {
+            ForEach(ListMode.allCases) { m in
+                let on = store.mode == m
+                Button { store.mode = m } label: {
+                    Text(label(m)).font(Palette.round(15)).lineLimit(1).frame(maxWidth: .infinity, minHeight: Palette.hit).contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
+                .background(Capsule().fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .probe("mode-" + m.id, text: label(m))
+            }
+        }
+        .padding(3).background(Capsule().fill(Palette.wood))
+        .probe("list-mode")
     }
 }
 
@@ -692,8 +754,6 @@ struct SubjectList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            modeSwitch.frame(maxWidth: 520).padding(.horizontal, 14).padding(.top, 14)
-            if store.mode == .calendar { WeekStrip(store: store).padding(.horizontal, 14).padding(.top, 8) }
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(store.mode == .calendar ? (store.showDone ? "这一天已办" : store.showUndated ? "日期未定/待安排" : "当天清单") : store.mode.rawValue).font(Palette.round(21, .bold)).foregroundStyle(Palette.ink)
@@ -701,7 +761,7 @@ struct SubjectList: View {
                 }
                 Spacer(minLength: 4)
                 if store.mode == .calendar { doneSwitch }
-            }.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 6)
+            }.padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 6)
             if store.loginRequired {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("需要先登录家庭账号。点下面的按钮会打开登录窗口，登录成功后窗口自动关闭、清单随即更新；填写中的内容不会丢。").font(Palette.body).foregroundStyle(Palette.coralInk)
@@ -758,6 +818,10 @@ struct SubjectList: View {
                 Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 18).padding(.vertical, 6).probe("school-read-unknown", text: words)
             }
+            if store.mode == .wrong, store.current != nil, store.wrongItems.isEmpty, store.selectedPhotoPaper == nil {
+                Text("还没有错题。可在下面记一道，或在日历里那一项的反馈下记。").font(Palette.body).foregroundStyle(Palette.ink2)
+                    .fixedSize(horizontal: false, vertical: true).padding(.horizontal, 18).padding(.vertical, 4).probe("wrong-empty")
+            }
             switch store.mode {
             case .calendar: itemList
             case .wrong: WrongList(store: store)
@@ -765,15 +829,6 @@ struct SubjectList: View {
             }
         }
         .background(Palette.paper)
-    }
-
-    func label(_ mode: ListMode) -> String {
-        guard let v = store.current else { return mode.rawValue }
-        switch mode {
-        case .calendar: return "日历"
-        case .wrong: let n = v.wrong.flatMap(\.items).count; return n > 0 ? "错题本 \(n)" : "错题本"
-        case .learning: return "学习进展"
-        }
     }
 
     /// 日历内保留原来的“待办 / 已办”切换（同一份服务端 groups/closed），每段 44pt。
@@ -784,7 +839,7 @@ struct SubjectList: View {
                 let n = store.current?.counts[key] ?? 0
                 let text = (key == "closed" ? "已办" : key == "undated" ? "日期未定" : "待办") + (n > 0 ? " \(n)" : "")
                 Button { store.setScope(key) } label: {
-                    Text(text).font(Palette.round(13)).padding(.horizontal, 10).frame(minWidth: 58, minHeight: Palette.hit).contentShape(Capsule())
+                    Text(text).font(Palette.round(14)).lineLimit(1).fixedSize().padding(.horizontal, 12).frame(minWidth: 58, minHeight: Palette.hit).contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
@@ -822,25 +877,6 @@ struct SubjectList: View {
                     .probe("schedule-head")
             }
         }
-    }
-
-    /// 日历 / 错题本 / 学习进展：原型的木色分段，每段 44pt 高，选中段是卡片色和绿字。
-    var modeSwitch: some View {
-        HStack(spacing: 3) {
-            ForEach(ListMode.allCases) { m in
-                let on = store.mode == m
-                Button { store.mode = m } label: {
-                    Text(label(m)).font(Palette.round(14)).frame(maxWidth: .infinity, minHeight: Palette.hit).contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(on ? Palette.leafInk : Palette.woodInk)
-                .background(Capsule().fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
-                .accessibilityAddTraits(on ? .isSelected : [])
-                .probe("mode-" + m.id, text: label(m))
-            }
-        }
-        .padding(3).background(Capsule().fill(Palette.wood))
-        .probe("list-mode")
     }
 
     var itemList: some View {
@@ -881,7 +917,7 @@ struct SubjectList: View {
         .scrollContentBackground(.hidden)
         // 整宽与右侧详情之间换一张清单：每张只在自己的确切宽度下量行高、不在使用中改宽；随即滚回所选/刚看过的那一项，
         // 键盘焦点由行里的 HighlightOff 交给新表格。
-        .id(side)
+        .id(side ? Int(width) : 0)
         .onAppear { if let id = store.selection ?? store.lastOpened { proxy.scrollTo(id, anchor: .center) } }
         .probe("subject-list")
         }
@@ -1040,6 +1076,8 @@ func topicWords(_ t: LearningTopic) -> String {
 /// 错题本与学习进展的右栏：所选那一道原错题——原题与作答、知识点与练习、订正与原作业；和日历右栏同一位置、同一宽度。
 struct RecordDetail: View {
     @ObservedObject var store: WorkspaceStore
+    /// 窄窗的详情页（盖在隐去的清单上）：顶上是“返回清单”；宽窗右栏是“收起详情”。两者都回到同一清单位置。
+    var page = false
     /// 较长原记录：按编号只读取同一条记录的完整原文（GET /api/record/history/编号 的 current），不改记录。
     @State var full: [Int: String] = [:]
     @State var fullError: [Int: String] = [:]
@@ -1057,8 +1095,8 @@ struct RecordDetail: View {
     }
     var body: some View {
         Group {
-            if let r = store.selectedRecord { detail(r) }
-            else if let shown = store.selectedPhotoPaper { PhotoPaperDetail(store: store, batch: shown.0, paper: shown.1) }
+            if let r = store.selectedRecord { VStack(spacing: 0) { back; detail(r) } }
+            else if let shown = store.selectedPhotoPaper { VStack(spacing: 0) { back; PhotoPaperDetail(store: store, batch: shown.0, paper: shown.1) } }
             else {
                 VStack(spacing: 10) {
                     Image(systemName: "leaf").font(.largeTitle).foregroundStyle(Palette.leafInk)
@@ -1069,6 +1107,16 @@ struct RecordDetail: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity).background(Palette.paper)
             }
         }
+    }
+
+    var back: some View {
+        HStack {
+            Button { store.closeRecord() } label: { Label(page ? "返回清单" : "收起详情", systemImage: page ? "chevron.left" : "xmark") }
+                .buttonStyle(GroveButtonStyle(kind: .quiet)).keyboardShortcut(.cancelAction)
+                .help(page ? "回到清单原来的位置（Esc）" : "收起详情，清单回到整宽（Esc）").probe("record-back", text: page ? "返回清单" : "收起详情")
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 32).padding(.top, 14).padding(.bottom, 2).frame(maxWidth: .infinity, alignment: .leading).background(Palette.paper)
     }
 
     func card<Content: View>(_ title: String, _ symbol: String, @ViewBuilder _ content: () -> Content) -> some View {
@@ -1195,42 +1243,33 @@ func planClock(_ start: String, _ end: String) -> String { start.isEmpty ? "时�
 struct WeekStrip: View {
     @ObservedObject var store: WorkspaceStore
     var body: some View {
-        VStack(spacing: 4) {
-            HStack(spacing: 2) {
-                Text(store.weekTitle).font(Palette.round(14, .bold)).foregroundStyle(Palette.ink).probe("week-title", text: store.weekTitle)
-                Spacer(minLength: 4)
-                Button { store.shift(-7) } label: { Image(systemName: "chevron.left").font(.system(size: 13, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("前一周").help("前一周").probe("week-prev")
-                Button { store.shift(7) } label: { Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).frame(width: Palette.hit, height: Palette.hit).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(Palette.ink).accessibilityLabel("后一周").help("后一周").probe("week-next")
-            }
-            HStack(spacing: 3) {
-                ForEach(store.weekDays, id: \.day) { d in
-                    let on = d.day == store.day, isToday = d.day == store.view?.today
-                    let words = (d.today > 0 ? "当天要做\(d.today)项" : "") + ((d.schedule ?? 0) > 0 ? " 有课表或日程" : "")
-                    Button { store.change(day: d.day) } label: {
-                        VStack(spacing: 1) {
-                            Text(isToday ? "今天" : WorkspaceStore.weekday(d.day)).font(.system(size: 11.5, weight: isToday ? .bold : .medium))
-                            Text(WorkspaceStore.dayNumber(d.day)).font(Palette.round(17, .bold))
-                            HStack(spacing: 3) {
-                                if d.today > 0 { Text("\(d.today)项").font(.system(size: 10.5, weight: .semibold)) }
-                                if (d.schedule ?? 0) > 0 { Circle().fill(Palette.leaf400).frame(width: 5, height: 5) }
-                            }.frame(height: 13)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 56).contentShape(RoundedRectangle(cornerRadius: 12))
+        HStack(spacing: 3) {
+            ForEach(store.weekDays, id: \.day) { d in
+                let on = d.day == store.day, isToday = d.day == store.view?.today
+                let words = (d.today > 0 ? "当天要做\(d.today)项" : "") + ((d.schedule ?? 0) > 0 ? " 有课表或日程" : "")
+                Button { store.change(day: d.day) } label: {
+                    VStack(spacing: 2) {
+                        Text(isToday ? "今天" : WorkspaceStore.weekday(d.day)).font(.system(size: 13, weight: isToday ? .bold : .medium))
+                        Text(WorkspaceStore.dayNumber(d.day)).font(Palette.round(22, .bold))
+                        HStack(spacing: 4) {
+                            if d.today > 0 { Text("\(d.today)项").font(.system(size: 13, weight: .semibold)) }
+                            if (d.schedule ?? 0) > 0 { Circle().fill(Palette.leaf400).frame(width: 6, height: 6) }
+                        }.frame(height: 17)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(on ? Palette.leafInk : Palette.ink)
-                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
-                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isToday && !on ? Palette.leaf400 : Color.clear, lineWidth: 1.5))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(WorkspaceStore.spoken(d.day) + (words.isEmpty ? "" : "，" + words))
-                    .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
-                    .probe("week-" + d.day, text: d.day + (on ? " 所选" : "") + " " + words)
+                    .frame(maxWidth: .infinity, minHeight: 66).contentShape(RoundedRectangle(cornerRadius: 12))
                 }
+                .buttonStyle(.plain)
+                .foregroundStyle(on ? Palette.leafInk : Palette.ink)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Palette.card : Color.clear).shadow(color: on ? Palette.wood300 : Color.clear, radius: 0, x: 0, y: 2))
+                .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(isToday && !on ? Palette.leaf400 : Color.clear, lineWidth: 1.5))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(WorkspaceStore.spoken(d.day) + (words.isEmpty ? "" : "，" + words))
+                .accessibilityAddTraits(on ? [.isButton, .isSelected] : .isButton)
+                .probe("week-" + d.day, text: d.day + (on ? " 所选" : "") + " " + words)
+                .geoProbe("week-day-" + d.day, text: d.day + (on ? " 所选" : ""))
             }
-            .padding(3).background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Palette.wood))
         }
+        .padding(3).background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(Palette.wood))
     }
 }
 
@@ -2468,6 +2507,10 @@ struct ProbeAnchorView: NSViewRepresentable {
 }
 
 extension View {
+    /// 只在原生验收里：布局块的只读几何锚点（不设辅助功能标识，免得落到子控件上），frame 步骤读它的实际窗口矩形。
+    @ViewBuilder func geoProbe(_ id: String, text: String = "") -> some View {
+        if TestTargets.enabled { self.background(ProbeAnchorView(id: id, text: text)) } else { self }
+    }
     @ViewBuilder func probe(_ id: String, text: String = "") -> some View {
         if TestTargets.enabled { self.accessibilityIdentifier(id).background(ProbeAnchorView(id: id, text: text)) }
         else { self.accessibilityIdentifier(id) }
