@@ -5,6 +5,8 @@
 // Usage on a separate test Mac:  node test_photo_batch_native.cjs --allow-visible-test-window
 // Headless contract check only (no app, no window):  node test_photo_batch_native.cjs --server-only
 // Guard self-test (no app, no window):  node test_photo_batch_native.cjs --self-test
+// Store contract (real Swift Store/Client compiled with the macOS SDK, loopback fixture, no NSApplication or window, no POST):
+//   node test_photo_batch_native.cjs --store-contract   (optional PHOTO_POSITIVE_PNG: a fictional PNG served on the successful re-read)
 // Evidence labels: the pages are synthetic 1x1 placeholder PNGs (no real photo pixels or box placement is proven), the
 // "reopen" step is the app's in-memory view remount (not a cold process restart), and picks are test-declared files (not
 // the system picker or drag-in). Real 900/1440 photos and cold App restarts are Root's independent evidence.
@@ -14,9 +16,9 @@
 // any SQLite but its own fictional one, and has a bounded lifetime and fixed-reply budget.
 const assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),net=require('node:net'),http=require('node:http'),crypto=require('node:crypto');
 const {spawn,execFileSync}=require('node:child_process'),{once}=require('node:events'),{setTimeout:delay}=require('node:timers/promises');
-const visible=process.argv.includes('--allow-visible-test-window'),serverOnly=process.argv.includes('--server-only'),selfTest=process.argv.includes('--self-test');
+const visible=process.argv.includes('--allow-visible-test-window'),serverOnly=process.argv.includes('--server-only'),selfTest=process.argv.includes('--self-test'),storeContract=process.argv.includes('--store-contract');
 const refuse=reason=>{console.error('refused: '+reason);process.exit(2)};
-if([visible,serverOnly,selfTest].filter(Boolean).length!==1)refuse('pass exactly one of --allow-visible-test-window (separate test Mac), --server-only or --self-test');
+if([visible,serverOnly,selfTest,storeContract].filter(Boolean).length!==1)refuse('pass exactly one of --allow-visible-test-window (separate test Mac), --server-only, --self-test or --store-contract');
 const DEADLINE_MS=Number(process.env.PHOTO_NATIVE_DEADLINE_MS)||(visible?600000:120000);
 function exists(p){try{fs.lstatSync(p);return true}catch{return false}}
 // A new, exclusive output directory: never an existing path or symlink, never under a symlinked parent, never the filesystem
@@ -165,8 +167,73 @@ async function guards(){
  results.push('deadline terminal');fs.rmSync(base,{recursive:true,force:true});
  return finish(0,'passed',{self_test:results});
 }
+const CONTRACT=`import AppKit
+import Foundation
+@main struct PhotoImageRecoveryContract {
+ @MainActor static func main() async {
+  let store = WorkspaceStore(client: WorkspaceClient(origin: ServiceOrigin.parse(CommandLine.arguments[1])!, ephemeral: true))
+  await store.load()
+  var checks: [String: Bool] = [:]
+  let first = await store.photoImage("QA-recover-original")
+  checks["image_failure_reports_recovery"] = first == nil && !store.photoRecovery.isEmpty
+  await store.loadPhotoBatches()
+  checks["list_success_keeps_image_recovery"] = !store.photoRecovery.isEmpty && store.photoProblems.keys.contains("image:QA-recover-original")
+  await store.refreshPhotos()
+  let image = store.photoImages["QA-recover-original"]
+  checks["explicit_retry_reads_same_image"] = image != nil && store.photoRecovery.isEmpty && store.photoProblems.isEmpty
+  let size = image?.representations.first.map { [$0.pixelsWide, $0.pixelsHigh] } ?? []
+  let report: [String: Any] = ["checks": checks, "pixels": size, "windows": NSApp == nil ? 0 : -1]
+  print(String(decoding: try! JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]), as: UTF8.self))
+  exit(checks.values.allSatisfy { $0 } ? 0 : 1)
+ }
+}`;
+const FIXTURE=`import hashlib, json, sys, threading
+sys.dont_write_bytecode = True
+import test_native_context as t
+png = open(sys.argv[2], 'rb').read() if len(sys.argv) > 2 and sys.argv[2] else None
+counts = dict(image_reads=0, list_reads=0, posts=0, served_sha256='')
+original_get, original_post = t.Backend.do_GET, t.Backend.do_POST
+def do_get(self):
+    if self.path.startswith('/api/photo-batches'):
+        counts['list_reads'] += 1; return self.reply(200, {'child_id': 'child-1', 'batches': []})
+    if self.path == '/upload/QA-recover-original':
+        counts['image_reads'] += 1
+        if counts['image_reads'] == 1: return self.reply(503, {'error': '虚构：这张原图暂不可用'})
+        counts['served_sha256'] = hashlib.sha256(png).hexdigest()
+        self.send_response(200); self.send_header('Content-Type', 'image/png'); self.send_header('Content-Length', str(len(png))); self.end_headers(); self.wfile.write(png); return
+    return original_get(self)
+def do_post(self):
+    counts['posts'] += 1; return original_post(self)
+t.Backend.do_GET, t.Backend.do_POST = do_get, do_post
+server = t.ThreadingHTTPServer(('127.0.0.1', 0), t.Backend)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+print(json.dumps(dict(port=server.server_address[1])), flush=True)
+sys.stdin.readline()
+print(json.dumps(counts), flush=True)
+server.shutdown()`;
+async function storeRun(){
+ const png=process.env.PHOTO_POSITIVE_PNG?path.resolve(process.env.PHOTO_POSITIVE_PNG):path.join(out,'positive.png');
+ if(!process.env.PHOTO_POSITIVE_PNG)fs.writeFileSync(png,Buffer.from(PNG_HEX,'hex'));
+ const sdk=execFileSync('/usr/bin/xcrun',['--sdk','macosx','--show-sdk-path'],{encoding:'utf8'}).trim(),src=path.join(__dirname,'packaging/macos/Sources');
+ fs.writeFileSync(path.join(out,'contract.swift'),CONTRACT);
+ const env={};for(const [k,v] of Object.entries(process.env))if(!/^(FAMILY_|OPENAI|ANTHROPIC|ARK_|DOUBAO|VOLC|TYPESAFE)|API_KEY|TOKEN|SECRET|PASSWORD|PROXY/i.test(k))env[k]=v;env.SDKROOT=sdk;env.TMPDIR=out;
+ execFileSync('/usr/bin/xcrun',['--sdk','macosx','swiftc','-swift-version','5','-parse-as-library','-target','arm64-apple-macos13.0',
+  ...['DesktopPolicy.swift','WorkspaceAPI.swift','Workspace.swift'].map(n=>path.join(src,n)),path.join(out,'contract.swift'),'-o',path.join(out,'contract')],{cwd:out,env,stdio:['ignore','ignore','pipe']});
+ const fixture=spawnOwned('fixture',process.env.FAMILY_TEST_PYTHON||'python3',['-B','-c',FIXTURE,'',png],{cwd:__dirname,env,stdio:['pipe','pipe','pipe']});
+ let lines='';fixture.stdout.on('data',b=>lines+=b);await eventually(async()=>lines.includes('port'),'fixture port',20000);
+ const port=JSON.parse(lines.split('\n')[0]).port;
+ const run=spawnOwned('contract',path.join(out,'contract'),['http://127.0.0.1:'+port],{cwd:out,env,stdio:['ignore','pipe','pipe']});
+ let text='';run.stdout.on('data',b=>text+=b);run.stderr.on('data',b=>text+=b);const [code]=await once(run,'exit');
+ fixture.stdin.end('done\n');await eventually(async()=>lines.split('\n').filter(Boolean).length>=2,'fixture counts',10000);
+ const counts=JSON.parse(lines.split('\n').filter(Boolean)[1]),report=JSON.parse(text.trim().split('\n').pop());
+ const sha=crypto.createHash('sha256').update(fs.readFileSync(png)).digest('hex');
+ assert.equal(code,0,'contract checks: '+text);assert.equal(counts.posts,0,'no POST');assert.equal(counts.image_reads,2,'one failed read and one explicit re-read of the same image');
+ assert.equal(counts.served_sha256,sha,'the re-read served exactly the fictional PNG');
+ return finish(0,'passed',{store_contract:true,checks:report.checks,pixels:report.pixels,http:counts,png_sha256:sha,windows:0,provider_calls:0});
+}
 (async()=>{
  if(selfTest)return guards();
+ if(storeContract)return storeRun();
  const port=await freePort(),USER='fictional-parent',PASS='fictional-'+crypto.randomUUID(),auth=proxy(port,USER,PASS);
  // No real model, data, account or proxy settings reach the children; any data fallback points inside this run's directory.
  const env0={};for(const [k,v] of Object.entries(process.env))if(!/^(FAMILY_|OPENAI|ANTHROPIC|ARK_|DOUBAO|VOLC|TYPESAFE)|API_KEY|TOKEN|SECRET|PASSWORD|PROXY/i.test(k))env0[k]=v;
