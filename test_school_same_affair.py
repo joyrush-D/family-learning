@@ -424,16 +424,20 @@ class SchoolSameAffairTests(unittest.TestCase):
                 brief = agent._select('school', evidence, school_goals=[], school_tasks=targets, as_of=today.date().isoformat())[0]['plan']['school_task']
             self.assertEqual(brief['state'], 'review'); self.assertIn('不作为今天新作业自动收集', brief['reason'])
         business = lambda n: n in ('manual_tasks', 'task_updates', 'records') or any(w in n for w in ('wrong', 'correct', 'review', 'feedback'))
-        before = self._tables(business)
-        with self.app.connect() as c: items_before = {r['id']: dict(r) for r in c.execute('SELECT * FROM agent_items')}
+        def items():  # the ordinary tick's own learning-goal link (school_goal_id, its manual-goal row; as at b52505d) is no relation write
+            with self.app.connect() as c:
+                rows = {r['id']: dict(r) for r in c.execute("SELECT * FROM agent_items WHERE job_id NOT LIKE 'manual-goal:%'")}
+            for r in rows.values(): r['plan'] = {k: v for k, v in json.loads(r['plan']).items() if k != 'school_goal_id'}
+            return rows
+        before, items_before = self._tables(business), items()
         ticks = [self._tick(proposal('same', keep), must=(ref, keep), never=(member,)) for _ in range(3)]
         self.assertEqual(sum(t.count('reconcile') for t in ticks), 1)
         self.assertEqual(self._same_jobs(), [dict(id='school-same:' + later['id'], done=1)])
         self.assertEqual(self._tables(business), before)  # feedback, wrong questions, corrections, status and dates untouched
-        with self.app.connect() as c:
-            items_after = {r['id']: dict(r) for r in c.execute('SELECT * FROM agent_items')}
+        items_after = items()
         self.assertEqual({k: v for k, v in items_after.items() if k != later['id']}, {k: v for k, v in items_before.items() if k != later['id']})
-        self.assertEqual(json.loads(items_after[later['id']]['plan'])['school_same_task']['task_id'], keep)
+        self.assertEqual(items_after[later['id']]['plan']['school_same_task']['task_id'], keep)
+        self.assertEqual({k: v for k, v in items_after[later['id']]['plan'].items() if k != 'school_same_task'}, items_before[later['id']]['plan'])
         whole = self._tables()
         for _ in range(2):  # reopened twice: one card, both originals, the member's own feedback and status; reading writes nothing
             rows = self._open_school(self.app.day_view('child-1', today.date().isoformat()))
