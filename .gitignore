@@ -294,6 +294,7 @@
 !/test_daily_list_frozen.py
 !/test_daily_list_progress.py
 !/test_daily_list_whole_day.py
+!/test_daily_action_scope.py
 !/test_image_original_date_scope.py
 !/test_image_original_date_scope.json
 !/test_image_original_date_scope_ui.cjs
