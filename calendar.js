@@ -381,8 +381,11 @@ function todayTasksHTML(){
  if(!view){const state=groveDays.get(currentChild()?.id+'/'+day);if(!state)setTimeout(()=>groveLoadDay(day));
   return `<div class="grove" data-view="list" data-tab="calendar"><section class="grove-list" aria-labelledby="groveListTitle">${groveTabsHTML(groveToday())}${groveWeekHTML(null,day)}<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary">${esc(day)}</p></div></header>`
    +(state?.error?`<p class="error" role="alert" data-grove-day-error>${esc(state.error)}</p><button type="button" data-grove-day-retry>重新读取这一天</button>`:'<p class="small muted" role="status" data-grove-day-loading>正在读取这一天…</p>')+'</section></div>'}
- const rows=groveRows(view);
- if(!rows.some(x=>x.id===groveSelected)){groveSelected=groveWide()?(rows[0]?.id||''):'';groveDetailOpen=false}
+ const rows=groveRows(view),part=k=>(view[k]||[]).flatMap(g=>g.items||[]);
+ // A wide page opens on the first row of the list it shows (待办, or the chosen 日期未定/已办 list while it has rows), never on
+ // a hidden list's row: an empty 待办 opens no detail. A row already chosen (a click or a link, which shows its own list) stays.
+ const shown=groveScope!=='open'&&part(groveScope).length?part(groveScope):part('groups');
+ if(!rows.some(x=>x.id===groveSelected)){groveSelected=groveWide()?(shown[0]?.id||''):'';groveDetailOpen=false}
  const selected=rows.find(x=>x.id===groveSelected),c=view.counts||{};
  setTimeout(()=>{revealTaskLink();revealRecordTopic();if(selected?.task_id)groveLoadMaterials(selected.task_id)});
  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
