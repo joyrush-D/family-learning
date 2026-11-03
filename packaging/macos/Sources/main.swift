@@ -1035,6 +1035,7 @@ extension AppDelegate {
             store.openDocument = { [weak self] url, name in self?.openDocument(url, name) }
             store.openWebTools = { [weak self] task, intent in self?.openWebTools(task, intent) }
             store.openTopic = { [weak self] record, child in self?.openRecordTopic(record, child) }
+            store.openSchoolInfo = { [weak self] child in self?.openSchoolInfo(child) }
             store.openLogin = { [weak self] in self?.openLogin() }
             store.confirmDiscard = { [weak self] action in self?.confirmDiscard(action) ?? false }
             store.onLoaded = { [weak self] in self?.workspaceLoaded() }
@@ -1074,7 +1075,7 @@ extension AppDelegate {
     /// 网页版工具（日历、学校消息、照片检查、打印确认等原功能）在同一窗口打开；指定作业时打开同一份原作业，并带上意图
     /// （print-original 打印原卷、print-reference 打印家长参考、check 照片检查、original 原消息、history 错题诊断与再试）：
     /// 网页只打开对应的原流程，确认、依据核对和防重复照旧，不会自动打印或保存。
-    static let webIntents: Set<String> = ["", "print-original", "print-reference", "check", "original", "history", "topic"]
+    static let webIntents: Set<String> = ["", "print-original", "print-reference", "check", "original", "history", "topic", "school"]
 
     /// 知识点与练习：同一道原错题（记录编号、孩子编号）在网页版的专门面板里打开——原题、原答、原作业与原有的知识点诊断/
     /// 新题再试，不进整站历史页去找；网页上方“← 返回清单”/⌘0 回到同一工作台，孩子、日期和所选错题都保留。
@@ -1082,6 +1083,14 @@ extension AppDelegate {
         let id = child.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_."))) ?? ""
         guard record > 0, !id.isEmpty else { return }
         openWebTools("", "topic", fragment: "wrong=\(record)&child=" + id + "&do=topic")
+    }
+
+    /// 学校资料与整理状态：同一个孩子（编号）在网页版原有“成长助手”页打开（#page=agent&child=<编号>）；网页只选这个孩子、显示那页，
+    /// 不读取消息、不整理、不调用模型。工作台的孩子、日期、所选事项和窗口原样保留，“← 返回清单”/⌘0 照旧回来。
+    func openSchoolInfo(_ child: String) {
+        let id = child.addingPercentEncoding(withAllowedCharacters: .alphanumerics.union(CharacterSet(charactersIn: "-_."))) ?? ""
+        guard !id.isEmpty else { return }
+        openWebTools("", "school", fragment: "page=agent&child=" + id)
     }
 
     func openWebTools(_ task: String, _ intent: String = "", fragment: String? = nil) {

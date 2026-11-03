@@ -24,8 +24,11 @@ PENDING = [
     ('today-known-action-unread-detail', '体育：绕圈慢跑', dict(state='review', purpose='learning', policy=10, title='体育：绕圈慢跑',
                                                           goal='今晚慢跑2圈。', reason='附件中热身示范尚未读清。'), DAY),
     ('reference-with-unread-original', '体育：课堂参考', dict(state='review', purpose='optional', policy=10, title='', goal=''), '2026-11-18'),
+    # Voluntary/reference with a read goal is still no required work (the organizer keeps optional out of 必做).
+    ('optional-read-goal', '体育：节奏讲解', dict(state='review', purpose='optional', policy=10, title='体育：节奏讲解', goal='看这份节奏讲解。',
+                                              reason='附件里有未读内容。'), DAY),
 ]
-MATERIAL = {'体育：资料内容待整理', '体育：课堂参考'}
+MATERIAL = {'体育：资料内容待整理', '体育：课堂参考', '体育：节奏讲解'}
 
 
 class ActionScopeTest(unittest.TestCase):
@@ -54,38 +57,45 @@ class ActionScopeTest(unittest.TestCase):
     @staticmethod
     def every_id(view):
         return ({i['id'] for g in view['groups'] + view['closed'] for i in g['items']} | {u['id'] for u in view['upcoming']}
-                | {m['id'] for g in view['materials'] for m in g['items']})
+                | {m['id'] for g in view['materials'] for m in g['items']} | {i['id'] for g in view['undated'] for i in g['items']})
 
     def test_material_leaves_the_days_actions_while_read_actions_stay(self):
         with app.connect() as c: before = '\n'.join(c.iterdump())
         for day in (DAY, '2026-11-20'):  # the next day lists the same, nothing grows into new work
             view = app.day_view(C, day)
             rows = {i['title']: i for i in self.listed(view)}
+            kept = {i['title']: i for g in view['undated'] for i in g['items']}  # 日期未定/待安排: same rows, not the day's count
             material = {m['title']: (g['subject'], m) for g in view['materials'] for m in g['items']}
             with self.subTest(day=day):
                 self.assertEqual(set(material), MATERIAL, 'unknown/unread material and a reference are named, not listed as actions')
                 self.assertFalse(MATERIAL & set(rows))
                 self.assertTrue(all(s == '体育' for s, _ in material.values()), material)
-                self.assertEqual(view['counts']['material'], 2)
+                self.assertEqual(view['counts']['material'], 3)
                 self.assertEqual(view['counts']['open'], len(rows), 'the day count is its listed actions only')
                 # A read action with unread detail stays visible as an action awaiting review, with its read goal only.
                 for title, goal in (('体育：定点投球', '站在线后定点投球6次。'), ('体育：绕圈慢跑', '今晚慢跑2圈。')):
-                    self.assertTrue(rows[title]['pending_review'], title)
-                    self.assertIn(goal, rows[title]['lines'])
-                    self.assertNotIn('material', rows[title])
-                self.assertEqual(rows['体育：定点投球']['when'], 'unknown')
-                self.assertFalse(rows['体育：定点投球']['today'])
+                    row = rows.get(title) or kept[title]
+                    self.assertTrue(row['pending_review'], title)
+                    self.assertIn(goal, row['lines'])
+                    self.assertNotIn('material', row)
+                self.assertIn('体育：绕圈慢跑', rows, 'a read action due tonight is the day\'s work')
+                self.assertNotIn('体育：定点投球', rows)
+                self.assertEqual(kept['体育：定点投球']['when'], 'unknown')
+                self.assertFalse(kept['体育：定点投球']['today'])
                 # The legacy undated ready task: same id and content, date unknown, never today, never dropped for age.
-                pe = rows['体育：跳绳练习']
+                self.assertNotIn('体育：跳绳练习', rows, 'an undated action is not laid out in the day\'s list')
+                pe = kept['体育：跳绳练习']
                 self.assertEqual((pe['task_id'], pe['when'], pe['today'], pe['lines']), ('PE01', 'unknown', False, ['双脚并拢跳绳80下。']))
                 self.assertFalse(next(f for f in pe['facts'] if f['role'] == 'due')['known'])
                 # The open handback stays overdue on its original date with the same id.
                 cn = rows['语文：阅读记录签字']
                 self.assertEqual((cn['task_id'], cn['when']), ('CN02', 'overdue'))
                 self.assertEqual(next(f for f in cn['facts'] if f['role'] == 'due')['value'], '2026-11-18')
-                group = next(g for g in view['groups'] if g['subject'] == '体育')
-                self.assertEqual(group['undated'], sum(i['when'] == 'unknown' for i in group['items']))
-                self.assertGreaterEqual(group['undated'], 2)
+                self.assertEqual(view['counts']['undated'], len(kept))
+                self.assertLessEqual({'体育：定点投球', '体育：跳绳练习'}, set(kept))
+                self.assertTrue(all(g['subject'] == '体育' for g in view['undated']))
+                self.assertFalse([i['id'] for i in self.listed(view) if i['when'] in ('unknown', 'passed')])
+                self.assertFalse(view['counts']['unknown'] or view['counts']['passed'])
                 # Nothing invented for material: its saved title is all it shows; no requirement is generated for it.
                 words = json.dumps(view, ensure_ascii=False)
                 self.assertNotIn('跑步', words); self.assertNotIn('家长确认是否完成', words)
@@ -209,3 +219,52 @@ class DateRoleTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class RealChainDateRoleTest(unittest.TestCase):
+    """Store.ingest -> run_once with a fixed fictional reply (not model output) -> saved agenda -> the day list."""
+    def setUp(self):
+        import test_school_date_role as role
+        self.role = role; self.case = role.SchoolDateRoleTests('run_one'); self.case.setUp()
+        self.addCleanup(self.case.doCleanups)
+
+    def one(self, text, purpose, due, sent):
+        import copy
+        import family_agent as agent
+        c = self.case; c.fixture.source.update(self.role.SOURCE); c.fixture.config()
+        c.fixture.now = c.now = dt.datetime.fromisoformat(sent).replace(tzinfo=agent.TZ) + dt.timedelta(minutes=30)
+        payload = c.fixture.payload(cursor='1')
+        payload['messages'] = [dict(id='1', time=sent, kind='text', sender='虚构老师', text=text, unread=False,
+                                    sender_id='qa-teacher-day-scope', message_order='1')]
+        c.store.ingest(payload)
+        proposal = dict(title_quote=text, focus='school', due=due, evidence=[{'ref': 'message:%s:1' % self.role.SOURCE['id']}],
+                        learning_subject='', learning_goal_id='', task_title=text[:16], task_goal=text, task_advice='', task_change='new',
+                        task_target_id='', task_state='ready', task_reason='纯虚构固定回复，不是模型产物。', task_purpose=purpose, task_submission='')
+        c.model.side_effect = lambda *args, **kwargs: dict(proposals=[copy.deepcopy(proposal)])
+        self.assertEqual(agent.run_once(c.app, c.now)['failed'], 0)
+        with c.store._db() as db:
+            row = dict(db.execute("SELECT * FROM agent_items WHERE kind='school'").fetchone())
+        return row
+
+    def ids(self, view, key):
+        return {i['task_id'] or i['id'] for g in view[key] for i in g['items']}
+
+    def test_a_restated_weekday_keeps_a_lesson_bring_day_and_only_a_due_handback_stays_overdue(self):
+        future = self.one('11月10日（周二）美术课带一张白色卡纸，不用今晚画画。', 'admin', '2026-11-10', '2026-11-03T16:20:00+08:00')
+        past = self.one('11月2日（周一）音乐课带一个干净纸杯。', 'admin', '2026-11-02', '2026-11-01T17:00:00+08:00')
+        back = self.one('请家长签字，11月2日交回活动回执。', 'admin', '2026-11-02', '2026-11-01T17:00:00+08:00')
+        with self.case.app.connect() as db:
+            tasks = {t['id']: t for t in self.case.app.tasks(db)}
+        agenda = {k: tasks[r['task_id']]['agenda'] for k, r in (('future', future), ('past', past), ('back', back))}
+        self.assertEqual((agenda['future']['due_on'], agenda['future']['due_kind']), ('2026-11-10', 'arranged'), 'the negated 今晚 lends no day')
+        self.assertEqual((agenda['past']['due_on'], agenda['past']['due_kind']), ('2026-11-02', 'arranged'))
+        self.assertEqual((agenda['back']['due_on'], agenda['back']['due_kind']), ('2026-11-02', 'handback'))
+        child = future['child_id']
+        on2, on3 = self.case.app.day_view(child, '2026-11-02'), self.case.app.day_view(child, '2026-11-03')
+        self.assertIn(past['task_id'], self.ids(on2, 'groups'), 'its own day lists it with the same id')
+        self.assertNotIn(past['task_id'], self.ids(on3, 'groups') | self.ids(on3, 'undated'), 'a passed lesson day is no open work later')
+        self.assertIn(back['task_id'], self.ids(on3, 'groups'))
+        self.assertEqual(next(i['when'] for g in on3['groups'] for i in g['items'] if i['task_id'] == back['task_id']), 'overdue')
+        self.assertNotIn(future['task_id'], self.ids(on3, 'groups'))
+        self.assertIn('2026-11-10', [u['day'] for u in on3['upcoming']], 'named once before its lesson day')
+        self.assertEqual(on3['counts']['open'], sum(len(g['items']) for g in on3['groups']))

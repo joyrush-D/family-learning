@@ -6487,6 +6487,8 @@ def _school_native_errand(clause,owned):
     """
     from family_agenda import _PREPARE,_PREPARED_THING,_titles_read_as_objects
     part=re.split(r'[，,]',re.sub(r'^\s*(?:另外|此外|还有|同时)\s*[，,]?\s*','',clause),maxsplit=1)[0].strip()
+    # A date restating its weekday (11月10日（周二）) is that one day here; whether the two agree is _school_clause_day's to prove.
+    part=re.sub(r'('+_SCHOOL_NATIVE_DAY+r')\s*[（(]\s*(?:周|星期|礼拜)[一二三四五六日天]\s*[）)]',r'\1',part)
     # The lesson may name itself before or after its day (明天科学课带…, 科学课下周一带…): the order does not change the errand.
     lesson=r'[一-鿿]{1,4}课(?:上|前)?'
     when=(r'(?:请\s*)?(?:(?:'+lesson+r')\s*(?:'+_SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午|晚上)\s*)?'

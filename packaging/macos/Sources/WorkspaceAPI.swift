@@ -115,10 +115,10 @@ struct Learning: Decodable, Hashable { let subjects: [LearningSubject]; let pack
 
 struct ItemGroup: Decodable, Hashable {
     let subject: String; let items: [DayItem]
-    /// 同组里日期未写明的行数（服务端 day_view 同一投影；较早后台缺省按 0）：它们不算这一天的，科目标签分开计。
+    /// 同组里日期未写明的行数（服务端 day_view 同一投影）。较早后台没有这个字段时，按每行自己的 when（unknown）计，不按 0 猜成有日期。
     let undated: Int?
     var countWords: String {
-        let u = undated ?? 0, n = items.count - u
+        let u = undated ?? items.filter { $0.when == "unknown" }.count, n = items.count - u
         return [n > 0 ? "\(n) 项" : "", u > 0 ? "日期未定 \(u)" : ""].filter { !$0.isEmpty }.joined(separator: " · ")
     }
 }
@@ -149,6 +149,8 @@ struct DayView: Decodable {
     let learning: Learning?
     let upcoming: [UpcomingItem]?
     let materials: [MaterialGroup]?
+    /// 没有确切日期的行动（服务端 day_view.undated）：同一行、同一编号，按科目放在“日期未定”，不算这一天的数量；较早后台没有时为空。
+    let undated: [ItemGroup]?
 }
 
 /// 一份原作业的资料，服务端 /api/print/homework/materials 原样：出处（学校消息原件、孩子报来的作业……）与已保存的读取状态
