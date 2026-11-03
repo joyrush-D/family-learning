@@ -1691,10 +1691,10 @@ extension WorkspaceStore {
         save.busy = true; save.message = ""; save.conflict = false
         if save.body == nil {
             do {
-                // 读卡片依据的那一天连同正看的这一天：自己确认过的保存可能已把它改到别的日子，而重读失败时页面仍停在旧的一天；别处改过仍按下面的核对算冲突。
+                // 只读卡片依据的那一天（没有依据日才读正看的这一天），开始结束同一天：自己确认过的保存可能已把它改到很远的日子而重读失败时页面仍停在旧的一天，连同中间整段一起读会超出每次最多31天的查询；别处改到别的日子在这里就读不到、不改任何记录，同一天里改过仍按下面的核对算冲突。
                 let o = draft.origin
-                let range = o.day.isEmpty || o.day == from ? (from, from) : (min(from, o.day), max(from, o.day))
-                let data = try await client.get("/api/calendar", ["start": range.0, "end": range.1])
+                let lookupDay = o.day.isEmpty ? from : o.day
+                let data = try await client.get("/api/calendar", ["start": lookupDay, "end": lookupDay])
                 let events = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["events"] as? [[String: Any]] ?? []
                 guard let e = events.first(where: { $0["id"] as? String == id && $0["editable"] as? Bool == true && $0["review"] != nil }) else {
                     save.busy = false; save.message = "这条家庭复习在 \(from) 读不到（可能已改期或删除）；没有改动任何记录，请刷新后核对。"; return
