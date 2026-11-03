@@ -657,10 +657,63 @@ class PhotoBatchTest(unittest.TestCase):
         code, state = self.request('/api/state')
         after = {r['id'] for r in state['records'] if r['source'] == '错题照片核对'}
         self.assertTrue(before <= after, 'older records are kept')
+        # Root+M4 2026-11-04: the same physical question (same original page SHA, label scope and original answer) reuses its
+        # canonical record in the new version: no second record, and its region is current on the v2 basis; the v1 basis stays
+        # in the stale history. (The earlier expectation, old records always stale after append, no longer applies.)
+        self.assertEqual(after, before, 'no second record for the same physical question')
         stale_ids = set(v2['stale'][0]['record_ids'])
+        self.assertTrue(stale_ids)
         for r in state['records']:
             if r['id'] in stale_ids:
-                self.assertFalse(r['wrong_region']['current'])
+                self.assertTrue(r['wrong_region']['current'])
+
+    def appended(self, key, second_answer, edit=False):
+        """v1 math [p01] -> one AI wrong; append m2 -> v2 math [p01, p03] re-checked with the given original answer for 第2题."""
+        uploads, (code, created) = self.batch(key, ['m1', 'c1'])
+        model = Model(self.ids)
+        group = lambda pages: dict(papers=[dict(subject='数学', title='虚构', basis='', pages=[dict(page_id=p, order=i, role='answered') for i, p in enumerate(pages, 1)]),
+                                           dict(subject='语文', title='虚构小测', basis='', pages=[dict(page_id='p02', order=1, role='answered')])], pending=[], same_pages=[])
+        model.group = group(['p01'])
+        model.review = lambda seen: [item('第2题', 'incorrect', answer='35' if 'm2' not in seen else second_answer)] if 'c1' not in seen else [item('第3题', 'correct')]
+        self.rounds(model, 6)
+        code, state = self.request('/api/state')
+        (first,) = [r for r in state['records'] if r['source'] == '错题照片核对']
+        if edit:
+            code, edited = self.request('/api/record', dict(id=first['id'], child=first['child'], day=first['day'], category=first['category'], subject=first['subject'],
+                                                            title=first['title'], note=first['note'] + '\n家长更正：虚构', source=first['source']))
+            self.assertEqual(code, 200, edited)
+        extra = self.upload('m2', key + '-add-01')
+        code, v2 = self.request('/api/photo-batch/append', dict(batch_id=created['id'], version=1, request_key=key + '-add', uploads=[extra]))
+        self.assertEqual(code, 200, v2)
+        model.group = group(['p01', 'p03'])
+        self.rounds(model, 6)
+        code, view = self.request('/api/photo-batch?id=' + created['id'])
+        code, state = self.request('/api/state')
+        return first, view, [r for r in state['records'] if r['source'] == '错题照片核对']
+
+    def test_a_changed_original_answer_is_a_new_question_and_the_old_basis_is_stale(self):
+        first, view, records = self.appended('canonical-changed-0001', '36')
+        self.assertEqual(len(records), 2, 'a different original answer is not merged into the old record')
+        old = next(r for r in records if r['id'] == first['id'])
+        self.assertEqual(old['note'], first['note'], 'the old record is untouched')
+        self.assertFalse(old['wrong_region']['current'], 'its own basis is the older version')
+        self.assertTrue(next(r for r in records if r['id'] != first['id'])['wrong_region']['current'])
+
+    def test_a_parent_corrected_original_is_never_overwritten_or_silently_linked(self):
+        first, view, records = self.appended('canonical-edited-0001', '35', edit=True)
+        self.assertEqual([r['id'] for r in records], [first['id']], 'no second record, no overwrite')
+        self.assertIn('家长更正：虚构', records[0]['note'])
+        math = next(p for p in view['papers'] if p['subject'] == '数学')
+        q = next(q for q in math['questions'] if q['label'] == '第2题')
+        self.assertIsNone(q['record_id'])
+        self.assertIn('待核', q['conflict'])
+
+    def test_same_physical_question_reuses_the_canonical_record(self):
+        first, view, records = self.appended('canonical-same-0001', '35')
+        self.assertEqual([r['id'] for r in records], [first['id']])
+        math = next(p for p in view['papers'] if p['subject'] == '数学')
+        self.assertEqual(next(q for q in math['questions'] if q['label'] == '第2题')['record_id'], first['id'])
+        self.assertEqual(records[0]['note'], first['note'])
 
     def test_old_single_annotate_contract_is_unchanged(self):
         raw = dict(pages=[dict(page=1, regions=[region('第1题')], evidence=PAGES['m1']['evidence'])], uncertainties=[])

@@ -607,8 +607,39 @@ def _record_key(row, paper, question, chosen):
     return ('pbi' if chosen else 'pbw') + hashlib.sha256(raw.encode()).hexdigest()[:40]
 
 
+def _physical(question, paper, pages):
+    """物理题身份：本批同一原图（SHA）上的题号 scope 与原答。没有可证的具体原页或题号时为 None：不可证就不复用。"""
+    page, norm = _scope(question['label'], paper, question.get('segment_pages') or [])
+    page_id = question.get('page_id') or page
+    if not page_id or page_id not in pages or not norm:
+        return None
+    answer = re.sub(r'\s+', '', unicodedata.normalize('NFKC', question.get('student_answer') or ''))
+    return [pages[page_id]['sha256'], norm, answer]
+
+
+def _canonical(app, c, u, paper, ident, child):
+    """更早版本里同一物理题（同孩同批同原图SHA/题号scope/原答）已记下的原错题：唯一、仍在、同孩、来源未变且家长没有改过时
+    返回 (编号, '')；身份不唯一、原记录已不在或被家长更正时返回 (None, 待核原因)；没有更早的同一物理题返回 (None, '')。"""
+    earlier = {s['record_id'] for s in u['saved'].values()
+               if s.get('ident') == ident and s.get('record_id') and s.get('version', 0) < paper['based_on_version']}
+    if not earlier:
+        return None, ''
+    if len(earlier) > 1:
+        return None, '同一物理题在更早版本对应多条原错题，身份不唯一；新版AI判断未关联、未另记，待核'
+    record_id = next(iter(earlier))
+    record = c.execute('SELECT id,child,source FROM records WHERE id=?', (record_id,)).fetchone()
+    edited = c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revisions'").fetchone() is not None and \
+        c.execute('SELECT 1 FROM revisions WHERE record_id=? LIMIT 1', (record_id,)).fetchone() is not None
+    if record is None or record['source'] != fwr.SOURCE or app.child_names(c).get(record['child'], record['child']) != child:
+        return None, '同一物理题的原错题已不在或已不是原来的记录；新版AI判断未关联、未另记，待核'
+    if edited:
+        return None, '同一物理题的原错题已被家长更正；新版AI判断未覆盖、未关联，待核'
+    return record_id, ''
+
+
 def _save_questions(app, c, row, u, paper, questions, now, *, chosen=False):
-    """沿原 save_record 写普通错题记录（来源“错题照片核对”），署名AI判断；逐条 key 由批次/卷/题/依据版本派生，续行不重复。"""
+    """沿原 save_record 写普通错题记录（来源“错题照片核对”），署名AI判断；新物理题的逐条 key 由批次/卷/题/依据版本派生，续行
+    不重复。同一物理题在新判断版本复用原 canonical 错题（原记录与家长订正逐字不动），新版AI依据只留在本批版本历史。"""
     names = {p['id']: p['name'] for p in app.profiles(c)}
     child = names.get(row['child_id'])
     if child is None:
@@ -617,6 +648,18 @@ def _save_questions(app, c, row, u, paper, questions, now, *, chosen=False):
     order = {p['page_id']: p['order'] for p in paper['pages']}
     for question in questions:
         located = question['page_id']
+        ident = _physical(question, paper, pages)
+        page, info = pages.get(located), u['pages'].get(located, {})
+        entry = dict(paper_id=paper['paper_id'], version=paper['based_on_version'], page_id=located,
+                     upload_id=page['upload_id'] if page else '', sha256=page['sha256'] if page else '', box=question['box'],
+                     natural_width=info.get('natural_width', 0), natural_height=info.get('natural_height', 0),
+                     label=question['label'], signed='AI判断', chosen=chosen, saved_at=now.isoformat(), ident=ident)
+        if not chosen and ident is not None:
+            record_id, review = _canonical(app, c, u, paper, ident, child)
+            if record_id is not None or review:
+                u['saved'][saved_key(paper, question)] = dict(entry, record_id=record_id, request_key='', canonical=record_id is not None,
+                                                              review=review)
+                continue
         files = [located] if located else list(question['segment_pages'])
         place = ('%s第%d页' % (paper['title'] or paper['subject'] or '本卷', order.get(located, 0)) if located else '本段原图（未定位到题框）')
         lines = []
@@ -635,14 +678,7 @@ def _save_questions(app, c, row, u, paper, questions, now, *, chosen=False):
                       attachments=[pages[p]['upload_id'] for p in files], followup_kind='',
                       request_key=_record_key(row, paper, question, chosen))
         result = app.save_record(record, connection=c)
-        page = pages.get(located)
-        info = u['pages'].get(located, {})
-        u['saved'][saved_key(paper, question)] = dict(record_id=result['record_id'], request_key=record['request_key'],
-                                           paper_id=paper['paper_id'], version=paper['based_on_version'],
-                                           page_id=located, upload_id=page['upload_id'] if page else '',
-                                           sha256=page['sha256'] if page else '', box=question['box'],
-                                           natural_width=info.get('natural_width', 0), natural_height=info.get('natural_height', 0),
-                                           label=question['label'], signed='AI判断', chosen=chosen, saved_at=now.isoformat())
+        u['saved'][saved_key(paper, question)] = dict(entry, record_id=result['record_id'], request_key=record['request_key'])
 
 
 def saved_key(paper, question):
@@ -928,7 +964,7 @@ def view_row(app, c, row):
             questions.append(dict(key=q['key'], label=q['label'], state=q['state'], state_word=STATE_WORDS[q['state']],
                                   question=q['question'], student_answer=q['student_answer'], answer=q['answer'],
                                   error_reason=q['error_reason'], steps=q['steps'], uncertainty=q['uncertainty'],
-                                  conflict=q['conflict'], page_id=q['page_id'], upload_id=page['upload_id'] if page else '',
+                                  conflict=q['conflict'] or (saved.get('review', '') if saved else ''), page_id=q['page_id'], upload_id=page['upload_id'] if page else '',
                                   box=q['box'], located=bool(q['box']), signed='AI判断',
                                   record_id=saved['record_id'] if saved else None,
                                   chosen=bool(saved and saved.get('chosen'))))
@@ -992,8 +1028,13 @@ def read_regions(app, c, records, names):
     owners = {p['id']: p['name'] for p in app.profiles(c)}
     for row in c.execute('SELECT id,child_id,understanding FROM photo_batches'):
         u = json.loads(row['understanding'])
-        stale = {i for s in u['stale'] for i in s['record_ids']}
+        # 当前/旧依据按每条记录最新的保存依据判断：同一物理题在新版本复用时以新版本为当前依据，不按全局编号集合判旧。
+        basis = {p['paper_id']: p.get('based_on_version') for p in u['papers']}
+        latest = {}
         for saved in u['saved'].values():
+            if saved.get('record_id') and (saved['record_id'] not in latest or saved['version'] >= latest[saved['record_id']]['version']):
+                latest[saved['record_id']] = saved
+        for saved in latest.values():
             record = by_id.get(saved['record_id'])
             if record is None or record.get('wrong_region') is not None or not saved.get('box'):
                 continue
@@ -1011,7 +1052,7 @@ def read_regions(app, c, records, names):
                 signed='AI判断', current=bool(same_file and record['source'] == fwr.SOURCE
                                              and saved['upload_id'] in record['attachments']
                                              and owners.get(row['child_id']) == names.get(record['child'], record['child'])
-                                             and saved['record_id'] not in stale))
+                                             and basis.get(saved['paper_id']) == saved['version']))
 
 
 ROUTES = {'/api/photo-batch/create': create, '/api/photo-batch/append': append,
