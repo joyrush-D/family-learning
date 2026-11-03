@@ -142,6 +142,9 @@ class ActionScopeTest(unittest.TestCase):
         self.assertIn('view.materials', js); self.assertIn('g.undated', js); self.assertIn("passed:'已过'", js)
         self.assertIn('let materials: [MaterialGroup]?', swift); self.assertIn('let undated: Int?', swift)
         self.assertIn('"passed": "已过"', swift)
+        # The day's lessons and plans belong to 待办 only; scope change keeps the review hold.
+        self.assertIn('if !store.showDone && !store.showUndated { scheduleSection }', swift)
+        self.assertIn('func setScope(_ key: String) {\n        if reviewHold() { return }', swift)
         self.assertNotRegex(js, re.escape('${g.items.length} 项</span>'), 'a subject tag no longer counts undated rows as the day')
 
 
@@ -311,9 +314,7 @@ class RealChainDateRoleTest(unittest.TestCase):
         self.assertEqual(a['due_kind'], 'inspection', 'the next-morning lesson check, not a handback')
         self.assertIn('30次', task['action']); self.assertIn('每10次休息半分钟', task['action'])  # the saved original words keep quantity and rest
 
-    # Known gap, not fixed in this unit (2026-11-03): _school_role_days reads only a sent-day (今晚) clause as completion, so
-    # 明晚…；后天…检查 stays a pending card without dates on the real chain (no day guessed, original kept, never tonight).
-    @unittest.expectedFailure
+    # 明晚…；后天…检查: the later evening's own work clause is its completion day, the check its due (never tonight).
     def test_d2_not_tonight_an_evening_exercise_keeps_its_own_work_day(self):
         later, a, v = self.one('体育作业：明晚原地高抬腿30次；后天体育课检查。', 'learning', '2026-11-05', '2026-11-03T16:00:00+08:00', ('2026-11-03', '2026-11-04'))
         self.assertEqual((a['complete_on'], a['due_on']), ('2026-11-04', '2026-11-05'), 'not tonight: 明晚 is its own work day')
@@ -331,6 +332,11 @@ class RealChainDateRoleTest(unittest.TestCase):
             self.assertEqual(fa.deadlines(text, sent), set(), text)
         quote = '今晚原地高抬腿30次，每10次休息半分钟；明早体育课检查。'
         self.assertEqual(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), ({'2026-11-03'}, '2026-11-04'))
+        for quote in ('明晚不用跳绳100下；后天体育课检查。', '明晚别跳绳100下；后天体育课检查。', '如果下雨，明晚跳绳100下；后天体育课检查。',
+                      '明晚跳绳100下，后天或大后天检查。', '明晚有3次机会；后天检查。', '明晚原地高抬腿30次吗？后天体育课检查。', '明晚朗读课文3遍。'):
+            self.assertIsNone(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), quote)
+        quote = '体育作业：明晚原地高抬腿30次；后天体育课检查。'
+        self.assertEqual(agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []), ({'2026-11-04'}, '2026-11-05'))
         quote = '今晚或明晚跳绳100下；后天体育课检查。'
         self.assertNotEqual((agent._school_role_days(quote, [dict(text=quote, time='2026-11-03T16:00:00+08:00')], []) or (set(),))[0], {'2026-11-04'},
                             'an option between two evenings is no chosen work day')
