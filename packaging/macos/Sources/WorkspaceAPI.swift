@@ -229,7 +229,10 @@ final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
     func url(_ path: String, _ query: [String: String] = [:]) -> URL {
         var c = URLComponents(url: origin.url, resolvingAgainstBaseURL: false)!
         c.path = path
-        if !query.isEmpty { c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) } }
+        if !query.isEmpty {
+            c.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+            c.percentEncodedQuery = c.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")  // a literal + is not a space
+        }
         return c.url!
     }
 
@@ -338,6 +341,38 @@ final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
 struct WorkspaceError: Error { let text: String; let login: Bool; init(_ text: String, login: Bool = false) { self.text = text; self.login = login } }
 
 /// 每次提交一个稳定标识：重试、丢回执后重发都用同一个，服务端据此不重复写。
+/// 一条来源消息（GET /api/agent/message 的只读视图）：发布人、时刻、原文、这条消息自己的附件，和打不开的附件数。
+struct SourceFile: Hashable, Identifiable { let id: String; let name: String }
+struct SourceMessage: Equatable { let sender: String; let time: String; let text: String; let sourceName: String; let files: [SourceFile]; let unavailable: Int }
+
+extension WorkspaceClient {
+    /// Publication.ref 是 message:<来源编号>:<消息编号>；来源编号可含冒号（QQ），只去掉 message: 后按最后一个冒号分开。
+    static func messageRef(_ ref: String) -> (source: String, message: String)? {
+        guard ref.hasPrefix("message:") else { return nil }
+        let rest = ref.dropFirst("message:".count)
+        guard let cut = rest.lastIndex(of: ":") else { return nil }
+        let source = String(rest[..<cut]), message = String(rest[rest.index(after: cut)...])
+        return source.isEmpty || message.isEmpty ? nil : (source, message)
+    }
+
+    /// 带 task_id 时服务端核对这条原消息属于该事项，只给该事项选用的原件；附件只取服务端返回的这一孩子这一条消息自己的。
+    func message(child: String, ref: String, task: String) async throws -> SourceMessage {
+        guard let (source, id) = WorkspaceClient.messageRef(ref) else { throw WorkspaceError("这条出处不是一条可打开的学校原消息。") }
+        var query = ["child_id": child, "source_id": source, "message_id": id]
+        if !task.isEmpty { query["task_id"] = task }
+        let data = try await get("/api/agent/message", query)
+        guard let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let m = o["message"] as? [String: Any],
+              o["source_id"] as? String == source, o["message_id"] as? String == id else { throw WorkspaceError("原消息格式无法读取，请重试。") }
+        let files: [SourceFile] = ((o["attachments"] as? [[String: Any]]) ?? []).compactMap { a in
+            guard let fid = a["id"] as? String, !fid.isEmpty else { return nil }
+            return SourceFile(id: fid, name: (a["name"] as? String) ?? (a["filename"] as? String) ?? fid)
+        }
+        let time = String(((m["time"] as? String) ?? "").prefix(16)).replacingOccurrences(of: "T", with: " ")
+        return SourceMessage(sender: (m["sender"] as? String) ?? "", time: time, text: (m["text"] as? String) ?? "",
+                             sourceName: (o["source_name"] as? String) ?? "", files: files, unavailable: ((o["unavailable_attachment_ids"] as? [Any]) ?? []).count)
+    }
+}
+
 func requestKey() -> String { "mac" + UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() }
 
 extension SavedRecord {

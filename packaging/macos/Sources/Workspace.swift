@@ -39,7 +39,7 @@ enum Palette {
 enum ListMode: String, CaseIterable, Identifiable { case calendar = "日历", wrong = "错题本", learning = "学习进展"; var id: String { rawValue } }
 
 enum SheetKind: Identifiable {
-    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong, taskWrong(DayItem)
+    case feedback(DayItem), oral, wrong(DayItem, SavedRecord), correction(SavedRecord), addWrong, taskWrong(DayItem), source(DayItem, Publication)
     var id: String {
         switch self {
         case .feedback(let i): return "feedback-" + i.id
@@ -48,6 +48,7 @@ enum SheetKind: Identifiable {
         case .correction(let r): return "correction-\(r.id)"
         case .addWrong: return "wrong-add"
         case .taskWrong(let i): return "wrong-task-" + i.id
+        case .source(let i, let p): return "source-\(i.id)-" + p.ref
         }
     }
 }
@@ -65,6 +66,8 @@ final class WorkspaceStore: ObservableObject {
     /// 日历里“日期未定”一段：服务端 undated 的同一行（与待办/已办同一个切换）。
     @Published var showUndated = false
     @Published var selection: String?
+    /// 上一次打开详情的那一项：返回清单后仍标出它（清单本身与滚动位置原样保留）；换孩子时清空。
+    @Published var lastOpened: String?
     @Published var sheet: SheetKind?
     @Published var materials: [String: MaterialState] = [:]
     @Published var notice = ""
@@ -165,7 +168,7 @@ final class WorkspaceStore: ObservableObject {
             if !keepSelection || !allItems.contains(where: { $0.id == selection }) { selection = nil }
             if let task = pendingTask {
                 pendingTask = nil
-                if let item = allItems.first(where: { $0.task_id == task }) { showDone = item.closed; showUndated = undatedHas(item.id); selection = item.id }
+                if let item = allItems.first(where: { $0.task_id == task }) { showDone = item.closed; showUndated = undatedHas(item.id); selection = item.id; lastOpened = item.id }
                 else { notice = "原作业不在这一天的清单里；原错题和订正仍在错题本。" }
             }
             if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
@@ -233,15 +236,19 @@ final class WorkspaceStore: ObservableObject {
     func select(_ id: String?) {
         if TestTargets.enabled { workspaceTestSelectCalls.append(id ?? "nil") }
         selection = id
+        if let id { lastOpened = id }
         if let item = selected, !item.task_id.isEmpty, materials[item.task_id] == nil { Task { await loadMaterials(item) } }
     }
+
+    /// 详情的“返回清单/收起详情”：只是不再显示详情，所选项仍在清单里标出，孩子、日期、段落与草稿都不变。
+    func closeDetail() { lastOpened = selection ?? lastOpened; selection = nil }
 
     /// 切换孩子/日期：弹出层有未保存内容时默认留下；不带着上一个孩子的提示。
     func change(child: String? = nil, day newDay: String? = nil) {
         if reviewHold() { return }  // before the header changes: the shown child/day stay what the locked card belongs to
         guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
         sheet = nil; sheetDirty = false; notice = ""
-        if let child, child != childID { childID = child; selection = nil; materials = [:]; record = nil; pendingTask = nil }
+        if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
         if let newDay { day = newDay; selection = selection }
         Task { await load() }
     }
@@ -349,13 +356,20 @@ func progressWords(_ p: TaskProgress) -> String {
 }
 
 extension DayItem {
-    var whenLabel: String { ["later": "以后安排", "overdue": "已过期限", "earlier": "之前安排", "unknown": "日期未写明", "passed": "已过"][when ?? ""] ?? "" }
+    var whenLabel: String { ["later": "以后安排", "overdue": "已过期限", "earlier": "之前安排", "unknown": "时间未明确", "passed": "已过"][when ?? ""] ?? "" }
     var publishedTime: String { String((published_at ?? "").dropFirst(11).prefix(5)) }
     var source: String { [publisher ?? "", publishedTime].filter { !$0.isEmpty }.joined(separator: " ") }
     var webID: String { task_id.isEmpty ? id : task_id }
     /// 发布一类的事实只是出处，不是要做的日期。
     static let publishRoles: Set<String> = ["published", "publish"]
     var actionFacts: [DayFact] { facts.filter { !DayItem.publishRoles.contains($0.role) } }
+    /// 行内的日期角色：完成、交回、提交、检查各写一条，同一天的不同角色也分开写。
+    var dayRoles: [DayFact] { facts.filter { ["due", "complete", "submit", "check"].contains($0.role) } }
+    /// “时间未明确”只说一次：已有角色写了时间未明确，就不再叠一个同义的整行标记。
+    var showsWhen: Bool { !whenLabel.isEmpty && !(when == "unknown" && dayRoles.contains { !$0.known }) }
+    /// 来源消息按唯一原消息 ref 计：原布置、更正都只是一条来源消息，不统称“提醒”。
+    var sourceRefs: [Publication] { var seen = Set<String>(); return (publications ?? []).filter { seen.insert($0.ref).inserted } }
+    var sourceWords: String { sourceRefs.count > 1 ? "来源消息\(sourceRefs.count)条" : "" }
     /// 老师与完整发布时间：有发布事实就照写它的原值（未知照写它的原话，如“发布 待核对”）；没有时用原始发布时间的完整日期与时刻。
     var publishWords: String? {
         let when: String
@@ -528,19 +542,39 @@ struct WorkspaceView: View {
             let compact = geo.size.width < 1180
             VStack(spacing: 0) {
                 HeaderBar(store: store, compact: compact)
-                // 三个入口同一个外壳：左栏同宽、位置不动，右栏是所选那一项（日历的事项，错题本/学习进展的那一道原错题）。
-                HStack(spacing: 0) {
-                    SubjectList(store: store).frame(width: compact ? 340 : 400)
-                    Rectangle().fill(Palette.line).frame(width: 1)
-                    Group {
-                        if store.mode == .calendar { Inspector(store: store) } else { RecordDetail(store: store) }
-                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                if store.mode == .calendar { calendar(compact) } else {
+                    // 错题本/学习进展：左栏同宽、位置不动，右栏是所选那一道原错题。
+                    HStack(spacing: 0) {
+                        SubjectList(store: store).frame(width: compact ? 340 : 400)
+                        Rectangle().fill(Palette.line).frame(width: 1)
+                        RecordDetail(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
         }
         .background(Palette.paper)
         .environment(\.colorScheme, .light)
         .sheet(item: $store.sheet) { kind in SheetHost(store: store, kind: kind) }
+    }
+
+    /// 日历：没选事项时清单用主要宽度（最宽 860、居中），不留空的右栏。选中后宽窗（≥1180）右侧是这一项的详情；窄窗是带
+    /// “返回清单”的详情页，清单只是隐去、不重建，返回时所选项、滚动位置、孩子与日期原样。窗口大小与位置不随之改变。
+    func calendar(_ compact: Bool) -> some View {
+        let open = store.selected != nil
+        let side = open && !compact, page = open && compact
+        return ZStack {
+            HStack(spacing: 0) {
+                SubjectList(store: store)
+                    .frame(maxWidth: side ? 440 : 860)
+                    .frame(maxWidth: side ? 440 : .infinity)
+                    .opacity(page ? 0 : 1).allowsHitTesting(!page).accessibilityHidden(page)
+                if side {
+                    Rectangle().fill(Palette.line).frame(width: 1)
+                    Inspector(store: store).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            if page { Inspector(store: store, page: true).frame(maxWidth: .infinity, maxHeight: .infinity) }
+        }
     }
 }
 
@@ -607,7 +641,7 @@ func factWords(_ f: DayFact) -> String {
     if f.role == "complete", f.today == true { return "今天完成" }
     if f.role == "submit", f.today == true { return "今天先提交" }
     if f.role == "check", f.today == true { return "今天先检查" }
-    return f.label + " " + (f.known ? f.value : "日期未写明")
+    return f.known ? f.label + " " + f.value : f.label + "时间未明确"
 }
 
 struct SubjectList: View {
@@ -774,7 +808,7 @@ struct SubjectList: View {
             ForEach(store.groups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { item in
-                        ItemRow(item: item, selected: store.selection == item.id).tag(item.id).probe("row-" + item.id, text: item.title)
+                        ItemRow(item: item, selected: store.selection == item.id || (store.selection == nil && store.lastOpened == item.id)).tag(item.id).probe("row-" + item.id, text: item.title)
                             .listRowSeparator(.hidden)
                     }
                 } header: {
@@ -825,8 +859,8 @@ struct ItemRow: View {
                     }
                 } else { Text("完成标准未提供，待补充").font(Palette.small).foregroundStyle(Palette.coralInk) }
                 FlowRow(spacing: 6, lineSpacing: 4) {
-                    if !item.whenLabel.isEmpty { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
-                    ForEach(item.facts.filter { $0.role == "due" || $0.role == "complete" || $0.role == "submit" || $0.role == "check" }, id: \.self) { f in
+                    if item.showsWhen { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
+                    ForEach(item.dayRoles, id: \.self) { f in
                         let (tone, ink) = factTone(f)
                         Badge(text: factWords(f), tone: tone, ink: ink)
                     }
@@ -834,8 +868,8 @@ struct ItemRow: View {
                     if item.pending_review { Badge(text: "待核对", tone: Palette.coral, ink: Palette.coralInk) }
                 }
                 .padding(.top, 2)
-                let meta = [item.source, item.progress.map(progressWords) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
-                if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true) }
+                let meta = [item.source, item.sourceWords, item.progress.map(progressWords) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+                if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("row-meta-" + item.id, text: meta) }
             }
             Spacer(minLength: 0)
         }
@@ -1365,6 +1399,8 @@ struct CourseCard: View {
 
 struct Inspector: View {
     @ObservedObject var store: WorkspaceStore
+    /// 窄窗的详情页（盖在隐去的清单上）：顶上是“返回清单”；宽窗右栏是“收起详情”。两者都回到同一清单位置。
+    var page = false
 
     var body: some View {
         Group {
@@ -1397,6 +1433,9 @@ struct Inspector: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 10) {
+                    Button { store.closeDetail() } label: { Label(page ? "返回清单" : "收起详情", systemImage: page ? "chevron.left" : "xmark") }
+                        .buttonStyle(GroveButtonStyle(kind: .quiet)).keyboardShortcut(.cancelAction)
+                        .help(page ? "回到清单原来的位置（Esc）" : "收起详情，清单回到整宽（Esc）").probe("detail-back", text: page ? "返回清单" : "收起详情")
                     FlowRow(spacing: 10, lineSpacing: 6) {
                         WoodTag(text: item.subject)
                         // 发布是老师旁的次要出处（原型 .d-source）：老师与完整发布时间一行小字，不占日期卡；原值照写，未知如实写。
@@ -1404,7 +1443,8 @@ struct Inspector: View {
                             Label(words, systemImage: "bubble.left").font(Palette.small).foregroundStyle(Palette.ink2).frame(minHeight: 26)
                                 .probe("detail-publisher", text: words)
                         }
-                        if !(item.publications ?? []).isEmpty || item.origin == "school" {
+                        // 有逐条出处时在下面“来源消息”里就地看原文；较早后台没有出处时仍沿网页版原消息。
+                        if item.sourceRefs.isEmpty && item.origin == "school" {
                             Button { store.openWebTools(item.webID, "original") } label: { Label("看原消息", systemImage: "text.bubble") }
                                 .buttonStyle(GroveButtonStyle(kind: .quiet)).help("在网页版打开同一项的原消息与原件").probe("original-message")
                         }
@@ -1436,6 +1476,7 @@ struct Inspector: View {
                         Text(hint).font(Palette.small).foregroundStyle(Palette.coralInk).probe("detail-pending-" + item.id, text: hint)
                     }
                 }
+                if !item.sourceRefs.isEmpty { sources(item) }
                 if !item.task_id.isEmpty { materials(item) }
                 feedback(item)
             }
@@ -1518,6 +1559,20 @@ struct Inspector: View {
         .probe("material-" + m.id, text: [m.stateLabel, m.name, m.scope, m.summary].filter { !$0.isEmpty }.joined(separator: " "))
     }
 
+    /// 来源消息：每条唯一原消息一行（来源与发布人），在这一项里直接读原文与这条消息自己的附件，关闭后回到同一项。
+    func sources(_ item: DayItem) -> some View {
+        section("来源消息\(item.sourceRefs.count)条", "text.bubble") {
+            ForEach(item.sourceRefs, id: \.ref) { p in
+                HStack(alignment: .center, spacing: 10) {
+                    Text([p.source_name, p.sender].filter { !$0.isEmpty }.joined(separator: " · ")).font(Palette.body).foregroundStyle(Palette.ink)
+                        .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
+                    Button { store.sheetDirty = false; store.sheet = .source(item, p) } label: { Label("看原消息", systemImage: "text.bubble") }
+                        .buttonStyle(GroveButtonStyle(kind: .quiet)).help("在这一项里看原文、发布人、时刻与附件").probe("source-open-" + p.ref, text: p.ref)
+                }
+            }
+        }.probe("detail-sources", text: "来源消息\(item.sourceRefs.count)条")
+    }
+
     func materials(_ item: DayItem) -> some View {
         let state = store.materials[item.task_id] ?? MaterialState()
         return VStack(alignment: .leading, spacing: 10) {
@@ -1538,7 +1593,11 @@ struct Inspector: View {
                     .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.coral400, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
                     .probe("material-gap")
             }
-            if item.category == "homework" {
+            // 有已保存的原件才放打印；没有已关联的参考如实写“尚无已关联参考”，不猜老师没发。
+            if item.category == "homework" && state.loaded && !state.files.isEmpty {
+                if !state.files.contains(where: { $0.roleLabel.contains("参考") }) {
+                    Text("尚无已关联参考。").font(Palette.small).foregroundStyle(Palette.ink2).probe("reference-none")
+                }
                 FlowRow(spacing: 10, lineSpacing: 8) {
                     Button { store.openWebTools(item.task_id, "print-original") } label: { Label("打印原卷", systemImage: "printer") }
                         .buttonStyle(GroveButtonStyle(kind: .primary)).probe("print-original")
@@ -1625,7 +1684,66 @@ struct SheetHost: View {
         case .correction(let record): CorrectionSheet(store: store, record: record)
         case .addWrong: WrongAddSheet(store: store)
         case .taskWrong(let item): WrongAddSheet(store: store, item: item)
+        case .source(let item, let p): SourceSheet(store: store, item: item, publication: p)
         }
+    }
+}
+
+/// 一条来源消息的原文（只读）：发布人、时刻、原文与服务端给出的这一孩子这一条原消息自己的附件；原件用同一查看器打开，关闭回到同一项。
+/// 读取失败保留此前内容并可重试；不写业务、不调用模型。
+struct SourceSheet: View {
+    @ObservedObject var store: WorkspaceStore
+    let item: DayItem
+    let publication: Publication
+    @State private var message: SourceMessage?
+    @State private var error = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .center) {
+                Text("原消息").font(Palette.round(19, .bold)).foregroundStyle(Palette.ink)
+                Spacer()
+                Button { store.sheet = nil } label: { Label("返回事项", systemImage: "chevron.left") }
+                    .buttonStyle(GroveButtonStyle()).keyboardShortcut(.cancelAction).probe("source-back")
+            }
+            Text(store.childName + " · " + item.title).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                .probe("source-item", text: item.id)
+            if let m = message {
+                let meta = [m.sender, m.time, m.sourceName].filter { !$0.isEmpty }.joined(separator: " · ")
+                Text(meta.isEmpty ? "发布人与时刻未记录" : meta).font(Palette.round(14)).foregroundStyle(Palette.ink).probe("source-meta", text: meta)
+                ScrollView {
+                    Text(m.text).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading).probe("source-text", text: m.text)
+                }.frame(maxHeight: 280)
+                if m.files.isEmpty {
+                    Text(m.unavailable > 0 ? "这条消息有 \(m.unavailable) 个附件暂时打不开。" : "这条消息没有附件。").font(Palette.small).foregroundStyle(Palette.ink2).probe("source-no-file")
+                }
+                ForEach(m.files) { f in
+                    HStack(spacing: 10) {
+                        Text(f.name).font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.ink).lineLimit(1).truncationMode(.middle).help(f.name)
+                        Spacer(minLength: 8)
+                        Button { store.openDocument(store.client.url("/upload/" + f.id), f.name) } label: { Label("打开原件", systemImage: "eye") }
+                            .buttonStyle(GroveButtonStyle()).probe("source-file-" + f.id, text: f.name)
+                    }
+                }
+            } else if error.isEmpty {
+                Text("正在读取原消息…").font(Palette.body).foregroundStyle(Palette.ink2)
+            }
+            if !error.isEmpty {
+                Text(error).font(Palette.body).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true).probe("source-error", text: error)
+                Button("重新读取") { Task { await read() } }.buttonStyle(GroveButtonStyle()).probe("source-retry")
+            }
+        }
+        .padding(24).frame(width: 560, alignment: .topLeading).frame(minHeight: 300, alignment: .topLeading)
+        .background(Palette.paper)
+        .task { await read() }
+    }
+
+    /// 同组出处按它自己的原事项编号核对归属（较早后台没有时用这一项的编号）；失败只给提示，已读到的原文留着。
+    func read() async {
+        error = ""
+        do { message = try await store.client.message(child: store.childID, ref: publication.ref, task: publication.task_id ?? item.task_id) }
+        catch { self.error = (error as? WorkspaceError)?.text ?? "暂时读不到原消息，原记录不受影响；请重试。" }
     }
 }
 
