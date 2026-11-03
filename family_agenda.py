@@ -1742,7 +1742,8 @@ SUBJECT_GENERAL, SUBJECT_UNKNOWN = '综合事务', '科目待定'
 DUE_LABELS = {'event': '活动日期', 'handback': '交回', 'inspection': '检查', 'arranged': '安排日'}
 CORRECTION_KINDS = ('订正', '复测', '独立复测')
 # How a row relates to the viewed day, from its saved dates only: 今天 (done/planned/due that day), 已过期限, 以后 (a later
-# date), 之前安排 (an earlier plan still open) and 日期未写明 (no exact date; never guessed, never counted as today).
+# date), 之前安排 (an earlier plan still open), 日期未写明 (no exact date; never guessed, never counted as today) and 已过 (a
+# lesson, in-class check or arranged day that is over; a deadline or handback past due is 已过期限 instead).
 DAY_ROLES = {'today': '今天', 'overdue': '已过期限', 'later': '以后', 'earlier': '之前安排', 'unknown': '日期未写明', 'passed': '已过'}
 # A lesson, in-class check or arranged day that is over has passed (已过, history); only a deadline or handback becomes overdue.
 PASSED_KINDS = ('event', 'inspection', 'arranged')

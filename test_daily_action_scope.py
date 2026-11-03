@@ -2,10 +2,12 @@
 
 Wholly fictional children, messages and tasks (no family record, no model, no collector). One shared server projection
 (family_agenda.day_view through app.day_view / state.today_view) gives the Web and Mac lists the same rows and counts."""
+from http.client import HTTPConnection
 import json
 from pathlib import Path
 import re
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 import datetime as dt
@@ -97,6 +99,22 @@ class ActionScopeTest(unittest.TestCase):
         self.assertEqual(states, {title: 'pending' for _k, title, _b, _p in PENDING}, 'every original pending row is kept as it was')
         inbox = [x for x in app.calendar_snapshot(DAY, DAY)['inbox'] if C in x['child_ids'] and x['kind'] == 'school']
         self.assertEqual({x['title'] for x in inbox}, {t for _k, t, _b, _p in PENDING}, 'material stays in the school inbox')
+
+    def test_http_day_is_the_same_projection_and_writes_nothing(self):
+        server = app.ThreadingHTTPServer(('127.0.0.1', 0), app.Handler); threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        with app.connect() as c: before = '\n'.join(c.iterdump())
+        conn = HTTPConnection('127.0.0.1', server.server_port, timeout=10)
+        try:
+            with patch.object(app.family_llm, '_chat_json', side_effect=AssertionError('no model when reading a day')):
+                conn.request('GET', f'/api/day?child_id={C}&day={DAY}'); r = conn.getresponse(); code, wire = r.status, json.loads(r.read())
+        finally: conn.close()
+        self.assertEqual(code, 200, wire)
+        local = app.day_view(C, DAY)
+        for key in ('groups', 'materials', 'counts', 'upcoming', 'week'):
+            self.assertEqual(wire[key], local[key], key)
+        self.assertEqual((wire['counts']['material'], wire['counts']['open']), (2, 4))
+        with app.connect() as c: self.assertEqual(before, '\n'.join(c.iterdump()), 'GET /api/day writes nothing')
 
     def test_web_and_mac_read_one_projection(self):
         snap = app.snapshot(); today = snap['today']
