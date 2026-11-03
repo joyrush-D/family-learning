@@ -569,8 +569,10 @@ _COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完�
 # or the casual 一下 (明天准备一下).
 # Its predicate may open with one ordinary method of doing it (按四拍节奏拍手3组、跟着音乐跳绳100下、用左手拍球20下): one
 # method word and its own words, each held to the same exclusions and kept inside the clause, before that 2-6 character name.
+# A 的 there joins an attributive to a method word of its own after it (按照老师上节课讲过的左右交替方法), so that attributive's own
+# aspect right before it (讲过的、说好了的) is the method's history, not this act's state; the name before the count stays free of it.
 _COUNTED_FREE=r'(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|[不没无未免别勿有是共约第已了过的每或])'
-_COUNTED_ACT=(r'(?:(?:按照?|照着|跟着|随着|和着|伴着|对着|看着|听着|用)(?:'+_COUNTED_FREE+r'[一-鿿0-9])+?)?'
+_COUNTED_ACT=(r'(?:(?:按照?|照着|跟着|随着|和着|伴着|对着|看着|听着|用)(?:(?:[过了]?的)?'+_COUNTED_FREE+r'[一-鿿0-9])+?)?'
               r'(?:'+_COUNTED_FREE+r'[一-鿿]){2,6}?'
               r'(?!一\s*下)[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')  # 准备一下 is no count
 
