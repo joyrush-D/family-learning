@@ -85,7 +85,9 @@ final class WorkspaceStore: ObservableObject {
     @Published var photoQuestion: String?
     @Published var photoPollToken = 0
     /// 当前页需要读回（GET失败、continue/include 回执不明、原图读不到）：同孩同批同原图只读重读，不重发写入、不调模型。
-    @Published var photoRecovery = ""
+    /// 按资源分开（批次列表 list、批次状态 batch、每张原图 image:编号）：只有那个资源读成功才清它那一条；显示取其一。
+    @Published var photoProblems: [String: String] = [:]
+    var photoRecovery: String { photoProblems.sorted { $0.key < $1.key }.first?.value ?? "" }
     @Published var photoImageEpoch = 0
     var photoImages: [String: NSImage] = [:]
     var photoSequence = 0
@@ -271,7 +273,7 @@ final class WorkspaceStore: ObservableObject {
                 guard confirmDiscard("放弃这次还没登记的照片导入（已上传的原件保留）") else { return }
                 photoDraft = nil
             }
-            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoRecovery = ""
+            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]
         }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
@@ -2495,12 +2497,14 @@ extension WorkspaceStore {
             let data = try await client.get("/api/photo-batches", ["child_id": child])
             let list = try JSONDecoder().decode(PhotoBatchList.self, from: data)
             guard mine == photoSequence, child == childID, list.child_id == child else { return }
-            photoBatches = list.batches; photoChild = child; photoLoadError = ""; photoRecovery = ""
+            photoBatches = list.batches; photoChild = child; photoLoadError = ""
+            // 读回的是批次列表与各批实际状态：只清这两类；原图失败等它自己读成功才清。
+            photoProblems = photoProblems.filter { $0.key.hasPrefix("image:") }
         } catch {
             guard mine == photoSequence, child == childID else { return }
             if let e = error as? WorkspaceError, e.login { loginRequired = true; openLogin() }
             photoLoadError = (error as? WorkspaceError)?.text ?? "导入的照片结果暂时读不到；原照片和结果都在。"
-            photoRecovery = "点“重新读取”读回当前孩子的照片结果。"
+            photoProblems["list"] = "点“重新读取”读回当前孩子的照片结果。"
         }
     }
 
@@ -2515,8 +2519,10 @@ extension WorkspaceStore {
 
     /// 当前页的读回：只 GET 同一孩子的批次与原图（并重新挂上只读轮询），不上传、不重新登记、不重发 continue/include、不调模型。
     func refreshPhotos() async {
-        photoRecovery = ""; photoImageEpoch += 1
+        photoImageEpoch += 1
         await loadPhotoBatches()
+        // 仍未读成功的原图：按同一编号再只读一次（成功才清它那一条，失败照旧保留恢复入口）。
+        for key in photoProblems.keys.sorted() where key.hasPrefix("image:") { _ = await photoImage(String(key.dropFirst(6))) }
         photoPollToken += 1
     }
 
@@ -2636,7 +2642,7 @@ extension WorkspaceStore {
             photoNotice = message
         case .unknown:
             photoNotice = "没有收到回执，结果未知；不会自动重发。"
-            photoRecovery = "点“重新读取”核对这一批的实际状态。"
+            photoProblems["batch"] = "点“重新读取”核对这一批的实际状态。"
         }
     }
 
@@ -2651,14 +2657,17 @@ extension WorkspaceStore {
     func photoImage(_ uploadID: String) async -> NSImage? {
         if let image = photoImages[uploadID] { return image }
         guard !uploadID.isEmpty else { return nil }
+        let child = childID, key = "image:" + uploadID
         do {
             let data = try await client.get("/upload/" + uploadID)
-            guard let image = NSImage(data: data) else { photoRecovery = "这张原图无法显示；点“重新读取”再试。"; return nil }
-            photoImages[uploadID] = image
+            guard child == childID else { return nil }  // 换了孩子：迟到的读回不记到新页面
+            guard let image = NSImage(data: data) else { photoProblems[key] = "这张原图无法显示；点“重新读取”再试。"; return nil }
+            photoImages[uploadID] = image; photoProblems[key] = nil
             return image
         } catch {
-            if let e = error as? WorkspaceError, e.login { loginRequired = true; openLogin(); photoRecovery = "需要先登录家庭账号；登录后点“重新读取”。" }
-            else { photoRecovery = "原图暂时读不到；点“重新读取”再试，结果不受影响。" }
+            guard child == childID else { return nil }
+            if let e = error as? WorkspaceError, e.login { loginRequired = true; openLogin(); photoProblems[key] = "需要先登录家庭账号；登录后点“重新读取”。" }
+            else { photoProblems[key] = "原图暂时读不到；点“重新读取”再试，结果不受影响。" }
             return nil
         }
     }
