@@ -1,0 +1,9 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "context": "existing designs/family-grove styles and the native Palette in packaging/macos/Sources/Workspace.swift",
+  "assets": {"index": {"versions": [{"path": "index.html", "createdAt": "2026-11-03T14:10:00.000Z", "status": "needs-review"}]}},
+  "createdAt": "2026-11-03T14:10:00.000Z",
+  "updatedAt": "2026-11-03T14:10:00.000Z"
+}

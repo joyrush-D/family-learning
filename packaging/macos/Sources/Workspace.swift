@@ -73,6 +73,19 @@ final class WorkspaceStore: ObservableObject {
     @Published var notice = ""
     /// 错题本 / 学习进展里选中的那一道原错题：按记录编号，不按标题或数组第一个猜；换孩子时清空。
     @Published var record: Int?
+    /// 批量照片（PRD 5.1）：当前孩子已导入批次的只读结果与这次还没登记完的导入草稿；换孩子时不带过去，迟到读回不覆盖。
+    @Published var photoBatches: [PhotoBatch] = []
+    @Published var photoChild = ""
+    @Published var photoNotice = ""
+    @Published var photoLoadError = ""
+    @Published var photoBusy = false
+    @Published var photoDraft: PhotoImportDraft?
+    @Published var photoPaper: String?
+    @Published var photoPaperBatch: String?
+    @Published var photoQuestion: String?
+    @Published var photoPollToken = 0
+    var photoImages: [String: NSImage] = [:]
+    var photoSequence = 0
     /// “回原作业”要在日历里选中的原作业：不在正看的这一天时，先换到原错题记下的那一天，再按作业编号选中。
     var pendingTask: String?
     /// 知识点与练习：同一道原错题（记录编号、孩子编号）的知识点面板。
@@ -93,7 +106,7 @@ final class WorkspaceStore: ObservableObject {
     init(client: WorkspaceClient) { self.client = client }
 
     /// 未保存的填写：打开着的表单有改动，或家庭复习卡片有改动/保存中/回执不明（关闭窗口、退出与打开网页都先确认）。
-    var hasUnsavedInput: Bool { (sheet != nil && sheetDirty) || reviewDrafts.values.contains { $0.dirty || $0.locked } }
+    var hasUnsavedInput: Bool { (sheet != nil && sheetDirty) || reviewDrafts.values.contains { $0.dirty || $0.locked } || photoDraft != nil || photoBusy }
     /// 有家庭复习的保存还在进行或回执不明。
     var reviewLocked: Bool { reviewDrafts.values.contains { $0.locked } }
     /// 这时不换孩子、日期，不重读也不换成网页：原卡片和“用同一次提交重试”留在原处（只是有改动的草稿按编号保留，可以照常切换）。
@@ -247,6 +260,12 @@ final class WorkspaceStore: ObservableObject {
     func change(child: String? = nil, day newDay: String? = nil) {
         if reviewHold() { return }  // before the header changes: the shown child/day stay what the locked card belongs to
         guard sheet == nil || !sheetDirty || confirmDiscard("离开当前填写") else { return }
+        if let child, child != childID {
+            // 照片导入草稿属于原孩子：上传/登记进行中不换；还没登记完的先问，放弃后只清草稿，已上传的原件不动。
+            if photoBusy { notice = "照片还在上传或登记，请等这一步结束再换孩子。"; return }
+            if photoDraft != nil { guard confirmDiscard("放弃这次还没登记完的照片导入") else { return }; photoDraft = nil }
+            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""
+        }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
         if let newDay { day = newDay; selection = selection }
@@ -933,7 +952,7 @@ struct WrongList: View {
     @ObservedObject var store: WorkspaceStore
     var body: some View {
         List(selection: Binding(get: { store.record }, set: { store.record = $0 })) {
-            if store.current != nil { addRow.listRowSeparator(.hidden) }
+            if store.current != nil { PhotoImportSection(store: store).listRowSeparator(.hidden); addRow.listRowSeparator(.hidden) }
             ForEach(store.wrongGroups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { r in
@@ -1022,6 +1041,7 @@ struct RecordDetail: View {
     var body: some View {
         Group {
             if let r = store.selectedRecord { detail(r) }
+            else if let shown = store.selectedPhotoPaper { PhotoPaperDetail(store: store, batch: shown.0, paper: shown.1) }
             else {
                 VStack(spacing: 10) {
                     Image(systemName: "leaf").font(.largeTitle).foregroundStyle(Palette.leafInk)
@@ -2430,5 +2450,371 @@ extension View {
     @ViewBuilder func probe(_ id: String, text: String = "") -> some View {
         if TestTargets.enabled { self.accessibilityIdentifier(id).background(ProbeAnchorView(id: id, text: text)) }
         else { self.accessibilityIdentifier(id) }
+    }
+}
+
+
+// MARK: - 批量照片导入（PRD 5.1 M1）
+
+/// 一次导入还没登记完的照片：逐张上传的原件编号与上传标识、批次提交标识都留着，失败或回执丢失后用同一组重试。
+struct PhotoImportDraft {
+    let child: String
+    let key: String
+    var urls: [URL]
+    var cached: [String: String] = [:]
+    var keys: [String: String] = [:]
+}
+
+extension WorkspaceStore {
+    var photoBatchesShown: [PhotoBatch] { photoChild == childID ? photoBatches : [] }
+    var selectedPhotoPaper: (PhotoBatch, PhotoPaper)? {
+        guard record == nil, let id = photoPaper, let batch = photoBatchesShown.first(where: { $0.id == photoPaperBatch }),
+              let paper = batch.papers.first(where: { $0.paper_id == id }) else { return nil }
+        return (batch, paper)
+    }
+
+    /// 只读：按当前孩子读已存批次，不触发后台或模型。换了孩子或有更新的读取时，迟到的读回不覆盖当前显示。
+    func loadPhotoBatches() async {
+        let child = childID
+        guard !child.isEmpty else { return }
+        photoSequence += 1
+        let mine = photoSequence
+        do {
+            let data = try await client.get("/api/photo-batches", ["child_id": child])
+            let list = try JSONDecoder().decode(PhotoBatchList.self, from: data)
+            guard mine == photoSequence, child == childID, list.child_id == child else { return }
+            photoBatches = list.batches; photoChild = child; photoLoadError = ""
+        } catch {
+            guard mine == photoSequence, child == childID else { return }
+            if let e = error as? WorkspaceError, e.login { loginRequired = true }
+            photoLoadError = (error as? WorkspaceError)?.text ?? "导入的照片结果暂时读不到，可以稍后再看；原照片和结果都在。"
+        }
+    }
+
+    /// 后台还在处理时每隔几秒只读一次；离开错题本、换孩子或都处理完就停。客户端不触发后台、不重发失败步骤。
+    func pollPhotoBatches() async {
+        while !Task.isCancelled {
+            await loadPhotoBatches()
+            guard mode == .wrong, photoBatchesShown.contains(where: { $0.state == "queued" || $0.state == "running" }) else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+    }
+
+    func importPhotos(_ urls: [URL]) {
+        guard !photoBusy else { return }
+        let images = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) ?? false }
+        guard !images.isEmpty else { photoNotice = "没有可导入的照片（只收图片文件）。"; return }
+        guard images.count <= 30 else { photoNotice = "每批最多30张，这次选了\(images.count)张；请分两批导入。"; return }
+        guard !childID.isEmpty else { photoNotice = "请先选一个孩子。"; return }
+        photoDraft = PhotoImportDraft(child: childID, key: requestKey(), urls: images)
+        Task { await runPhotoImport() }
+    }
+
+    /// 逐张按原上传守卫保存（每张一个上传标识并一直沿用），再用同一批次提交标识登记；任何一步没确认就停下，
+    /// 已上传的原件编号、上传标识和批次标识都留在草稿里：“用同一提交重试”不重传已存的照片，也不多建批次。
+    func runPhotoImport() async {
+        guard var draft = photoDraft, !photoBusy else { return }
+        guard draft.child == childID else { photoNotice = "这次导入属于另一个孩子，没有继续；请切回原孩子再重试。"; return }
+        photoBusy = true
+        defer { photoBusy = false }
+        photoNotice = "正在保存原件（共\(draft.urls.count)张）…"
+        let client = self.client
+        let up = await WorkspaceStore.uploadPhotos(draft.urls, cached: draft.cached, keys: draft.keys, read: WorkspaceStore.readPicked,
+                                                   send: { data, name, key in await client.upload(data, name: name, key: key) })
+        draft.cached = up.cached; draft.keys = up.keys; photoDraft = draft
+        if let stop = up.stop {
+            photoNotice = "第\(up.ids.count + 1)张照片没有保存（\(photoStopText(stop))）；前\(up.ids.count)张原件已保存，可用同一提交重试。"
+            return
+        }
+        photoNotice = "原件已保存，正在登记这一批…"
+        switch await client.post("/api/photo-batch/create", ["child_id": draft.child, "request_key": draft.key, "uploads": up.ids]) {
+        case .saved(let reply):
+            guard let batch = decodePhotoBatch(reply) else { photoNotice = "登记回执无法读取；原件已保存，可用同一提交重试。"; return }
+            photoDraft = nil
+            if draft.child == childID { photoBatches = [batch] + photoBatches.filter { $0.id != batch.id }; photoChild = draft.child }
+            photoNotice = (reply["replayed"] as? Bool) == true ? "已找到这一批（同一提交），没有重复登记。"
+                : "已登记，后台会自动分科、分卷和检查；可以先离开，回来即可看到结果。"
+            photoPollToken += 1
+        case .refused(let status, let message, _):
+            if status == 401 { loginRequired = true }
+            photoNotice = message + "（这批照片还没登记；已上传的原件保留）"
+        case .unknown:
+            photoNotice = "没有收到登记回执；原件已保存，可用同一提交重试，不会重复建批次。"
+        }
+    }
+
+    func photoStopText(_ stop: PhotoStop) -> String {
+        switch stop {
+        case .unreadable: return "读不到这张照片文件"
+        case .noID: return "回执里没有原件编号"
+        case .outcome(.refused(let status, let message, _)):
+            if status == 401 { loginRequired = true }
+            return message
+        case .outcome(.unknown): return "没有收到回执"
+        case .outcome(.saved): return "回执无法读取"
+        }
+    }
+
+    func decodePhotoBatch(_ reply: [String: Any]) -> PhotoBatch? {
+        guard let data = try? JSONSerialization.data(withJSONObject: reply) else { return nil }
+        return try? JSONDecoder().decode(PhotoBatch.self, from: data)
+    }
+
+    /// 家长明确“继续失败部分”：只用这一批当前版本提交一次；回执不明不自动重发，到调用上限时服务端不再给继续。
+    func continuePhotoBatch(_ batch: PhotoBatch) async {
+        guard batch.child_id == childID else { return }
+        applyPhotoOutcome(await client.post("/api/photo-batch/continue", ["batch_id": batch.id, "version": batch.version]),
+                          done: "已排入后台，只重做未完成的步骤。")
+    }
+
+    func includePhotoQuestion(_ batch: PhotoBatch, _ question: PhotoQuestion) async {
+        guard batch.child_id == childID else { return }
+        applyPhotoOutcome(await client.post("/api/photo-batch/include", ["batch_id": batch.id, "version": batch.version, "question_key": question.key]),
+                          done: "已纳入练习，记在原错题里（署名AI判断）。")
+        await load()
+    }
+
+    func applyPhotoOutcome(_ outcome: PostOutcome, done: String) {
+        switch outcome {
+        case .saved(let reply):
+            if let batch = decodePhotoBatch(reply), batch.child_id == childID {
+                photoBatches = photoBatches.map { $0.id == batch.id ? batch : $0 }; photoNotice = done; photoPollToken += 1
+            }
+        case .refused(let status, let message, _):
+            if status == 401 { loginRequired = true }
+            photoNotice = message
+        case .unknown: photoNotice = "没有收到回执，结果未知；稍后刷新再看，不会自动重发。"
+        }
+    }
+
+    /// AI 判错已记成原错题（同一记录编号）：在错题本打开同一道，订正、知识点和复测都走原链。
+    func openPhotoRecord(_ id: Int) async {
+        if !wrongItems.contains(where: { $0.id == id }) { await load() }
+        if wrongItems.contains(where: { $0.id == id }) { showRecord(id) }
+        else { photoNotice = "这道错题的原记录还没读到；请刷新后再打开，记录不会重复建。" }
+    }
+
+    func photoImage(_ uploadID: String) async -> NSImage? {
+        if let image = photoImages[uploadID] { return image }
+        guard !uploadID.isEmpty, let data = try? await client.get("/upload/" + uploadID), let image = NSImage(data: data) else { return nil }
+        photoImages[uploadID] = image
+        return image
+    }
+}
+
+/// 错题本左栏最上面：当前孩子的“导入照片…”（多选或拖入），以及最近导入的批次与每份卷；处理中先显示已完成的部分。
+struct PhotoImportSection: View {
+    @ObservedObject var store: WorkspaceStore
+    @State var picking = false
+    @State var targeted = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Button { pick() } label: { Label("导入照片…", systemImage: "photo.on.rectangle.angled") }
+                    .buttonStyle(GroveButtonStyle(kind: .primary)).disabled(store.photoBusy).probe("photo-import")
+                if store.photoDraft != nil && !store.photoBusy {
+                    Button("用同一提交重试") { Task { await store.runPhotoImport() } }.buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-retry")
+                }
+            }
+            Text("一次可选或拖入最多30张，不同科目、乱序都可以；系统自动分科、分卷和检查，不用先填科目或题号。")
+                .font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+            if !store.photoNotice.isEmpty {
+                Text(store.photoNotice).font(Palette.small).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).probe("photo-notice", text: store.photoNotice)
+            }
+            if !store.photoLoadError.isEmpty {
+                Text(store.photoLoadError).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(store.photoBatchesShown.prefix(5)) { batch in PhotoBatchCard(store: store, batch: batch) }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(targeted ? Palette.leaf50 : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(targeted ? Palette.leaf400 : Color.clear, style: StrokeStyle(lineWidth: 1.5, dash: [5])))
+        .onDrop(of: [UTType.fileURL], isTargeted: $targeted) { providers in drop(providers) }
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            if case .success(let urls) = result { store.importPhotos(urls) }
+        }
+        .task(id: "\(store.childID)|\(store.mode.rawValue)|\(store.photoPollToken)") { await store.pollPhotoBatches() }
+    }
+
+    func pick() {
+        if TestTargets.enabled, !workspaceTestPicks.isEmpty {
+            if let urls = workspaceTestPicks.removeFirst() { store.importPhotos(urls) }
+            return
+        }
+        picking = true
+    }
+
+    func drop(_ providers: [NSItemProvider]) -> Bool {
+        let wanted = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !wanted.isEmpty else { return false }
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in wanted {
+                let url: URL? = await withCheckedContinuation { done in _ = provider.loadObject(ofClass: URL.self) { url, _ in done.resume(returning: url) } }
+                if let url { urls.append(url) }
+            }
+            store.importPhotos(urls)
+        }
+        return true
+    }
+}
+
+/// 一批照片：导入时间与张数、状态短句；每份卷一行（科目 · 卷名，页数与错/疑似/未判）；待补页、同一张照片、依据已变与失败步骤。
+struct PhotoBatchCard: View {
+    @ObservedObject var store: WorkspaceStore
+    let batch: PhotoBatch
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(batch.created.prefix(16).replacingOccurrences(of: "T", with: " ") + " 导入 · \(batch.pages.count)张")
+                    .font(Palette.round(14, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Text(batch.stateWords).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("photo-state-\(batch.id)", text: batch.state)
+            }
+            ForEach(batch.papersBySubject) { paper in
+                let on = store.record == nil && store.photoPaperBatch == batch.id && store.photoPaper == paper.paper_id
+                Button {
+                    store.record = nil; store.photoPaperBatch = batch.id; store.photoPaper = paper.paper_id
+                    store.photoQuestion = paper.shownQuestions.first?.key
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(paper.subject + " · " + (paper.title.isEmpty ? "未识别卷名" : paper.title))
+                            .font(Palette.round(14, .semibold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                        Text(paper.summary).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Palette.leaf50 : Palette.card))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(on ? Palette.leaf400 : Palette.line, lineWidth: on ? 1.5 : 1))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).probe("photo-paper-\(paper.paper_id)", text: paper.summary)
+            }
+            ForEach(batch.waitNotes, id: \.self) { note in
+                Text(note).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+            }
+            if !batch.progress.failed.isEmpty {
+                Text(batch.progress.failed.map(\.error).joined(separator: "；")).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+            }
+            if batch.can_continue {
+                Button("继续失败部分") { Task { await store.continuePhotoBatch(batch) } }
+                    .buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-continue-\(batch.id)")
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card).shadow(color: Palette.cardShadow, radius: 4, x: 0, y: 2))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+    }
+}
+
+/// 右栏：所选那份卷——科目、卷名/页数、明确错/疑似/未判与覆盖；逐题看原图题框、原答、参考与依据（署名AI判断）。
+struct PhotoPaperDetail: View {
+    @ObservedObject var store: WorkspaceStore
+    let batch: PhotoBatch
+    let paper: PhotoPaper
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(paper.subject + " · " + (paper.title.isEmpty ? "未识别卷名" : paper.title))
+                    .font(Palette.round(20, .bold)).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).probe("photo-paper-title")
+                Text(paper.summary).font(Palette.body).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                ForEach(paper.coverageLines, id: \.self) { line in
+                    Text(line).font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                }
+                if let gaps = paper.unchecked_questions, !gaps.isEmpty {
+                    Text("明确未检查：" + gaps.joined(separator: "、")).font(Palette.small).foregroundStyle(Palette.coralInk).fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(paper.shownQuestions) { q in
+                    let on = store.photoQuestion == q.key
+                    Button { store.photoQuestion = q.key } label: {
+                        HStack(spacing: 8) {
+                            Badge(text: q.state_word, tone: q.state == "wrong" ? Palette.coral : Palette.wood, ink: q.state == "wrong" ? Palette.coralInk : Palette.woodInk)
+                            Text(q.label + (q.located ? "" : " · 未定位")).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12).frame(minHeight: Palette.hit)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(on ? Palette.leaf50 : Palette.card))
+                        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(on ? Palette.leaf400 : Palette.line, lineWidth: on ? 1.5 : 1))
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).probe("photo-question-\(q.key)", text: q.state)
+                }
+                if let q = paper.shownQuestions.first(where: { $0.key == store.photoQuestion }) {
+                    PhotoQuestionDetail(store: store, batch: batch, paper: paper, question: q)
+                } else if paper.shownQuestions.isEmpty {
+                    Text(paper.checked ? "这份卷没有返回错题或未判定题；这不代表全卷正确，未列出的题目仍未检查。" : "这份卷还在检查，先看已完成的部分。")
+                        .font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(22).frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .background(Palette.paper)
+    }
+}
+
+/// 一道题：原图（按实际显示尺寸换算 0…1000 题框）、原答与参考分开、判断依据、署名；已记的错题回到同一条原错题。
+struct PhotoQuestionDetail: View {
+    @ObservedObject var store: WorkspaceStore
+    let batch: PhotoBatch
+    let paper: PhotoPaper
+    let question: PhotoQuestion
+    @State var image: NSImage?
+    @State var failed = false
+    /// 没有定位到题框时看这一卷第一页的完整原图（不猜框）。
+    var uploadID: String {
+        if !question.upload_id.isEmpty { return question.upload_id }
+        let first = paper.pages.sorted { $0.order < $1.order }.first?.page_id
+        return batch.pages.first { $0.page_id == first }?.upload_id ?? ""
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let image {
+                Image(nsImage: image).resizable().scaledToFit()
+                    .overlay(alignment: .topLeading) {
+                        GeometryReader { g in
+                            if let b = question.box {
+                                Rectangle().strokeBorder(Palette.coral400, lineWidth: 3)
+                                    .frame(width: g.size.width * CGFloat(b.w) / 1000, height: g.size.height * CGFloat(b.h) / 1000)
+                                    .offset(x: g.size.width * CGFloat(b.x) / 1000, y: g.size.height * CGFloat(b.y) / 1000)
+                                    .probe("photo-box", text: "\(b.x),\(b.y),\(b.w),\(b.h)")
+                            }
+                        }
+                    }
+                    .frame(maxWidth: 560, maxHeight: 680, alignment: .topLeading)
+            } else {
+                Text(failed ? "原图暂时读不到，可以重试；结果不受影响。" : "正在读取原图…").font(Palette.small).foregroundStyle(Palette.ink2)
+            }
+            if !question.located {
+                Text("没有可靠对应的题框，未定位；上面是这一卷的完整原图。").font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+            }
+            field("原答（孩子写的）", question.student_answer.isEmpty ? "未能确认" : question.student_answer)
+            if !question.answer.isEmpty { field("参考答案", question.answer) }
+            if !question.error_reason.isEmpty { field("判断依据", question.error_reason) }
+            if !question.uncertainty.isEmpty || !question.conflict.isEmpty {
+                field("不确定", [question.conflict, question.uncertainty].filter { !$0.isEmpty }.joined(separator: "；"))
+            }
+            Text("署名：AI判断，未经老师或家长核定；不代表掌握程度。").font(Palette.small).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true)
+            if let followups = question.followups, !followups.isEmpty {
+                Text("已记：" + followups.map { ($0.followup_kind.isEmpty ? "跟进" : $0.followup_kind) + " " + $0.day }.joined(separator: "、"))
+                    .font(Palette.small).foregroundStyle(Palette.leafInk).fixedSize(horizontal: false, vertical: true)
+            }
+            if let id = question.record_id {
+                Button("打开原错题 · 记订正") { Task { await store.openPhotoRecord(id) } }
+                    .buttonStyle(GroveButtonStyle(kind: .primary)).probe("photo-open-record-\(id)")
+            } else if question.state == "suspected" {
+                Button("纳入练习") { Task { await store.includePhotoQuestion(batch, question) } }
+                    .buttonStyle(GroveButtonStyle(kind: .secondary)).probe("photo-include")
+            }
+        }
+        .task(id: uploadID) { image = nil; failed = false; image = await store.photoImage(uploadID); failed = image == nil }
+    }
+
+    func field(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(Palette.small).foregroundStyle(Palette.ink2)
+            Text(value).font(Palette.body).foregroundStyle(Palette.ink).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+        }
+        .padding(10).frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
     }
 }

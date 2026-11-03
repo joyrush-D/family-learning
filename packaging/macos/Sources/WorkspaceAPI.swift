@@ -390,3 +390,67 @@ extension SavedRecord {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }
+
+// MARK: 批量照片（PRD 5.1 M1）：只读 GET /api/photo-batches?child_id= 与 /api/photo-batch?id= 的结果；写入只经 create/append/continue/include。
+struct PhotoBatchList: Decodable { let child_id: String; let batches: [PhotoBatch] }
+struct PhotoBatch: Decodable, Identifiable {
+    let id: String; let child_id: String; let version: Int; let created: String; let state: String
+    let pages: [PhotoPage]; let papers: [PhotoPaper]; let pending: [PhotoPending]; let stale: [PhotoStale]
+    let progress: PhotoProgress; let can_continue: Bool
+}
+struct PhotoPage: Decodable { let page_id: String; let upload_id: String; let name: String; let status: String; let reason: String; let duplicate_of: String }
+struct PhotoPaperPage: Decodable { let page_id: String; let order: Int; let role: String }
+struct PhotoSegmentCoverage: Decodable { let coverage: String; let model_coverage: String }
+struct PhotoPaper: Decodable, Identifiable {
+    var id: String { paper_id }
+    let paper_id: String; let subject: String; let title: String; let note: String; let coverage: String; let checked: Bool
+    let counts: [String: Int]; let unlocated: Int; let pages: [PhotoPaperPage]; let unchecked_questions: [String]?
+    let segment_coverage: [PhotoSegmentCoverage]?; let questions: [PhotoQuestion]
+}
+/// 原图题框：0…1000 归一化坐标（左上为原点），按原图实际显示尺寸换算，不按文字猜位置。
+struct PhotoBox: Decodable { let x: Int; let y: Int; let w: Int; let h: Int }
+struct PhotoFollowup: Decodable { let id: Int; let day: String; let followup_kind: String }
+struct PhotoQuestion: Decodable, Identifiable {
+    var id: String { key }
+    let key: String; let label: String; let state: String; let state_word: String; let question: String
+    let student_answer: String; let answer: String; let error_reason: String; let uncertainty: String; let conflict: String
+    let page_id: String; let upload_id: String; let box: PhotoBox?; let located: Bool; let record_id: Int?; let chosen: Bool
+    let followups: [PhotoFollowup]?
+}
+struct PhotoPending: Decodable { let page_id: String; let reason: String }
+struct PhotoStale: Decodable { let paper_id: String; let subject: String; let title: String; let reason: String }
+struct PhotoFailed: Decodable { let id: String; let kind: String; let error: String }
+struct PhotoProgress: Decodable { let done: Int; let total: Int; let failed: [PhotoFailed] }
+
+extension PhotoBatch {
+    var stateWords: String {
+        let words = ["queued": "排队中，后台会自动处理", "running": "正在读取和检查", "needs_attention": "部分步骤未完成"][state] ?? "已完成"
+        return state == "done" ? words : words + "（\(progress.done)/\(max(progress.total, 1))步）"
+    }
+    var papersBySubject: [PhotoPaper] { papers.sorted { $0.subject == $1.subject ? $0.paper_id < $1.paper_id : $0.subject < $1.subject } }
+    func number(_ page: String) -> Int { (pages.firstIndex { $0.page_id == page } ?? -1) + 1 }
+    /// 待补的页、同一张照片与依据已变的卷：短句，按导入的第几张说。
+    var waitNotes: [String] {
+        var out: [String] = []
+        for p in pages where p.status == "unreadable" || p.status == "unsupported" { out.append("第\(number(p.page_id))张：\(p.reason)") }
+        for p in pending { out.append("第\(number(p.page_id))张：\(p.reason)") }
+        for p in pages where p.status == "duplicate" { out.append("第\(number(p.page_id))张与第\(number(p.duplicate_of))张是同一张照片，只读一次") }
+        for s in stale { out.append(s.subject + " " + s.title + "：" + s.reason) }
+        return out
+    }
+}
+
+extension PhotoPaper {
+    var shownQuestions: [PhotoQuestion] { questions.filter { $0.state != "correct" } }
+    var summary: String {
+        var parts = ["\(pages.count)页"]
+        if checked { parts.append("AI判错\(counts["wrong"] ?? 0)处 · 疑似\(counts["suspected"] ?? 0)处 · 未判定\(counts["unknown"] ?? 0)题") }
+        else if note.isEmpty { parts.append("检查中") }
+        if unlocated > 0 { parts.append("\(unlocated)处未定位") }
+        if let gaps = unchecked_questions, !gaps.isEmpty { parts.append("\(gaps.count)题未检查") }
+        return parts.joined(separator: " · ")
+    }
+    var coverageLines: [String] {
+        ([note, coverage] + (segment_coverage ?? []).map { $0.model_coverage.isEmpty ? "" : "检查说明（模型自述，未核）：" + $0.model_coverage }).filter { !$0.isEmpty }
+    }
+}

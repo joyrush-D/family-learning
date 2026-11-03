@@ -400,6 +400,10 @@
 !/designs/family-grove/
 /designs/family-grove/*
 !/designs/family-grove/index.html
+!/designs/photo-batch-m1/
+/designs/photo-batch-m1/*
+!/designs/photo-batch-m1/index.html
+!/designs/photo-batch-m1/_d_meta.json
 !/designs/family-grove/styles.css
 !/designs/family-grove/app.js
 !/designs/family-grove/_d_meta.json
