@@ -670,6 +670,7 @@ class PhotoBatchTest(unittest.TestCase):
     def appended(self, key, second_answer, edit=False):
         """v1 math [p01] -> one AI wrong; append m2 -> v2 math [p01, p03] re-checked with the given original answer for 第2题."""
         uploads, (code, created) = self.batch(key, ['m1', 'c1'])
+        self.assertEqual(code, 200, created)
         model = Model(self.ids)
         group = lambda pages: dict(papers=[dict(subject='数学', title='虚构', basis='', pages=[dict(page_id=p, order=i, role='answered') for i, p in enumerate(pages, 1)]),
                                            dict(subject='语文', title='虚构小测', basis='', pages=[dict(page_id='p02', order=1, role='answered')])], pending=[], same_pages=[])
@@ -714,7 +715,7 @@ class PhotoBatchTest(unittest.TestCase):
         return {r['id']: r for g in day['wrong'] for r in g['items']}
 
     def test_day_wrong_rows_carry_the_concrete_photo_basis_read_only(self):
-        first, view, records = self.appended('basis-same-0001', '35')
+        first, view, records = self.appended('basis-same-key-0001', '35')
         row = self.day_wrong()[first['id']]
         self.assertEqual((row['photo_basis']['current'], row['photo_basis']['text_version'], row['photo_basis']['version']), (True, 1, 2))
         self.assertIn('原文字是第1版AI判断', row['photo_basis']['words'])
