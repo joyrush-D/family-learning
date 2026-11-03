@@ -835,6 +835,16 @@ def view_row(app, c, row):
                            unchecked_pages=[p for p in answered if p not in checked],
                            coverage=paper.get('coverage', ''), based_on_version=paper.get('based_on_version'),
                            questions=questions))
+    ids = [q['record_id'] for paper in papers for q in paper['questions'] if q['record_id']]
+    follow = {}
+    for start in range(0, len(ids), 500):
+        chunk = ids[start:start + 500]
+        for r in c.execute('SELECT id,day,title,followup_kind,related_record_id FROM records WHERE related_record_id IN (%s) ORDER BY id'
+                           % ','.join('?' * len(chunk)), chunk):
+            follow.setdefault(r['related_record_id'], []).append(dict(id=r['id'], day=r['day'], title=r['title'], followup_kind=r['followup_kind']))
+    for paper in papers:
+        for q in paper['questions']:
+            q['followups'] = follow.get(q['record_id'], [])
     steps = u['steps']
     model_steps = [s for s in steps if s['kind'] != 'save']
     return dict(id=row['id'], child_id=row['child_id'], version=row['version'], created=row['created'],
