@@ -4060,7 +4060,7 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
         while other and (at:=text.find(other,at))!=-1:
             if max(head,at)<min(end,at+len(other)):return None
             at+=len(other)
-    done,due,evening,bare,handed=set(),set(),set(),set(),{}
+    done,due,evening,bare,handed,later=set(),set(),set(),set(),{},set()
     # Packing its own things into the schoolbag on the sending day (今晚把这两样装进书包) is that day's own work too.
     # A counted exercise (今晚原地高抬腿30次) is the evening's own work as 今晚做… is (family_agenda._COUNTED_ACT).
     from family_agenda import _COUNTED_ACT
@@ -4092,17 +4092,11 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             own_day=_school_clause_day(clause,published) if not days and re.search(day,clause) else ''
             roles=_school_clause_roles(clause) if own_day else set()
             sent_work=(own_day==published and not re.search(r'交|检查',clause) and re.search(work,_titles_read_as_objects(clause)))
-            # A later day's own work clause with no role of its own (明晚原地高抬腿30次；后天体育课检查) is that day's completion as
-            # the sending day's is: its one day, no hand-in, check or negation word (明晚不用跳绳 is none); the one due and every
-            # guard below still decide.
-            one=next(iter(days)) if len(days)==1 else own_day
-            later_work=bool(one and one>published and not _school_clause_roles(clause) and not re.search(r'交|检查|[不没无未免别勿]',clause)
-                            and re.search(work,_titles_read_as_objects(clause)))
             # A dated step with no role of its own (今晚请家长在《研学活动回执》勾选选项) ends in the same sentence's directly
             # following undated step that only finishes it (然后签字, 签字后拍照上传), with or without a connector: that is its
             # finish on its day, never a day of its own.
-            step=bool(own_day and not roles and not sent_work and not later_work and continued(si,n,clause))
-            if own_day and (roles or sent_work or later_work or step):
+            step=bool(own_day and not roles and not sent_work and continued(si,n,clause))
+            if own_day and (roles or sent_work or step):
                 # A role clause's own predicate after its day and only its asker, actor or place (请家长今晚在《秋游意见回执》上签字)
                 # takes that one day, read as a new receipt's clause is (_school_clause_roles, _school_clause_day); so does the
                 # sending day's own work clause (请监护人今天阅读…), the completion read below.
@@ -4114,14 +4108,21 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
             # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
             # 签名 alone may be a name (交回签名回执、《家长签名确认单》): read as a predicate only by _school_clause_roles.
-            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|签字|签上|签好',clause) or 'finish' in _school_clause_roles(clause) or step or later_work
+            finish=bool(re.search(r'完成|做完|写完|读完|圈选|勾选|选择|签字|签上|签好',clause) or 'finish' in _school_clause_roles(clause) or step
                         or days=={published} and not back and re.search(work,clause) or prepared and n==prepared[0])
             if len(days)!=1 or (finish and back):return None
+            # A later day's own work clause with no role, hand-in, check or negation word of its own (明晚原地高抬腿30次；后天体育课
+            # 检查) is that day's completion as the sending day's is, but only beside another clause's one check or handback day
+            # (below); alone (明天来校带一个空透明塑料瓶) it stays the item's due as before.
+            if (not finish and not back and min(days)>published and not _school_clause_roles(clause)
+                    and not re.search(r'[不没无未免别勿]',clause) and re.search(work,_titles_read_as_objects(clause))):
+                later.update(days);continue
             if not finish and back and days=={published} and re.search(r'今晚|今天晚上|今日晚上|今夜',clause):
                 evening.update(days);handed[next(iter(days))]=clause.strip()
             if (not finish and days and min(days)>published and re.fullmatch(role+r'(?:让孩子)?(?:带到学校|带来学校|带回学校|带到班里|带到班上|带去学校'
                                                                       r'|带来|带去|交回|上交|交给(?:老师|班主任|课代表|组长))\s*',clause)):bare.update(days)
             (done if finish else due).update(days)
+    (done if due else due).update(later)
     # 今晚在线提交《活动卡》，明早交给班主任 / 今晚需要提交阅读卡，明早带到学校: two handbacks of the one thing, each a real role
     # action of this item; nothing says the evening one is work finished at home, and no place or way is guessed from 今晚. Only
     # when the later clause only carries or hands back that same thing (no other object: 今晚提交电子版，明天交纸质版 or 明天科学课带
