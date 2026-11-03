@@ -341,9 +341,13 @@ final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
 struct WorkspaceError: Error { let text: String; let login: Bool; init(_ text: String, login: Bool = false) { self.text = text; self.login = login } }
 
 /// 每次提交一个稳定标识：重试、丢回执后重发都用同一个，服务端据此不重复写。
-/// 一条来源消息（GET /api/agent/message 的只读视图）：发布人、时刻、原文、这条消息自己的附件，和打不开的附件数。
+/// 一条来源消息（GET /api/agent/message 的只读视图）：发布人、时刻、原文、这次读回的附件，和打不开的附件数。
+/// scoped：带 task_id 读回且服务端注明只给该事项选用的原件（action_material.scoped）；不带 task_id、较早后台或未注明时为 false。
 struct SourceFile: Hashable, Identifiable { let id: String; let name: String }
-struct SourceMessage: Equatable { let sender: String; let time: String; let text: String; let sourceName: String; let files: [SourceFile]; let unavailable: Int }
+struct SourceMessage: Equatable {
+    let sender: String; let time: String; let text: String; let sourceName: String; let files: [SourceFile]; let unavailable: Int
+    var scoped = false
+}
 
 extension WorkspaceClient {
     /// Publication.ref 是 message:<来源编号>:<消息编号>；来源编号可含冒号（QQ），只去掉 message: 后按最后一个冒号分开。
@@ -355,21 +359,25 @@ extension WorkspaceClient {
         return source.isEmpty || message.isEmpty ? nil : (source, message)
     }
 
-    /// 带 task_id 时服务端核对这条原消息属于该事项，只给该事项选用的原件；附件只取服务端返回的这一孩子这一条消息自己的。
+    /// task 非空：服务端核对同一孩子、同一事项且这条原消息属于它（不属于时 403），只给该事项选用的原件。task 为空：同一孩子这条原消息
+    /// 自己的全部已保存原件。读回的来源、消息（带事项时还有事项编号，较早后台没有就不核）须与所请求的一致。只读 GET，不写。
     func message(child: String, ref: String, task: String) async throws -> SourceMessage {
         guard let (source, id) = WorkspaceClient.messageRef(ref) else { throw WorkspaceError("这条出处不是一条可打开的学校原消息。") }
         var query = ["child_id": child, "source_id": source, "message_id": id]
         if !task.isEmpty { query["task_id"] = task }
         let data = try await get("/api/agent/message", query)
         guard let o = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let m = o["message"] as? [String: Any],
-              o["source_id"] as? String == source, o["message_id"] as? String == id else { throw WorkspaceError("原消息格式无法读取，请重试。") }
+              o["source_id"] as? String == source, o["message_id"] as? String == id,
+              task.isEmpty || ((o["task_id"] as? String).map { $0 == task } ?? true) else { throw WorkspaceError("原消息格式无法读取，请重试。") }
         let files: [SourceFile] = ((o["attachments"] as? [[String: Any]]) ?? []).compactMap { a in
             guard let fid = a["id"] as? String, !fid.isEmpty else { return nil }
             return SourceFile(id: fid, name: (a["name"] as? String) ?? (a["filename"] as? String) ?? fid)
         }
         let time = String(((m["time"] as? String) ?? "").prefix(16)).replacingOccurrences(of: "T", with: " ")
+        let scoped = !task.isEmpty && ((o["action_material"] as? [String: Any])?["scoped"] as? Bool) == true
         return SourceMessage(sender: (m["sender"] as? String) ?? "", time: time, text: (m["text"] as? String) ?? "",
-                             sourceName: (o["source_name"] as? String) ?? "", files: files, unavailable: ((o["unavailable_attachment_ids"] as? [Any]) ?? []).count)
+                             sourceName: (o["source_name"] as? String) ?? "", files: files,
+                             unavailable: ((o["unavailable_attachment_ids"] as? [Any]) ?? []).count, scoped: scoped)
     }
 }
 

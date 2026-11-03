@@ -75,7 +75,7 @@ function loginProxy(appPort,user,password){
    {name:'pick child',key:String(childIndex+1),modifiers:['command']},
    {name:'row',click:'row-'+item.id},{name:'detail',until:'detail-title',contains:item.title.slice(0,4)},
    // Each unique source message opens in place from the item (the server's own message and its attachments) and returns to the same item.
-   ...((item.publications||[]).length?[{name:'source open',click:'source-open-'+item.publications[0].ref},{name:'source text',until:'source-text',timeout:15},{name:'source item',until:'source-item',contains:item.id},{name:'source back',click:'source-back'},{name:'same detail',until:'detail-title',contains:item.title.slice(0,4)}]:[]),
+   ...((item.publications||[]).length?[{name:'source open',click:'source-open-'+item.publications[0].ref},{name:'source text',until:'source-text',timeout:15},{name:'source item',until:'source-item',contains:item.id},{name:'source attachments read',until:'source-attachments',contains:'raw=ok',timeout:15},{name:'source back',click:'source-back'},{name:'same detail',until:'detail-title',contains:item.title.slice(0,4)}]:[]),
    {name:'wide',width:1440,native:'snapshot'},
    // Geometry, not text: beside the 1440 detail each listed row's complete standard is laid out at the height the whole text needs at that width.
    {name:'1440 standard fits',until:'row-fit-'+item.id,contains:'fits',timeout:8},...(math&&math.id!==item.id?[{name:'1440 other standard fits',until:'row-fit-'+math.id,contains:'fits',timeout:8}]:[]),
