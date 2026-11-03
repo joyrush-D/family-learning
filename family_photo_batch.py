@@ -502,11 +502,31 @@ def _classify(q):
     return 'unknown'
 
 
-def _locate(label, page_ids, info):
-    norm = _norm_label(label)
+def _scope(label, paper, pages):
+    """返回 (所在原页编号或'', 题号规范串)。原检查按合同在 label 里写卷别与所用页码（如“数学·练习A 第1页 第1题”）：只有以本卷
+    已知卷名/科目开头、所写“第N页”正是本段已知页序时，才解除这层展示前缀并把题归到那一页；页码不在本段就整体按原样比较
+    （通常接不上＝未定位）。不全局删字、不取末尾数字；原 label 本身不改。"""
+    text = re.sub(r'\s+', '', unicodedata.normalize('NFKC', label or ''))
+    names = {re.sub(r'\s+', '', unicodedata.normalize('NFKC', name)) for name in ((paper or {}).get('title') or '', (paper or {}).get('subject') or '') if name}
+    for prefix in sorted(names, key=len, reverse=True):
+        if text.startswith(prefix) and len(text) > len(prefix):
+            text = text[len(prefix):].lstrip('·・:-—_')
+            break
+    orders = {p['order']: p['page_id'] for p in (paper or {}).get('pages', []) if p['page_id'] in pages}
+    match = re.match(r'第(\d+)页', text)
+    if match and len(text) > match.end():
+        if int(match.group(1)) not in orders:
+            return '', _norm_label(label)
+        return orders[int(match.group(1))], _norm_label(text[match.end():])
+    return '', _norm_label(text)
+
+
+def _locate(page, norm, page_ids, info):
+    """只在已知那一页（没写页时在本段各页）内唯一对上题号才接原图题框；接不上或不唯一就未定位，不猜。"""
     if not norm:
         return None
-    hits = [(pid, r) for pid in page_ids for r in info[pid]['regions'] if r['kind'] != 'handwriting' and _norm_label(r['label']) == norm]
+    hits = [(pid, r) for pid in ([page] if page else page_ids) for r in info[pid]['regions']
+            if r['kind'] != 'handwriting' and _norm_label(r['label']) == norm]
     wrong = [h for h in hits if h[1]['kind'] == 'wrong_item']
     hits = wrong or hits
     return dict(page_id=hits[0][0], box=hits[0][1]['box']) if len(hits) == 1 else None
@@ -519,11 +539,13 @@ def _merge(paper, info):
     for number, segment in enumerate(paper['segments']):
         counts = {}
         for position, q in enumerate(segment['questions'] + segment.get('followup_questions', []), 1):
-            norm = _norm_label(q['label']) or 'q%d' % position
-            counts[norm] = counts.get(norm, 0) + 1
-            located = _locate(q['label'], segment['pages'], info) if counts[norm] == 1 else None
-            owner = located['page_id'] if located else 's%d' % (number + 1)
-            ident = '%s:%s' % (owner, norm if counts[norm] == 1 else '%s~%d' % (norm, counts[norm]))
+            page, norm = _scope(q['label'], paper, segment['pages'])
+            norm = norm or 'q%d' % position
+            counts[(page, norm)] = counts.get((page, norm), 0) + 1
+            first = counts[(page, norm)] == 1
+            located = _locate(page, norm, segment['pages'], info) if first else None
+            owner = located['page_id'] if located else page or 's%d' % (number + 1)
+            ident = '%s:%s' % (owner, norm if first else '%s~%d' % (norm, counts[(page, norm)]))
             questions.append(dict(key=(paper['paper_id'] + ':' + ident)[:130], label=q['label'] or '第%d题' % position,
                                   question=q['question'], student_answer=q['student_answer'], answer=q['answer'],
                                   judgment=q['judgment'], error_reason=q['error_reason'], steps=q['steps'],
@@ -541,33 +563,43 @@ def _merge(paper, info):
     paper['checked'] = True
 
 
-def _evidenced_gaps(info, pages, returned):
-    """本段读图明确出现、检查却未逐题返回的题号；返回达到单次25题上限时，按本段印刷首末题号补出连续数字范围。"""
-    seen = {_norm_label(q['label']) for q in returned}
-    labels = []
-    def add(label):
+def _rank(label):
+    norm = _norm_label(label)
+    return (0, int(norm)) if norm.isdigit() else (1, 0)
+
+
+def _evidenced_gaps(info, pages, returned, paper=None):
+    """本段读图明确出现、检查却没逐题返回的题号，逐页核：只认 wrong_item 题框与本页印刷首/末题号（卷头等非题版面不算题）。
+    返回的题写明本卷已知页的只抵那一页，没写页的抵本段任一页同号；返回达单次25题上限时，按每页首末题号补出连续数字范围。"""
+    scoped = [_scope(q['label'], paper, pages) for q in returned]
+    anywhere = {norm for page, norm in scoped if not page}
+    on_page = {}
+    for page, norm in scoped:
+        if page:
+            on_page.setdefault(page, set()).add(norm)
+    order = {p['page_id']: p['order'] for p in (paper or {}).get('pages', [])}
+    found, seen = [], set()
+    def add(page_id, label, rank):
         norm = _norm_label(label)
-        if norm and norm not in seen:
-            seen.add(norm)
-            labels.append(label)
+        if not norm or norm in anywhere or norm in on_page.get(page_id, set()) or (page_id, norm) in seen:
+            return
+        seen.add((page_id, norm))
+        prefix = '第%d页 ' % order[page_id] if len(pages) > 1 and page_id in order else ''
+        found.append(((pages.index(page_id), rank), prefix + label))
     for page_id in pages:
         evidence = info[page_id].get('evidence') or {}
         for region in info[page_id]['regions']:
-            if region['kind'] != 'handwriting':
-                add(region['label'])
-        add(evidence.get('first_label', ''))
-        add(evidence.get('last_label', ''))
-    if len(returned) >= REVIEW_ITEMS:
-        numbers = [int(n) for n in (_norm_label(q['label']) for q in returned) if n.isdigit()]
-        bounds = [int(n) for page_id in pages for key in ('first_label', 'last_label')
-                  for n in [_norm_label((info[page_id].get('evidence') or {}).get(key, ''))] if n.isdigit()]
-        if numbers and bounds and max(bounds) > max(numbers) and max(bounds) - min(bounds) <= 100:
-            for n in range(min(bounds), max(bounds) + 1):
-                add('第%d题' % n)
-    def order(label):
-        norm = _norm_label(label)
-        return (0, int(norm), '') if norm.isdigit() else (1, 0, norm)
-    return sorted(labels, key=order)
+            if region['kind'] == 'wrong_item':
+                add(page_id, region['label'], _rank(region['label']))
+        for key in ('first_label', 'last_label'):
+            add(page_id, evidence.get(key, ''), _rank(evidence.get(key, '')))
+        if len(returned) >= REVIEW_ITEMS:
+            covered = [int(n) for n in anywhere | on_page.get(page_id, set()) if n.isdigit()]
+            bounds = [int(n) for key in ('first_label', 'last_label') for n in [_norm_label(evidence.get(key, ''))] if n.isdigit()]
+            if covered and bounds and max(bounds) > max(covered) and max(bounds) - min(bounds) <= 100:
+                for n in range(min(bounds), max(bounds) + 1):
+                    add(page_id, '第%d题' % n, (0, n))
+    return [label for _, label in sorted(found, key=lambda item: item[0])]
 
 
 def _record_key(row, paper, question, chosen):
@@ -712,20 +744,24 @@ def _apply(u, step, outcome):
         model_coverage = ((outcome.get('unverified_model_summary') or {}).get('coverage') or '')[:1500]
         note = ''
         if step.get('followup'):
-            wanted = {_norm_label(label): label for label in step['labels']}
-            known = {_norm_label(q['label']) for q in segment['questions'] + segment.get('followup_questions', [])}
-            added = [q for q in judged if _norm_label(q['label']) in wanted and _norm_label(q['label']) not in known]
+            mark = lambda label: _scope(label, paper, segment['pages'])
+            def covered(item, marks):
+                page, norm = item
+                return item in marks or ('', norm) in marks or (not page and any(n == norm for _, n in marks))
+            wanted = {mark(label): label for label in step['labels']}
+            known = {mark(q['label']) for q in segment['questions'] + segment.get('followup_questions', [])}
+            added = [q for q in judged if covered(mark(q['label']), set(wanted)) and not covered(mark(q['label']), known)]
             segment.setdefault('followup_questions', []).extend(added)
-            have = {_norm_label(q['label']) for q in segment['questions'] + segment['followup_questions']}
-            segment['unchecked'] = [l for l in segment.get('unchecked', []) if _norm_label(l) not in have]
+            have = {mark(q['label']) for q in segment['questions'] + segment['followup_questions']}
+            segment['unchecked'] = [l for l in segment.get('unchecked', []) if not covered(mark(l), have)]
             if model_coverage:
                 segment['model_coverage'] = (segment.get('model_coverage', '') + '\n补查：' + model_coverage)[:3000]
-            missing = [label for norm, label in wanted.items() if norm not in have]
+            missing = [label for item, label in wanted.items() if not covered(item, have)]
             if missing:
                 note = '补查没有返回所选题号（%s），结果未知；未自动重新调用，可点“继续失败部分”' % '、'.join(missing)
         else:
             segment.update(state='done', coverage=outcome['coverage'][:1500], model_coverage=model_coverage, questions=judged)
-            gaps = _evidenced_gaps(u['pages'], segment['pages'], judged)
+            gaps = _evidenced_gaps(u['pages'], segment['pages'], judged, paper)
             segment['unchecked'] = gaps
             used = _spent(u)['followup'] + sum(1 for s in u['steps'] if s.get('followup') and s.get('version') == u['version'] and s['state'] == 'todo')
             for start in range(0, len(gaps), REVIEW_ITEMS):

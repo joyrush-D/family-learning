@@ -497,6 +497,25 @@ class PhotoBatchTest(unittest.TestCase):
         check(listed, 'PhotoBatchList', 'list')
         self.assertTrue(any(q['box'] for p in listed['batches'][0]['papers'] for q in p['questions']), 'a located box is exercised')
 
+    def test_review_label_scope_uses_only_this_paper_and_its_known_pages(self):
+        paper = dict(title='数学·小松果练习 A', subject='数学', pages=[dict(page_id='p03', order=1, role='answered'), dict(page_id='p01', order=2, role='answered')])
+        pages = ['p03', 'p01']
+        self.assertEqual(fpb._scope('数学·小松果练习A 第1页 第1题', paper, pages), ('p03', '1'))
+        self.assertEqual(fpb._scope('数学·小松果练习A 第2页 第3题', paper, pages), ('p01', '3'))
+        self.assertEqual(fpb._scope('第1题(1)', paper, pages), ('', '1(1)'))
+        self.assertNotEqual(fpb._scope('第1题(1)', paper, pages), fpb._scope('第11题', paper, pages))
+        self.assertEqual(fpb._scope('数学·小松果练习A 第5页 第1题', paper, pages)[0], '', 'a page outside this segment is not claimed')
+        self.assertEqual(fpb._scope('英语·小松果练习B 第1页 第1题', paper, pages)[0], '', "another paper's title is not this paper's")
+        numbered = dict(title='第3单元测试', subject='数学', pages=[dict(page_id='p01', order=1, role='answered')])
+        self.assertEqual(fpb._scope('第3单元测试 第1页 第2题', numbered, ['p01']), ('p01', '2'))
+        info = {'p03': dict(evidence=dict(first_label='1', last_label='2'), regions=[dict(kind='layout', label='卷头', box=dict(x=1, y=1, w=9, h=9)),
+                                                                                   dict(kind='wrong_item', label='第1题', box=dict(x=60, y=245, w=580, h=105))]),
+                'p01': dict(evidence=dict(first_label='3', last_label='4'), regions=[dict(kind='layout', label='卷头', box=dict(x=1, y=1, w=9, h=9))])}
+        self.assertEqual(fpb._locate('p03', '1', pages, info)['box']['y'], 245)
+        self.assertIsNone(fpb._locate('p01', '1', pages, info), 'same number on another page is not guessed')
+        returned = [dict(label=l) for l in ('数学·小松果练习A 第1页 第1题', '数学·小松果练习A 第1页 第2题', '数学·小松果练习A 第2页 第3题')]
+        self.assertEqual(fpb._evidenced_gaps(info, pages, returned, paper), ['第2页 4'], 'layout is no question; a real gap stays')
+
     def test_grouping_cannot_turn_a_questions_only_page_into_an_answered_page(self):
         info = {'p01': dict(evidence=dict(page_kind='questions_only')), 'p02': dict(evidence=dict(page_kind='answered'))}
         raw = dict(papers=[dict(subject='数学', title='甲', basis='', pages=[dict(page_id='p01', order=1, role='answered'),
