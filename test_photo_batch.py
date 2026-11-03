@@ -143,7 +143,7 @@ class PhotoBatchTest(unittest.TestCase):
         code, out = self.request('/api/upload', body=data, headers={'X-Family-Token': app.TOKEN, 'X-File-Name': quote(tag + '.png'),
                                                                     'X-Request-Key': key, 'Content-Type': 'application/octet-stream'})
         self.assertEqual(code, 200, out)
-        self.ids[data] = tag
+        self.ids.setdefault(data, tag)  # an exact duplicate is the same original bytes
         return out['attachment']['id']
 
     def batch(self, key='batch-key-0000000001', tags=ORDER):
