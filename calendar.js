@@ -176,7 +176,7 @@ function revealRecordTopic(){
 }
 function revealTaskLink(){
  if(!taskLinkPending||!data)return;const id=taskLinkPending;
- if(page==='home'&&groveView()){const row=groveRows(groveView()).find(r=>r.task_id===id||r.id===id);if(row&&groveSelected!==row.id){groveSelected=row.id;groveDetailOpen=true;return render()}}
+ if(page==='home'&&groveView()){const row=groveRows(groveView()).find(r=>r.task_id===id||r.id===id);if(row&&groveSelected!==row.id){groveSelected=row.id;groveScope=groveScopeOf(groveView(),row.id);groveDetailOpen=true;return render()}}
  const target=[...document.querySelectorAll('[data-query-target]')].find(x=>x.dataset.queryTarget==='task:'+id)||[...document.querySelectorAll('[data-subject-item]')].find(x=>x.dataset.subjectItem===id);
  if(!target&&page==='home'){page='tasks';taskView='全部';return render()}
  const intent=taskLinkIntent;taskLinkPending='';taskLinkIntent='';history.replaceState(null,'',location.pathname+location.search);
@@ -190,6 +190,9 @@ function revealTaskLink(){
 // The home (今天): one child's day from the server projection (family_agenda.day_view, data.today_view), the same rows the Mac
 // workbench reads. A compact subject-first list; the selected row's own detail beside it (>=900px) or in its place on a phone,
 // where the browser's back returns to the list. Rows keep their original ids, task state and controllers; nothing is saved here.
+// The day list shows one of its three parts at a time (待办 / 日期未定 / 已办), switched directly like the Mac app's.
+let groveScope='open';
+function groveScopeOf(view,id){return (view?.undated||[]).some(g=>g.items.some(r=>r.id===id))?'undated':(view?.closed||[]).some(g=>(g.items||[]).some(r=>r.id===id))?'closed':'open'}
 let groveSelected='',groveDetailOpen=false,groveStamp=null,groveDay='',groveTab='calendar';const groveMaterials=new Map(),groveDays=new Map();
 const groveWhen={later:'以后安排',overdue:'已过期限',earlier:'之前安排',unknown:'日期未写明',passed:'已过'};
 // Today is data.today_view; another day of the week strip is the same server projection read once by GET /api/day (one
@@ -353,16 +356,18 @@ function groveDetailHTML(r){
   +`<details class="grove-more"><summary>更多操作</summary><div class="tasktools">${more}</div></details>`;
 }
 function groveSelect(id,user){
- groveSelected=id;
+ groveSelected=id;groveScope=groveScopeOf(groveView(),id);
  if(!groveWide()){groveDetailOpen=true;if(user&&!history.state?.grove)history.pushState({grove:id},'',location.pathname+location.search)}
  render();
  requestAnimationFrame(()=>{const d=document.getElementById('groveDetail');if(!groveWide())window.scrollTo(0,0);d?.focus({preventScroll:true})});
 }
 document.addEventListener('click',e=>{
  const open=e.target.closest('[data-grove-open]');if(open){groveSelect(open.dataset.groveOpen,true);return}
+ // Switching the part only shows another list: no re-render, so the selected row's detail and any unsaved input there stay.
+ const part=e.target.closest('[data-grove-scope]');if(part){groveScope=part.dataset.groveScope;for(const b of document.querySelectorAll('[data-grove-scope]'))b.setAttribute('aria-pressed',String(b===part));for(const l of document.querySelectorAll('[data-grove-scope-list]'))l.hidden=l.dataset.groveScopeList!==groveScope;return}
  const tab=e.target.closest('[data-grove-tab]');if(tab){groveTab=tab.dataset.groveTab;groveDetailOpen=false;render();return}
  const pick=e.target.closest('[data-grove-day],[data-grove-week]');
- if(pick){const day=pick.dataset.groveDay||calendarAdd(groveDay||data.today,+pick.dataset.groveWeek);groveDay=day===data.today?'':day;groveSelected='';groveDetailOpen=false;render();if(groveDay)groveLoadDay(groveDay);return}
+ if(pick){const day=pick.dataset.groveDay||calendarAdd(groveDay||data.today,+pick.dataset.groveWeek);groveDay=day===data.today?'':day;groveSelected='';groveScope='open';groveDetailOpen=false;render();if(groveDay)groveLoadDay(groveDay);return}
  const again=e.target.closest('[data-grove-day-retry]');if(again){groveLoadDay(groveDay,true);return}
  if(e.target.closest('[data-grove-back]')){if(history.state?.grove)history.back();else{groveDetailOpen=false;render()}return}
  const retry=e.target.closest('[data-grove-materials-retry]');if(retry)groveLoadMaterials(retry.dataset.groveMaterialsRetry,true);
@@ -389,10 +394,12 @@ function todayTasksHTML(){
   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
   ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
  const closed=(view.closed||[]).flatMap(g=>g.items||[]);
- // Actions with no exact date (server view.undated): one line beside 已办, not this day's count; each keeps its subject, id and
- // detail. It stays open while its selected row is inside, so a selection survives the re-render.
+ // Actions with no exact date (server view.undated) and this day's done rows are the day's other two parts, each its own list
+ // with the same rows, ids and detail; a direct switch (待办 / 日期未定 N / 已办 N) shows one, never a fold. They are not this day's count.
  const undated=view.undated||[],undatedN=undated.reduce((a,g)=>a+(g.items||[]).length,0);
- const undatedHTML=undatedN?`<details class="grove-closed grove-undated" data-grove-undated${undated.some(g=>g.items.some(r=>r.id===groveSelected))?' open':''}><summary>日期未定/待安排 ${undatedN} 项 · 不算这一天</summary>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</details>`:'';
+ const scope=groveScope==='undated'&&!undatedN||groveScope==='closed'&&!closed.length?'open':groveScope;
+ const scopeHTML=`<div class="grove-scope" role="group" aria-label="清单范围">${[['open','待办',c.open||0],...(undatedN?[['undated','日期未定',undatedN]]:[]),['closed','已办',closed.length]].map(([k,l,n])=>`<button type="button" data-grove-scope="${k}" aria-pressed="${k===scope}">${l}${n?' '+n:''}</button>`).join('')}</div>`;
+ const undatedHTML=undatedN?`<div class="today-task-groups grove-undated" data-grove-undated data-grove-scope-list="undated"${scope==='undated'?'':' hidden'}><p class="small muted">日期未定/待安排 ${undatedN} 项 · 不算这一天</p>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</div>`:'';
  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
  return `<div class="grove" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}" data-tab="${esc(groveTab)}"><section class="grove-list" aria-labelledby="groveListTitle">`
@@ -403,8 +410,8 @@ function todayTasksHTML(){
   +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[day===data.today?day+' 今天':day,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${day===data.today?add:`<button type="button" data-grove-day="${esc(data.today)}">回到今天</button>`}</header>`
   +`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
   +groveScheduleHTML(view)
-  +`<div class="today-task-groups" id="task-groups">${groups}</div>`+undatedHTML
-  +(closed.length?`<details class="grove-closed"><summary>这一天已办 ${closed.length} 项</summary><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></details>`:'')
+  +scopeHTML+`<div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${scope==='open'?'':' hidden'}>${groups}</div>`+undatedHTML
+  +(closed.length?`<div class="grove-closed" data-grove-scope-list="closed"${scope==='closed'?'':' hidden'}><p class="small muted">这一天已办 ${closed.length} 项</p><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></div>`:'')
   +`</section><section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`);
 }
 function todayTasksLegacyHTML(){

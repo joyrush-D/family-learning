@@ -212,3 +212,6 @@ dialog.record-topic{width:min(760px,94vw)}.record-topic-head h2{margin:4px 0 6px
 .topic-diagnosis .topic-found li>button{flex:none;min-height:44px}
 .topic-diagnosis .topic-actions .topic-quiet{margin-left:auto;background:none;border-color:transparent;box-shadow:none;color:var(--wood-700);text-decoration:underline;text-underline-offset:3px}
 .topic-diagnosis .topic-source{margin-top:14px;padding-top:8px;border-top:1px solid var(--line);font-size:12px}
+/* The day list's direct part switch (待办 / 日期未定 / 已办): plain 44px buttons, the chosen one marked; a hidden part stays hidden. */
+.grove-scope{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.grove-scope button{min-height:44px}.grove-scope button[aria-pressed="true"]{font-weight:700;border-color:currentColor}
+.grove [data-grove-scope-list][hidden]{display:none}
