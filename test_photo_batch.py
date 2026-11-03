@@ -747,6 +747,27 @@ class PhotoBatchTest(unittest.TestCase):
         self.assertTrue(unlocated[0]['photo_basis']['current'], 'no box is no reason to drop the basis')
         self.assertNotIn('photo_basis', rows[out['saved'][0]['id']], 'a manual record keeps its old shape')
 
+    def test_a_record_moved_to_another_child_is_no_longer_the_current_ai_basis(self):
+        _, (code, created) = self.batch('basis-owner-key-0001', ['m1'])
+        model = Model(self.ids)
+        model.group = dict(papers=[dict(subject='数学', title='虚构', basis='', pages=[dict(page_id='p01', order=1, role='answered')])], pending=[], same_pages=[])
+        model.review = lambda seen: [item('第2题', 'incorrect')]
+        self.rounds(model, 5)
+        code, state = self.request('/api/state')
+        (r,) = [x for x in state['records'] if x['source'] == '错题照片核对']
+        self.assertTrue(r['photo_basis']['current'])
+        code, out = self.request('/api/record', dict(id=r['id'], child='示例乙', day=r['day'], category=r['category'], subject=r['subject'],
+                                                     title=r['title'], note=r['note'], source=r['source']))
+        self.assertEqual(code, 200, out)
+        code, day = self.request('/api/day?child_id=child-2')
+        rows = {x['id']: x for g in day['wrong'] for x in g['items']}
+        self.assertFalse(rows[r['id']]['photo_basis']['current'], 'another child never sees a current AI basis')
+        self.assertIn('不再标为本批当前AI判断', rows[r['id']]['photo_basis']['words'])
+        self.assertEqual(rows[r['id']]['note'], r['note'][:600], 'the record text is untouched')
+        code, state = self.request('/api/state')
+        moved = next(x for x in state['records'] if x['id'] == r['id'])
+        self.assertFalse(moved['wrong_region']['current'], 'region and basis share one guard')
+
     def test_same_physical_question_reuses_the_canonical_record(self):
         first, view, records = self.appended('canonical-same-0001', '35')
         self.assertEqual([r['id'] for r in records], [first['id']])

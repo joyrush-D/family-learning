@@ -1182,7 +1182,7 @@ def snapshot(app,start,end):
         import family_photo_batch
         with app.connect() as c:
             c.row_factory=__import__('sqlite3').Row
-            inbox.photo_basis=family_photo_batch.basis_map(c)
+            inbox.photo_basis=family_photo_batch.basis_map(c,app)
     except (__import__('sqlite3').Error,ValueError,KeyError,TypeError):
         inbox.photo_basis={}
     return dict(agenda=agenda,study=study,inbox=inbox,**({'plan_error':plan_error} if plan_error else {}))
