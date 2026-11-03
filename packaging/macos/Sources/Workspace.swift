@@ -89,6 +89,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var photoProblems: [String: String] = [:]
     /// 已按原 /api/day 读回过的批次原错题编号：同一组编号不重复读（有界）；换孩子时清空。
     var photoSyncedRecords: Set<Int> = []
+    /// 已完成批次（非排队/处理中）的已记原错题与卷依据版本指纹：变了才再读原清单；处理中不算，不提前记已同步。
+    var photoSyncedPrints: [String: String] = [:]
     var photoRecovery: String { photoProblems.sorted { $0.key < $1.key }.first?.value ?? "" }
     @Published var photoImageEpoch = 0
     var photoImages: [String: NSImage] = [:]
@@ -275,7 +277,7 @@ final class WorkspaceStore: ObservableObject {
                 guard confirmDiscard("放弃这次还没登记的照片导入（已上传的原件保留）") else { return }
                 photoDraft = nil
             }
-            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]; photoSyncedRecords = []
+            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]; photoSyncedRecords = []; photoSyncedPrints = [:]
         }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
@@ -1095,6 +1097,10 @@ struct RecordDetail: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 10) {
+                    if let basis = r.photo_basis {
+                        Text(basis.words).font(Palette.small).foregroundStyle(basis.current ? Palette.ink2 : Palette.coralInk)
+                            .fixedSize(horizontal: false, vertical: true).probe("detail-basis-\(r.id)", text: basis.current ? "current" : "stale")
+                    }
                     FlowRow(spacing: 10, lineSpacing: 6) {
                         WoodTag(text: r.subject.isEmpty ? WorkspaceStore.unknown : r.subject)
                         stateBadge(r.state)
@@ -2529,11 +2535,18 @@ extension WorkspaceStore {
     func syncSavedRecords(force: Bool = false) async {
         let child = childID
         let saved = Set(photoBatchesShown.flatMap(\.papers).flatMap(\.questions).compactMap(\.record_id))
-        let missing = saved.subtracting(wrongItems.map(\.id))
-        guard !missing.isEmpty, force || photoProblems["day"] == nil, force || !missing.isSubset(of: photoSyncedRecords) else { return }
+        let missing = !saved.subtracting(wrongItems.map(\.id)).subtracting(photoSyncedRecords).isEmpty
+        var prints: [String: String] = [:]
+        for batch in photoBatchesShown where batch.state != "queued" && batch.state != "running" {
+            prints[batch.id] = batch.papers.flatMap { paper in paper.questions.compactMap { question in
+                question.record_id.map { "\(batch.version)|\(paper.paper_id)|\(paper.based_on_version ?? 0)|\($0)" } } }.sorted().joined(separator: ",")
+        }
+        let changed = prints.contains { !$0.value.isEmpty && photoSyncedPrints[$0.key] != $0.value }
+        if !force { guard photoProblems["day"] == nil, missing || changed else { return } }
+        if reviewLocked { photoProblems["day"] = "错题已保存，原错题清单暂未更新（有一条家庭复习保存待确认）；确认后点“重新读取”。"; return }
         await load()
         guard child == childID else { return }
-        if current != nil && error.isEmpty { photoSyncedRecords.formUnion(saved); photoProblems["day"] = nil }
+        if current != nil && error.isEmpty { photoSyncedRecords.formUnion(saved); photoSyncedPrints.merge(prints) { $1 }; photoProblems["day"] = nil }
         else { photoProblems["day"] = "错题已保存，原错题清单待更新；点“重新读取”再读。" }
     }
 
@@ -2541,7 +2554,7 @@ extension WorkspaceStore {
     func refreshPhotos() async {
         photoImageEpoch += 1
         await loadPhotoBatches()
-        if photoProblems["day"] != nil { await syncSavedRecords(force: true) }
+        await syncSavedRecords(force: true)  // 当前页明确“重新读取”：原清单与依据也读回一次
         // 仍未读成功的原图：按同一编号再只读一次（成功才清它那一条，失败照旧保留恢复入口）。
         for key in photoProblems.keys.sorted() where key.hasPrefix("image:") { _ = await photoImage(String(key.dropFirst(6))) }
         photoPollToken += 1

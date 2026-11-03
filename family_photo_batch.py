@@ -1020,13 +1020,17 @@ def list_batches(app, query):
         return dict(child_id=child_id, batches=[view_row(app, c, row) for row in rows])
 
 
-def basis_map(c):
+def basis_map(c, app=None):
     """只读：每条批次原错题按同孩同批、该记录最新保存依据的具体状态（与能否画原图框无关）：当前第几版、原文字属第几版、
     是否当前与一句短说明。原记录、订正与手动状态都不改；没有批次依据的旧记录不在其中。"""
     if not _table(c):
         return {}
     out = {}
-    for row in c.execute('SELECT id,understanding FROM photo_batches ORDER BY created,id').fetchall():
+    owners = {p['id']: p['name'] for p in app.profiles(c)} if app else {}
+    names = app.child_names(c) if app else {}
+    revised = ({r[0] for r in c.execute('SELECT DISTINCT record_id FROM revisions')}
+               if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='revisions'").fetchone() else set())
+    for row in c.execute('SELECT id,child_id,understanding FROM photo_batches ORDER BY created,id').fetchall():
         u = json.loads(row['understanding'])
         basis = {p['paper_id']: p.get('based_on_version') for p in u['papers']}
         entries = {}
@@ -1036,8 +1040,21 @@ def basis_map(c):
         for record_id, items in entries.items():
             items.sort(key=lambda s: s['version'])
             first, last = items[0], items[-1]
-            current = basis.get(last['paper_id']) == last['version']
-            words = ('依据已变：这是照片批次第%d版的旧判断，待核；原记录与订正保留。' % last['version'] if not current else
+            # 同一个具体守卫：记录仍是本批同一孩子、来源未变、原图字节未变、家长没有更正过，才可能是本批当前AI依据。
+            record = c.execute('SELECT child,source,attachments FROM records WHERE id=?', (record_id,)).fetchone()
+            owned = bool(record is not None and record['source'] == fwr.SOURCE and record_id not in revised
+                         and (app is None or names.get(record['child'], record['child']) == owners.get(row['child_id'])))
+            if owned and app is not None and last.get('upload_id'):
+                path = app.DATA / 'uploads' / last['upload_id']
+                try:
+                    stat = path.stat()
+                    owned = (last['upload_id'] in json.loads(record['attachments'] or '[]') and not path.is_symlink()
+                             and fwr._file_sha256(str(path), stat.st_mtime_ns, stat.st_size) == last['sha256'])
+                except OSError:
+                    owned = False
+            current = owned and basis.get(last['paper_id']) == last['version']
+            words = ('原记录的孩子、来源、原图或内容已改过：不再标为本批当前AI判断（历史保留，待核）。' if not owned else
+                     '依据已变：这是照片批次第%d版的旧判断，待核；原记录与订正保留。' % last['version'] if not current else
                      '原文字是第%d版AI判断；本批第%d版AI判断为同一道题（当前）。' % (first['version'], last['version'])
                      if first['version'] != last['version'] else 'AI判断（照片批次第%d版，当前）。' % last['version'])
             out[record_id] = dict(batch_id=row['id'], version=last['version'], text_version=first['version'], current=current, words=words)
@@ -1050,7 +1067,8 @@ def read_regions(app, c, records, names):
         return
     by_id = {r['id']: r for r in records}
     owners = {p['id']: p['name'] for p in app.profiles(c)}
-    for record_id, basis in basis_map(c).items():
+    bases = basis_map(c, app)
+    for record_id, basis in bases.items():
         if record_id in by_id:
             by_id[record_id]['photo_basis'] = basis
     for row in c.execute('SELECT id,child_id,understanding FROM photo_batches'):
@@ -1076,10 +1094,7 @@ def read_regions(app, c, records, names):
                 context='photo_batch', batch_id=row['id'], page_id=saved['page_id'], version=saved['version'],
                 upload_id=saved['upload_id'], x=box['x'] / 1000, y=box['y'] / 1000, width=box['w'] / 1000,
                 height=box['h'] / 1000, natural_width=saved['natural_width'], natural_height=saved['natural_height'],
-                signed='AI判断', current=bool(same_file and record['source'] == fwr.SOURCE
-                                             and saved['upload_id'] in record['attachments']
-                                             and owners.get(row['child_id']) == names.get(record['child'], record['child'])
-                                             and basis.get(saved['paper_id']) == saved['version']))
+                signed='AI判断', current=bool(same_file and bases.get(saved['record_id'], {}).get('current')))
 
 
 ROUTES = {'/api/photo-batch/create': create, '/api/photo-batch/append': append,

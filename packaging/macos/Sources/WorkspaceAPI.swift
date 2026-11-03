@@ -409,6 +409,7 @@ struct PhotoPaper: Decodable, Identifiable {
     var id: String { paper_id }
     let paper_id: String; let subject: String; let title: String; let note: String; let coverage: String; let checked: Bool
     let counts: [String: Int]; let unlocated: Int; let pages: [PhotoPaperPage]; let unchecked_questions: [String]?
+    var based_on_version: Int? = nil
     let segment_coverage: [PhotoSegmentCoverage]?; let questions: [PhotoQuestion]
 }
 /// 原图题框：0…1000 归一化坐标（左上为原点），按原图实际显示尺寸换算，不按文字猜位置。
