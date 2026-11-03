@@ -97,6 +97,8 @@ final class WorkspaceStore: ObservableObject {
     @Published var photoImageEpoch = 0
     var photoImages: [String: NSImage] = [:]
     var photoSequence = 0
+    /// 照片写入回执归属的那一轮孩子上下文：真换孩子才进下一轮（切走再切回也是新一轮）；continue/include 在 await 前记下，回来不是同一轮就只归原孩子。
+    var photoContext = 0
     /// “回原作业”要在日历里选中的原作业：不在正看的这一天时，先换到原错题记下的那一天，再按作业编号选中。
     var pendingTask: String?
     /// 知识点与练习：同一道原错题（记录编号、孩子编号）的知识点面板。
@@ -281,7 +283,7 @@ final class WorkspaceStore: ObservableObject {
                 guard confirmDiscard("放弃这次还没登记的照片导入（已上传的原件保留）") else { return }
                 photoDraft = nil
             }
-            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]; photoSyncedRecords = []; photoSyncedPrints = [:]
+            photoPaper = nil; photoPaperBatch = nil; photoQuestion = nil; photoNotice = ""; photoLoadError = ""; photoProblems = [:]; photoSyncedRecords = []; photoSyncedPrints = [:]; photoContext += 1
         }
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
@@ -2717,15 +2719,19 @@ extension WorkspaceStore {
     /// 家长明确“继续失败部分”：只用这一批当前版本提交一次；回执不明不自动重发，到调用上限时服务端不再给继续。
     func continuePhotoBatch(_ batch: PhotoBatch) async {
         guard batch.child_id == childID else { return }
-        let origin = PhotoContinueOrigin(child: batch.child_id, batch: batch.id, version: batch.version)
-        applyPhotoOutcome(await client.post("/api/photo-batch/continue", ["batch_id": batch.id, "version": batch.version]),
-                          done: "已排入后台，只重做未完成的步骤。", continued: origin)
+        let origin = PhotoContinueOrigin(child: batch.child_id, batch: batch.id, version: batch.version), context = photoContext
+        let outcome = await client.post("/api/photo-batch/continue", ["batch_id": batch.id, "version": batch.version])
+        // 回执回来时已换过孩子（含切走再切回）：这一次只归原孩子，不改当前提示、读回入口或批次；那一轮的读回给实际状态，不重发。
+        guard context == photoContext, batch.child_id == childID else { return }
+        applyPhotoOutcome(outcome, done: "已排入后台，只重做未完成的步骤。", continued: origin)
     }
 
     func includePhotoQuestion(_ batch: PhotoBatch, _ question: PhotoQuestion) async {
         guard batch.child_id == childID else { return }
-        applyPhotoOutcome(await client.post("/api/photo-batch/include", ["batch_id": batch.id, "version": batch.version, "question_key": question.key]),
-                          done: "已纳入练习，记在原错题里（署名AI判断）。")
+        let context = photoContext
+        let outcome = await client.post("/api/photo-batch/include", ["batch_id": batch.id, "version": batch.version, "question_key": question.key])
+        guard context == photoContext, batch.child_id == childID else { return }
+        applyPhotoOutcome(outcome, done: "已纳入练习，记在原错题里（署名AI判断）。")
         await load()
     }
 
