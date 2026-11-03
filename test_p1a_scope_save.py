@@ -90,7 +90,7 @@ class ScopeSaveTests(unittest.TestCase):
         return [self.app.day_view('child-1', day), family_review.load_app(self.root, self.data).day_view('child-1', day)]
 
     def cards(self, view, word):
-        return [r for g in view['groups'] for r in g['items'] if word in r['title']] + [u for u in view['upcoming'] if word in u['title']]
+        return [r for g in view['groups'] + view.get('undated', []) for r in g['items'] if word in r['title']] + [u for u in view['upcoming'] if word in u['title']]
 
 
 class SummaryRelationDayTests(ScopeSaveTests):
@@ -473,7 +473,7 @@ class SchoolChangeWholeTests(ScopeSaveTests):
         task_id, item = self.science('更正：水温结果改记在记录单上，不用记在练习册。', '水温结果改记在记录单上，不用记在练习册',
                                      '用温度计测水温，结果记在记录单上，不用记在练习册。')
         view = self.app.day_view('child-1', DAY)
-        row, = [r for g in view['groups'] for r in g['items'] if r.get('task_id') == task_id]
+        row, = [r for g in view['groups'] + view.get('undated', []) for r in g['items'] if r.get('task_id') == task_id]
         self.assertEqual(row['version']['state'], 'review')
         self.assertTrue(any('缺少原要求中未改的部分' in why for why in row['version']['reasons']), row['version'])
         before = self.saved(item['id'], task_id)
@@ -495,7 +495,7 @@ class SchoolChangeWholeTests(ScopeSaveTests):
     def test_candidate_with_only_a_stated_count_change_saves_the_whole_requirement(self):
         task_id, item = self.science('更正：水温改测2次。', '水温改测2次', '用温度计测2次水温。', title='科学：测2次水温并记录')
         view = self.app.day_view('child-1', DAY)
-        row, = [r for g in view['groups'] for r in g['items'] if r.get('task_id') == task_id]
+        row, = [r for g in view['groups'] + view.get('undated', []) for r in g['items'] if r.get('task_id') == task_id]
         shown = '\n'.join(row['version'].get('lines') or [])
         result = agent.apply_school_change(self.app, self.store, self.request(item, task_id, item['plan']['school_task']['goal']))
         self.assertEqual(result['state'], 'accepted')
@@ -1273,7 +1273,7 @@ class LiftedExemptionTests(ScopeSaveTests):
         return task, item
 
     def card(self, view, task):
-        rows = [r for g in view['groups'] for r in g['items'] if r.get('task_id') == task]
+        rows = [r for g in view['groups'] + view.get('undated', []) for r in g['items'] if r.get('task_id') == task]  # 日期未定 keeps the same card
         self.assertEqual(len(rows), 1)
         return rows[0]
 
