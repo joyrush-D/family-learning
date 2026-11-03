@@ -271,7 +271,7 @@ class RealChainDateRoleTest(unittest.TestCase):
         r = late[row['task_id']]; facts = {f['role']: f for f in r['facts']}
         self.assertEqual((r['when'], facts['complete']['value'], facts['due']['value'], facts['due']['kind'], facts['due']['label'], facts['due']['state']),
                          ('overdue', '2026-11-17', '2026-11-18', 'inspection', '检查', 'overdue'))
-        self.assertEqual(self.task(row['task_id'])['status'], '待跟进', 'the list changes no row')
+        self.assertEqual(self.task(row['task_id'])['original_status'], '待跟进', 'the list changes no row')
 
     def test_past_arranged_day_is_history_until_the_parent_keeps_it_open_with_a_due_review(self):
         import family_task_focus as focus
@@ -288,7 +288,7 @@ class RealChainDateRoleTest(unittest.TestCase):
             focus.save(self.case.app, dict(id=row['task_id'], version=self.task(row['task_id'])['focus']['version'], request_key='synthetic-art-paper-waiting',
                                            mode='waiting', next_action='', waiting_for='学校回复', review_on='2026-11-19'))
         task = self.task(row['task_id'])
-        self.assertEqual((task['focus']['mode'], task['focus']['waiting_for'], task['focus']['review_on'], task['status']), ('waiting', '学校回复', '2026-11-19', '待跟进'))
+        self.assertEqual((task['focus']['mode'], task['focus']['waiting_for'], task['focus']['review_on'], task['original_status']), ('waiting', '学校回复', '2026-11-19', '待跟进'))
         for day in ('2026-11-19', '2026-11-20'):
             view = self.case.app.day_view(row['child_id'], day)
             listed = {i['task_id']: i for g in view['groups'] for i in g['items']}
