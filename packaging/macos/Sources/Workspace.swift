@@ -571,7 +571,7 @@ struct WorkspaceView: View {
         let list: CGFloat = side ? 440 : max(320, min(860, width))
         return ZStack {
             HStack(spacing: 0) {
-                SubjectList(store: store, side: side)
+                SubjectList(store: store, side: side, width: list)
                     .frame(width: list)
                     .frame(maxWidth: side ? nil : .infinity)
                     .opacity(page ? 0 : 1).allowsHitTesting(!page).accessibilityHidden(page)
@@ -655,6 +655,8 @@ struct SubjectList: View {
     @ObservedObject var store: WorkspaceStore
     /// 宽窗里所选项的详情在右侧时清单变窄：行高要按新宽度重算。
     var side = false
+    /// 日历清单的确切宽度（0：错题本/学习进展，不用）。
+    var width: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -818,7 +820,8 @@ struct SubjectList: View {
             ForEach(store.groups, id: \.subject) { group in
                 Section {
                     ForEach(group.items) { item in
-                        ItemRow(item: item, selected: store.selection == item.id || (store.selection == nil && store.lastOpened == item.id)).tag(item.id).probe("row-" + item.id, text: item.title)
+                        ItemRow(item: item, selected: store.selection == item.id || (store.selection == nil && store.lastOpened == item.id),
+                                textWidth: width > 0 ? ItemRow.textWidth(list: width) : nil).tag(item.id).probe("row-" + item.id, text: item.title)
                             .listRowSeparator(.hidden)
                     }
                 } header: {
@@ -857,15 +860,21 @@ struct SubjectList: View {
 struct ItemRow: View {
     let item: DayItem
     var selected = false
+    /// 文字一栏的确切宽度。系统列表按行的理想尺寸（不限宽）定行高：只靠 fixedSize 时长文字被量成一行，排开时截成“…”，
+    /// 与有无验收锚点无关。给文字栏定宽后，理想尺寸就是这个宽度下完整换行的高度，正式与验收同一布局。
+    var textWidth: CGFloat? = nil
+    /// 清单宽度减去：卡片内 58（左 6、叶形 32、间距 8、右 12），行左右留白至多 20+20（M6 截图 860 宽时实测约 16/17），
+    /// 常显滚动条至多 16。宁可右侧多留一点空，也不让文字栏比行宽。
+    static func textWidth(list: CGFloat) -> CGFloat { max(160, list - 114) }
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
             LeafMark(closed: item.closed).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.title).font(Palette.round(15, .bold)).foregroundStyle(item.closed ? Palette.ink2 : Palette.ink)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
                 if let first = item.lines.first {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
-                    Text(item.standardWords).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2)
+                    Text(item.standardWords).font(Palette.small).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(nil)
                         .fixedSize(horizontal: false, vertical: true).accessibilityHint(first).modifier(FitProbe(id: "row-fit-" + item.id))
                     if let v = item.version {
                         // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
@@ -886,6 +895,7 @@ struct ItemRow: View {
                 let meta = [item.source, item.sourceWords, item.progress.map(progressWords) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
                 if !meta.isEmpty { Text(meta).font(.system(size: 12.5)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("row-meta-" + item.id, text: meta) }
             }
+            .frame(width: textWidth, alignment: .leading)
             Spacer(minLength: 0)
         }
         .padding(EdgeInsets(top: 10, leading: 6, bottom: 12, trailing: 12))
@@ -2384,6 +2394,11 @@ enum TestTargets {
         // 在列表里的：只认确实在表格某一行里的（复用后闲置的旧行不算）。
         let placed = shown.filter { table(of: $0) == nil || row(of: $0) != nil }
         guard let best = placed.first(where: reachable) ?? placed.first ?? shown.first else { return nil }
+        // 行内文字的几何核对（只在验收里）：这段文字的框是否整段落在它那一行表格行之内（行高不够时会被行裁掉，FitProbe 看不到）。
+        if id.hasPrefix("row-fit-"), let hit = row(of: best) {
+            let f = hit.0.convert(best.bounds, from: best), r = hit.0.rect(ofRow: hit.1)
+            return (best, (f.minY >= r.minY - 0.5 && f.maxY <= r.maxY + 0.5 ? "inrow " : "clipped ") + best.probeText)
+        }
         return (best, best.probeText)
     }
     static func table(of view: NSView) -> NSTableView? {
