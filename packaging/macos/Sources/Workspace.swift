@@ -2397,7 +2397,7 @@ enum TestTargets {
         // 行内文字的几何核对（只在验收里）：这段文字的框是否整段落在它那一行表格行之内（行高不够时会被行裁掉，FitProbe 看不到）。
         if id.hasPrefix("row-fit-"), let hit = row(of: best) {
             let f = hit.0.convert(best.bounds, from: best), r = hit.0.rect(ofRow: hit.1)
-            return (best, (f.minY >= r.minY - 0.5 && f.maxY <= r.maxY + 0.5 ? "inrow " : "clipped ") + best.probeText)
+            return (best, (f.minY >= r.minY - 0.5 && f.maxY <= r.maxY + 0.5 && f.minX >= r.minX - 0.5 && f.maxX <= r.maxX + 0.5 ? "inrow " : "clipped ") + best.probeText)
         }
         return (best, best.probeText)
     }
