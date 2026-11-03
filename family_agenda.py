@@ -572,9 +572,17 @@ _COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完�
 # A 的 there joins an attributive to a method word of its own after it (按照老师上节课讲过的左右交替方法), so that attributive's own
 # aspect right before it (讲过的、说好了的) is the method's history, not this act's state; the name before the count stays free of it.
 _COUNTED_FREE=r'(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|[不没无未免别勿有是共约第已了过的每或])'
-_COUNTED_ACT=(r'(?:(?:按照?|照着|跟着|随着|和着|伴着|对着|看着|听着|用)(?:(?:[过了]?的)?'+_COUNTED_FREE+r'[一-鿿0-9])+?)?'
-              r'(?:'+_COUNTED_FREE+r'[一-鿿]){2,6}?'
-              r'(?!一\s*下)[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')  # 准备一下 is no count
+_COUNTED_METHOD=(r'(?:按照?|照着|跟着|随着|和着|伴着|对着|看着|听着|用)(?:(?:[过了]?的)?'+_COUNTED_FREE+r'[一-鿿0-9])+?')
+_COUNTED_NAMED=(r'(?:'+_COUNTED_FREE+r'[一-鿿]){2,6}?'
+               r'(?!一\s*下)[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')  # 准备一下 is no count
+_COUNTED_ACT=r'(?:'+_COUNTED_METHOD+r')?'+_COUNTED_NAMED
+
+
+def counted_method_read(text):
+    """text with each counted exercise's leading method phrase left out (按照老师上节课讲过的左右交替方法 of …踢毽子24下), read as
+    _COUNTED_ACT reads it: those are the exercise's own modifier words, never a handback (交替), check or approximation
+    (左右) of its clause. The name and count before which the method stands are kept."""
+    return re.sub(_COUNTED_METHOD+r'(?='+_COUNTED_NAMED+r')','',text or '')
 
 
 def completion_day(quote,header,time,due_on):

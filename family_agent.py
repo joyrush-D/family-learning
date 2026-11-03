@@ -4052,8 +4052,10 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
     span=_school_choices_read(text[head:end])
     # Only a 或 a day borders leaves this item's day to choose (_SCHOOL_DAY_OR); one between answers, people, receivers or ways
     # (勾选参加或不参加, 交给班主任或课代表) is kept in its words for the family and names no day.
+    # 左右 inside a counted exercise's own method (按照…左右交替方法踢毽子24下) is its way of doing it, not an approximation.
+    from family_agenda import counted_method_read
     if span is None or re.search(_SCHOOL_DEFERRED+r'|取消|改为|改到|改成|推迟|延期|顺延|更正|待定|另行通知|'+_SCHOOL_DAY_OR
-                                 +r'|或许|也许|如果|若|可能|大概|左右|[？?]',span):return None
+                                 +r'|或许|也许|如果|若|可能|大概|[？?]',span) or '左右' in counted_method_read(span):return None
     if re.search(_SCHOOL_BRACKET_DAY,text[head:end]):return None  # its relative word and its bracket name two days
     for other in others:  # Another proposal quoting any of this range makes it shared, not this item's own.
         at=0
@@ -4104,7 +4106,8 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             if not days:
                 if re.search(day,clause):return None
                 continue
-            back=bool(re.search(r'交|检查',clause))
+            # A counted exercise's own method words (左右交替方法) hand nothing back (family_agenda.counted_method_read).
+            back=bool(re.search(r'交|检查',counted_method_read(clause)))
             # The sending day's own work (今晚将课本第20页的对话朗读三遍) is its completion, as completion_day reads it; so is a
             # signature however written (并签名), read as the clause's own predicate, never inside a name (交回签名回执).
             # 签名 alone may be a name (交回签名回执、《家长签名确认单》): read as a predicate only by _school_clause_roles.
