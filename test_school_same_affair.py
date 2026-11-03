@@ -15,6 +15,8 @@ from test_agent import school_proposal
 
 READING_QQ = 'Unit 3课文读两遍，朗读录音上传班级作业区，明天完成。'
 READING_WECHAT = '提醒一下，明天要交Unit 3朗读录音，课文读两遍再上传。'
+PE_CARD = '体育：这一张《纸鹤体能卡》只做A栏：左右脚交替跳2组，每组10下。'
+PE_REMINDER = '提醒：这一张《纸鹤体能卡》只做A栏：左右脚交替跳2组，每组10下。'
 
 
 class SchoolSameAffairTests(unittest.TestCase):
@@ -341,6 +343,79 @@ class SchoolSameAffairTests(unittest.TestCase):
         # The member's own original stays readable through the protected entry under its own task and child.
         out = self.store.message(dict(child_id='child-1', source_id='synthetic-qq', message_id='22', task_id=member), self.app.upload_info)
         self.assertIn(text, json.dumps(out, ensure_ascii=False))
+
+    def _undated_card(self, index, text, **values):
+        values = dict(dict(source='synthetic-qq', platform='qq', title='体育：《纸鹤体能卡》A栏', goal='《纸鹤体能卡》只做A栏：左右脚交替跳2组，每组10下。',
+                           subject='体育'), **values)
+        return self._original(index, text, due='', **values)
+
+    def _open_school(self, view):
+        """Every open school card of a day view, whichever list (dated, undated) shows it, once per task."""
+        rows = {}
+        for key, groups in view.items():
+            if key == 'closed' or not isinstance(groups, list): continue
+            for g in groups:
+                for i in (g.get('items') or [g]) if isinstance(g, dict) else ():
+                    if isinstance(i, dict) and i.get('origin') == 'school': rows.setdefault(i.get('task_id'), i)
+        return list(rows.values())
+
+    def test_undated_saved_repeats_of_one_named_card_are_asked_once_and_listed_as_one_affair(self):
+        first, keep = self._undated_card(301, PE_CARD)
+        later, member = self._undated_card(302, PE_REMINDER, source='synthetic-group', platform='wechat', publisher='synthetic-teacher-b',
+                                           title='体育：体能卡交替跳', goal='《纸鹤体能卡》A栏：左右脚交替跳2组，每组10下。')
+        self.assertNotEqual(member, keep)
+        day = self.now.date().isoformat()
+        old = self.app.save_task_feedback(dict(task_id=member, child='示例甲', day=day, note='虚构：A栏已跳完一组。', request_key='synthetic-undated-old'))
+        with self.app.connect() as c:
+            tasks_before = self._rows(c, 'manual_tasks'); saved_old = dict(c.execute('SELECT * FROM records WHERE id=?', (old['record_id'],)).fetchone())
+        self.assertEqual(sorted(r['task_id'] for r in self._open_school(self.app.day_view('child-1', day))), sorted([keep, member]))
+        reply = dict(proposals=[school_proposal(title_quote=PE_REMINDER, focus='school', due='', evidence=[dict(ref='message:synthetic-group:302')],
+                                                learning_subject='体育', task_title='体育：体能卡交替跳', task_goal='《纸鹤体能卡》A栏：左右脚交替跳2组，每组10下。',
+                                                task_state='ready', task_reason='虚构：同一张卡同一栏的再次提醒。', task_change='same', task_target_id=keep,
+                                                task_purpose='learning')])
+        ticks = [self._tick(reply, must=('message:synthetic-group:302', keep), never=(member,)) for _ in range(3)]
+        self.assertEqual(sum(t.count('reconcile') for t in ticks), 1)
+        self.assertEqual(self._same_jobs(), [dict(id='school-same:' + later['id'], done=1)])
+        for _ in range(2):  # reopened: one card, every original, the member's own feedback under its own task
+            rows = self._open_school(self.app.day_view('child-1', day))
+            self.assertEqual([r['task_id'] for r in rows], [keep])
+            self.assertEqual(rows[0]['same_affair'], dict(state='grouped', task_ids=[keep, member]))
+            self.assertEqual({(p['ref'], p['task_id']) for p in rows[0]['publications']}, {('message:synthetic-qq:301', keep), ('message:synthetic-group:302', member)})
+            self.assertEqual([(r['id'], r['task_id']) for r in rows[0]['records']], [(old['record_id'], member)])
+        with self.app.connect() as c:
+            self.assertEqual(self._rows(c, 'manual_tasks'), tasks_before)  # both dates stay unknown; no task, status or focus moves
+            self.assertEqual(dict(c.execute('SELECT * FROM records WHERE id=?', (old['record_id'],)).fetchone()), saved_old)
+            self.assertEqual(json.loads(c.execute('SELECT plan FROM agent_items WHERE id=?', (later['id'],)).fetchone()[0])['school_same_task']['task_id'], keep)
+        self.assertEqual(self._tick(reply, must=('message:synthetic-group:302', keep), never=(member,)).count('reconcile'), 0)
+        self.app.save_task(dict(id=member, status='已完成', note='虚构家长已核对。'))
+        rows = self._open_school(self.app.day_view('child-1', day))
+        # A mixed completion is stated, never inferred for the other original.
+        self.assertEqual([r['task_id'] for r in rows], [keep]); self.assertEqual(rows[0]['same_affair']['state'], 'uncertain')
+        self.assertEqual(rows[0]['members'][0]['status'], '已完成')
+
+    def test_undated_saved_tasks_of_a_new_round_a_swapped_role_or_another_child_are_not_offered(self):
+        self._undated_card(311, PE_CARD.replace('纸鹤', '松果'), title='体育：《松果体能卡》A栏', goal='《松果体能卡》只做A栏：左右脚交替跳2组，每组10下。')
+        self._undated_card(312, '今天新的一轮：这一张《松果体能卡》只做A栏：左右脚交替跳2组，每组10下。', source='synthetic-group', platform='wechat',
+                           title='体育：《松果体能卡》A栏', goal='今天新的一轮：《松果体能卡》只做A栏：左右脚交替跳2组，每组10下。')
+        poem = dict(subject='语文', title='语文：朗读《春晓》')
+        self._undated_card(313, '孩子须朗读《春晓》两遍，家长须检查。', goal='孩子须朗读《春晓》两遍，家长须检查。', **poem)
+        self._undated_card(314, '提醒：家长须朗读《春晓》两遍，孩子须检查。', source='synthetic-group', platform='wechat', goal='家长须朗读《春晓》两遍，孩子须检查。', **poem)
+        self._undated_card(315, PE_CARD)
+        self._undated_card(316, PE_REMINDER, source='synthetic-sibling-group', child='child-2')
+        for _ in range(3): self._tick()
+        self.assertEqual(self._same_jobs(), [])
+
+    def test_a_closed_requirements_unchanged_clause_is_relation_words_never_a_new_standard(self):
+        facts = '体育：《纸鹤体能卡》A栏\n《纸鹤体能卡》只做A栏：左右脚交替跳2组，每组10下。'
+        said = '再次提醒：这一张《纸鹤体能卡》仍只做A栏：左右脚交替跳2组，每组10下，'
+        body, kept = agent._school_relation_body(said + '要求不变。')
+        self.assertIn('要求不变', kept); self.assertNotIn('要求不变', body)
+        self.assertFalse(agent._school_same_unstated(body, facts))
+        for extra, words in (('要求不变，但第二栏也要填。', '第二栏也要填'), ('要求改为3组。', '要求改为3组'), ('不要求签字。', '不要求签字')):
+            body, kept = agent._school_relation_body(said + extra)
+            self.assertNotIn('要求不变', kept); self.assertIn(words, body)
+        for extra in ('要求不变，但第二栏也要填。', '要求改为3组。'):
+            self.assertTrue(agent._school_restated_reason(agent._school_relation_body(said + extra)[0], facts, ''), extra)
 
     def test_equivalent_counts_and_a_compatible_addendum_stay_with_the_one_affair(self):
         photo = dict(title='语文：观察日记', subject='语文', source='synthetic-group', platform='wechat')
