@@ -2,6 +2,7 @@
 import unittest
 
 import family_agent as agent
+import family_agenda
 
 
 class StepNegationTest(unittest.TestCase):
@@ -181,6 +182,23 @@ class ClockRoleDayTest(unittest.TestCase):
         bare_day = ev('m:f', '识字小卡明天交给我', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
         clocked = ev('m:g', '识字小卡明天8:00交给我', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
         self.assertFalse(agent._school_same_role_day(clocked['text'], clocked, bare_day))
+
+
+class BoundExemptionTest(unittest.TestCase):
+    OLD = '完成数学《每日练习》第26页第1—3题；第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学老师。'
+
+    def test_a_range_exemption_is_not_lifted_by_another_clause(self):
+        notice = '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。'
+        self.assertEqual(family_agenda._lifted_exemptions(self.OLD, notice), [])
+
+    def test_naming_the_exempted_object_and_action_lifts_it(self):
+        self.assertTrue(family_agenda._lifted_exemptions(self.OLD, '第4题也要做。'))
+
+    def test_a_true_copying_lift_stays_unmet_when_the_summary_omits_it(self):
+        old = '今晚跟读《溪边》两遍，不用抄写。'
+        notice = '更正：今晚跟读《溪边》两遍，抄写一遍。'
+        self.assertTrue(family_agenda._lifted_exemptions(old, notice))
+        self.assertTrue(family_agenda._exemption_unmet(old, notice, '今晚跟读《溪边》两遍。'))
 
 
 if __name__ == '__main__':

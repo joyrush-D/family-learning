@@ -1375,9 +1375,20 @@ def _lifted_exemptions(old,notice):
     original writes only in its negated clauses (不用抄写 → …只需跟读两遍，抄写). Same characters are no proof of the same
     requirement: the polarity of each clause decides, as an exemption named again without its negation is a changed unit
     for a date move. A notice that omits the exemption, or restates it negated (仍然不用抄写), lifts nothing."""
-    pos,neg=_polar_chars(old);found=[]
+    # Each exemption is bound to its own clause: the object or range before its negation (第4题 of 第4题不做) and the action
+    # after it. A notice clause lifts it only by naming that action and that object; a character shared with another clause
+    # (今晚做 beside 第4题不做) is no proof that the whole work, a signature or another object was ever exempt.
+    pos,_=_polar_chars(old);exempt=[];found=[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',old or ''):
+        if not clause.strip() or not _clause_negated(clause):continue
+        text=_titles_read_as_objects(clause);lead=re.search(_NEGATED_LEAD,text)
+        if not lead:continue
+        action=_unit_chars(text[lead.end():])-pos
+        if action:exempt.append((_unit_chars(text[:lead.start()]),action))
     for clause in re.split(r'[，,；;。！!？?\n]+',notice or ''):
-        if clause.strip() and not _clause_negated(clause) and (words:=(_unit_chars(clause)-pos)&neg):found.append((clause.strip(),words))
+        if not clause.strip() or _clause_negated(clause):continue
+        words=_unit_chars(clause);lifted=set().union(*([action for target,action in exempt if action<=words and target<=words] or [set()]))
+        if lifted:found.append((clause.strip(),lifted))
     return found
 
 
@@ -1737,7 +1748,11 @@ def _one_affair_versions(c,items,store):
         if (not family_agent._school_named_objects(shown)<=family_agent._school_named_objects(grounded)
                 or not all(any(n==m and (u==v or not u) for m,v in family_agent._school_counts(grounded)) for n,u in family_agent._school_counts(shown))):
             why.append('新要求的归纳与通知原文对不上')
-        if not (m.get('published_at') and a.get('published_at') and m['published_at']>a['published_at']):why.append('不是原发布者之后的通知')
+        # After the current requirement's own basis: the latest of its own adopted originals (a 17:00 correction), not only its
+        # first publication (15:40); a time no original proves leaves the notice for review.
+        basis=max([sent_at(str((_message(c,p['ref'])[0] or {}).get('time') or '')) for p in a.get('publications') or []
+                   if str(p.get('ref','')).startswith('message:')]+[str(a.get('published_at') or '')])
+        if not (m.get('published_at') and basis and m['published_at']>basis):why.append('不是原发布者之后的通知')
         if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
         # The latest is a whole requirement: every unchanged original unit kept, or only a proven count change put in.
         old_lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()];lines=list(rel['lines']);composed=False
@@ -1992,6 +2007,18 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         notes = [dict(wrong_row(r), task_id=x['task_id']) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
         pubs = publications(a)
         if version and version['state'] == 'latest': lines = list(version['lines'])
+        # A pending notice of this same item is listed after the adopted originals, marked, so its whole original opens through
+        # the same original-message buttons; it never enters the task, its saved sources or the print basis.
+        if version and version.get('state') != 'latest':
+            for n in version.get('notices') or []:
+                for p in n.get('publications') or []:
+                    if p.get('ref') and all(p['ref'] != q.get('ref') for q in pubs):
+                        pubs = pubs + [dict(p, pending=True, role='pending_reminder', label='待核提醒（未采用）', time=n.get('published_at', ''))]
+        # An oral item with no written action shows its saved manual record's own words, with their provenance; nothing guessed.
+        if oral and not lines and str((task or {}).get('title') or '').strip(): lines = ['孩子口述、家长记录：' + task['title'].strip()]
+        # The parent's own arrangement of this same item, as the family's, on its plan day; the school's words and dates stay.
+        arranged = str(((task or {}).get('focus') or {}).get('next_action') or '').strip()
+        if arranged: lines = list(lines) + ['家庭安排（计划 ' + (exact_day(a.get('scheduled_on')) or '日期未定') + '）：' + arranged]
         # A past lesson or arranged day the parent keeps open with its own review due now (等学校回复, review_on) is an earlier
         # arrangement still open (之前安排), listed with its original facts; the review day is never a school date.
         when = day_role(a, day)
