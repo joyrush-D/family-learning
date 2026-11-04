@@ -165,5 +165,20 @@ class RepeatedSupplementRoleTest(unittest.TestCase):
         self.assertIsNone(agent._school_role_days(self.QUOTE, [self.HOME, other], []))
 
 
+class ClockRoleDayTest(unittest.TestCase):
+    ORIGINAL = ev('m:a', '语文《识字小卡》明天8:00交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
+
+    def test_the_same_clock_repeats(self):
+        same = ev('m:b', '识字小卡明天8:00交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertTrue(agent._school_same_role_day(same['text'], same, self.ORIGINAL))
+
+    def test_a_moved_or_added_clock_is_no_repeat(self):
+        moved = ev('m:c', '识字小卡明天9:00交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertFalse(agent._school_same_role_day(moved['text'], moved, self.ORIGINAL))
+        bare = ev('m:d', '语文《识字小卡》明早交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        timed = ev('m:e', '识字小卡明早8:00交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertFalse(agent._school_same_role_day(timed['text'], timed, bare))
+
+
 if __name__ == '__main__':
     unittest.main()
