@@ -162,6 +162,8 @@ class Run6ContractTest(unittest.TestCase):
         original = ev('m:a', '语文《识字小卡》写好后明早交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
         later = ev('m:b', '识字小卡明早交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
         self.assertTrue(agent._school_same_role_day(later['text'], later, original))
+        supplement = ev('m:e', '刚才的《识字小卡》，完成后还请家长在卡片下方签名，明早交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertTrue(agent._school_same_role_day(supplement['text'], supplement, original))
 
     def test_another_day_or_role_keeps_the_follow_up_unproven(self):
         original = ev('m:a', '语文《识字小卡》写好后明早交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
