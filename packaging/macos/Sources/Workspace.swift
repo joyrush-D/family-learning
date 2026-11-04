@@ -1688,7 +1688,8 @@ struct Inspector: View {
         section("来源消息\(item.sourceRefs.count)条", "text.bubble") {
             ForEach(item.sourceRefs, id: \.ref) { p in
                 HStack(alignment: .center, spacing: 10) {
-                    Text([p.source_name, p.sender].filter { !$0.isEmpty }.joined(separator: " · ")).font(Palette.body).foregroundStyle(Palette.ink)
+                    Text((p.isPendingReminder ? [p.label ?? "待核提醒（未采用）", p.sender, String((p.time ?? "").prefix(16)).replacingOccurrences(of: "T", with: " ")]
+                          : [p.source_name, p.sender]).filter { !$0.isEmpty }.joined(separator: " · ")).font(Palette.body).foregroundStyle(Palette.ink)
                         .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                     Button { store.sheetDirty = false; store.sheet = .source(item, p, store.childID) } label: { Label("看原消息", systemImage: "text.bubble") }
                         .buttonStyle(GroveButtonStyle(kind: .quiet)).help("在这一项里看原文、发布人、时刻与附件").probe("source-open-" + p.ref, text: p.ref)
@@ -1832,8 +1833,9 @@ struct SourceSheet: View {
     @State private var otherError = ""
     @State private var reads = 0
 
-    /// 同组出处按它自己的原事项编号核对归属（较早后台没有时用这一项的编号）。
-    var task: String { publication.task_id ?? item.task_id }
+    /// 同组出处按它自己的原事项编号核对归属（较早后台没有时用这一项的编号）。待核提醒一开始就不带事项编号，
+    /// 只按孩子的来源/消息身份读原件；这不是被拒后的回退，也不会借用已采用事项的编号。
+    var task: String { publication.isPendingReminder ? "" : (publication.task_id ?? item.task_id) }
     var stillHere: Bool {
         guard store.childID == child, case .source(let i, let p, let c)? = store.sheet else { return false }
         return i.id == item.id && p.ref == publication.ref && c == child
