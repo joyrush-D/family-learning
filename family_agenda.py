@@ -1879,7 +1879,7 @@ def day_facts(agenda, day, today, school):
     submit = exact_day(a.get('submit_on'))
     if submit and submit != exact_day(a.get('due_on')):  # an earlier handback or check of the same thing, in its own words and role
         check = a.get('submit_role') == 'check'
-        facts.append(dict(role='check' if check else 'submit', label=('检查' if due and submit > due else '先检查') if check else '先提交', value=submit, known=True,
+        facts.append(dict(role='check' if check else 'submit', label=('检查' if exact_day(a.get('due_on')) and submit > exact_day(a.get('due_on')) else '先检查') if check else '先提交', value=submit, known=True,
                           today=submit == today, words=str(a.get('submit_words') or '')))
     due = exact_day(a.get('due_on'))
     if due:
