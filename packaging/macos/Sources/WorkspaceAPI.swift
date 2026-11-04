@@ -43,7 +43,12 @@ struct SavedRecord: Decodable, Hashable, Identifiable {
 /// 已保存的新题再试：后台 family_taxonomy.retry_views 的同一份只读短视图（网页同用）；show_note 时仍显示这条记录原文。
 struct RetryView: Decodable, Hashable { let state: String; let lines: [[String]]; let status: String; let show_note: Bool; let next: String; let trace: String }
 
-struct Publication: Decodable, Hashable { let ref: String; let source_name: String; let sender: String; let task_id: String? }
+/// 原消息出处。pending 为 true 的是同一事项尚未采用的待核提醒（附自己的标签、发送时间），只按孩子的来源/消息身份读原件，不带已采用事项编号。
+struct Publication: Decodable, Hashable {
+    let ref: String; let source_name: String; let sender: String; let task_id: String?
+    let pending: Bool?; let label: String?; let time: String?
+    var isPendingReminder: Bool { pending == true }
+}
 /// A verified same affair shown as one item; the note states a completion doubt. Older servers omit it.
 struct SameAffair: Decodable, Hashable { let state: String; let task_ids: [String]?; let note: String? }
 
