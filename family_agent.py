@@ -3157,8 +3157,31 @@ def _school_excuse_unrequired(operation, plain, said=''):
     name one same recognized learning operation (朗读…，不用背诵), and the excused one must be another whole specific
     operation sharing none of its characters. Anything less (不用抄写。 alone, 不用动笔) stays for the change check."""
     if not re.fullmatch(_SCHOOL_EXCUSABLE_OPERATION,operation) or any(c in plain for c in operation):return False
-    own=set(re.findall(_SCHOOL_OUTCOME_LEARN,plain))-{'完成','做'}
+    # Every obligation of the affair must be accounted for first: one shared operation proves no other one absent
+    # (先朗读《山溪》，再把这一段誊到本子上 still asks copying beside the shared 朗读).
+    own=_school_obligations_accounted(plain)
+    if not own or operation in own:return False
     return bool(own&set(re.findall(_SCHOOL_OUTCOME_LEARN,said)))
+
+
+def _school_obligations_accounted(plain):
+    """The recognized operations of every obligation the affair's own words state, or None when any is unaccounted.
+
+    Each requirement part (_SCHOOL_STEP_PART), cut again where a following step begins (再、然后、并…, as
+    _school_role_days reads a continued step), is one obligation. It is accounted for only as negated (不用录音: none),
+    another person's own act (明早老师抽听, or the author's own 明早我抽听), or a step naming a specific recognized
+    operation (朗读, 读; generic 完成/做/练习 name none). Any other step (把这一段誊到本子上) leaves the affair's obligations
+    unknown, never absent: None."""
+    ops=set()
+    for part in re.findall(_SCHOOL_STEP_PART,plain):
+        for step in re.split(r'然后|再|接着|随后|之后|最后|并且|并|以后|后',re.sub(r'《[^》]*》','《》',part)):
+            step=re.sub(r'^[^：:]{1,6}[：:]','',step).strip()
+            if not step or _school_step_negated(step):continue
+            found=set(re.findall(_SCHOOL_OUTCOME_LEARN,step))-{'完成','做','练习'}
+            if found:ops|=found;continue
+            if _school_doer(step) in ('teacher','parent') or re.match(r'[^我，,]{0,4}我(?!们)',step):continue
+            return None
+    return ops
 
 
 def _school_unrequired_excuses_dropped(text, facts):

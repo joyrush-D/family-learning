@@ -123,5 +123,25 @@ class CopyingExcuseTest(unittest.TestCase):
         self.assertFalse(agent._school_excuse_unrequired('背诵', facts, '不用背诵。'))
 
 
+class ParallelObligationTest(unittest.TestCase):
+    def test_a_shared_reading_does_not_prove_a_parallel_copying_absent(self):
+        facts, said = '先朗读《山溪》，再把这一段誊到本子上。', '朗读《山溪》，不用抄写。'
+        self.assertFalse(agent._school_excuse_unrequired('抄写', facts, said))
+        self.assertEqual(agent._school_unrequired_excuses_dropped(said, facts), said)
+        self.assertTrue(agent._school_restated_reason(said, facts, said))
+
+    def test_a_following_step_inside_one_part_is_its_own_obligation(self):
+        self.assertIsNone(agent._school_obligations_accounted('朗读《山溪》后誊到本子上。'))
+        self.assertFalse(agent._school_excuse_unrequired('抄写', '朗读《山溪》后誊到本子上。', '朗读《山溪》，不用抄写。'))
+
+    def test_a_generic_obligation_names_no_operation(self):
+        self.assertFalse(agent._school_excuse_unrequired('背诵', '完成《山溪》练习。', '完成《山溪》练习，不用背诵。'))
+
+    def test_fully_accounted_reading_with_a_teacher_check_stays_positive(self):
+        facts = '朗读《溪边》两遍，读给家长听；不用录音，明早老师抽听。'
+        self.assertEqual(agent._school_obligations_accounted(facts), {'朗读', '读'})
+        self.assertTrue(agent._school_excuse_unrequired('背诵', facts, '朗读《溪边》两遍，不用背诵。'))
+
+
 if __name__ == '__main__':
     unittest.main()
