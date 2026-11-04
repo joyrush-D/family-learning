@@ -901,8 +901,14 @@ def _school_focus(c,task,proposal,plan):
         current=json.loads(row['current']);rows[current.get('version')]=(row['request_key'],current)
     events={'school-change-'+family_agent._hash(e['item_id'])[:32]:e for e in plan.get('school_changes',[])
             if isinstance(e,dict) and isinstance(e.get('item_id'),str) and e.get('change') in ('update','append')}
+    previous=None
     for number in range(1,version+1):
         key,current=rows.get(number,('',{}));event=events.get(key)
+        written=(current.get('due_on'),current.get('title'),current.get('goal'))
+        # A parent's plan-only save (schedule, box, next step) after them keeps the school-written requirement and due as they
+        # were; a parent's own due, title or goal edit is a parent choice and ends the proof.
+        if not event and previous is not None and written==previous:continue
+        previous=written
         change=event and c.execute("SELECT plan FROM agent_items WHERE id=? AND kind='school' AND state='accepted' AND task_id=? AND child_id=?",
                                    (event['item_id'],task['id'],proposal['child_id'])).fetchone()
         receipt=json.loads(change['plan']) if change else {};written=receipt.get('school_change_receipt') or {}
