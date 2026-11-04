@@ -877,9 +877,10 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         # day beside the due; never another clause, object, a negated or cancelled check, or a guess from a bare 明早.
         for clause in re.split(r'[，,。；;！!？?\n]',date_quote):
             if not re.search(r'检查|抽查|抽听|抽背',clause) or family_agent._school_step_negated(clause) or re.search(r'取消|不再|改为|改到|推迟|延期|顺延',clause):continue
-            days=family_agent._school_own_dates(clause,sent_day(own[0].get('time','')))
-            if len(days)==1 and next(iter(days))>due_on:
-                submit=dict(submit_on=next(iter(days)),submit_words=clause.strip(),submit_role='check');break
+            # The same one-clause day reader the role reading uses (明早我抽听 → the next morning of its own sending day).
+            day=family_agent._school_clause_day(clause,sent_day(own[0].get('time','')))
+            if day and day>due_on:
+                submit=dict(submit_on=day,submit_words=clause.strip(),submit_role='check');break
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',
                 **({'complete_words':words} if words else {}),**submit)
