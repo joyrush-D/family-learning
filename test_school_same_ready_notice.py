@@ -150,5 +150,20 @@ class RoleDayPairTest(unittest.TestCase):
         self.assertFalse(agent._school_same_role_day(moved['text'], moved, original))
 
 
+class RepeatedSupplementRoleTest(unittest.TestCase):
+    QUOTE = '英语《晨读单》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。'
+    HOME = ev('m:h', QUOTE, '2026-11-04T16:05:00+08:00', '英语王老师', 'publisher:fiction-en')
+
+    def test_a_same_teacher_supplement_repeating_the_roles_keeps_them(self):
+        supp = ev('m:s', '补充今天英语《晨读单》：完成后放英语夹里明早带来，不用在群里发照片。', '2026-11-04T17:25:00+08:00', '英语王老师', 'publisher:fiction-en')
+        self.assertEqual(agent._school_role_days(self.QUOTE, [self.HOME, supp], []), ({'2026-11-04'}, '2026-11-05'))
+
+    def test_a_moved_day_or_another_publisher_proves_no_roles(self):
+        moved = ev('m:m', '补充今天英语《晨读单》：完成后放英语夹里后天带来。', '2026-11-04T17:25:00+08:00', '英语王老师', 'publisher:fiction-en')
+        self.assertIsNone(agent._school_role_days(self.QUOTE, [self.HOME, moved], []))
+        other = ev('m:o', '补充今天英语《晨读单》：完成后放英语夹里明早带来。', '2026-11-04T17:25:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertIsNone(agent._school_role_days(self.QUOTE, [self.HOME, other], []))
+
+
 if __name__ == '__main__':
     unittest.main()
