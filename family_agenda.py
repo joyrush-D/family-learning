@@ -844,12 +844,14 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         ranged=family_agent._school_role_days(date_quote,messages,date_siblings,words=True)
         if ranged and ranged[1]==due_on:due_kind=date_meaning(ranged[2],due_on,home,subject,goal)
     heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
+    # A family plan (scheduled_on, box, next step) changes only the family's own day: the teacher's completion stays.
+    family_edited=bool(focus.get('goal') or focus.get('due_on'))
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
-                 if len(own)==1 and not focus.get('scheduled_on') and (not focus.get('version') or school_focus) else '')
-    if complete_on and focus.get('version') and completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)!=complete_on:complete_on=''
+                 if len(own)==1 and (not family_edited or school_focus) else '')
+    if complete_on and family_edited and completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)!=complete_on:complete_on=''
     # The clock its own work clause gives that same day (20:00前) belongs to it on every card; the saved action stays.
     words=completion_words(date_quote,heading,complete_on,action) if complete_on else None;submit={}
-    if (not complete_on and len(own)==1 and due_on and date_siblings is not None and not focus.get('scheduled_on') and not focus.get('version')):
+    if (not complete_on and len(own)==1 and due_on and date_siblings is not None and not family_edited):
         # The same own-role reading the item was selected and saved with (今晚完成，明天早上交 / 今晚请家长签字，明天早上让孩子交给…):
         # its one earlier completion day is listed on that day; its handback/check due stays. Another item's quote or day gives none.
         # An earlier handback of the same thing (今晚在线提交《活动卡》，明早交给班主任) is its own handback role with its own words,
