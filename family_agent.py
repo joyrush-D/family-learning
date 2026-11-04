@@ -7130,16 +7130,16 @@ def _school_native_waive_kept(action,waived,goal):
 
 
 def _school_same_role_day(text, later, original):
-    """Whether every day a follow-up's own words name is a day its one original names, each read on its own sending day, for
-    a role word the original states too (明早交 again after 明早交): a repeat, not a day of its own. Another day, a role the
-    original does not state, or a day either cannot read keeps the follow-up unproven."""
+    """Whether every dated clause of a follow-up's own words repeats its one original: the same day words (明早, never 明晚
+    after 明早), a day the original names (each read on its own sending day) and a role word the original states (明早交给我
+    after 明早交给我). Its undated clauses are its own supplement steps, judged by _school_native_step_kind, not a day claim."""
     from family_agenda import sent_day
-    own=_school_own_dates(text,sent_day(later.get('time','')));base=_school_own_dates(original['text'],sent_day(original.get('time','')))
-    roles=set(re.findall(r'交|带|检查|签',text))
-    # The same calendar day at another time (明晚 after 明早) is another time: its own day words must be the original's too.
+    base=_school_own_dates(original['text'],sent_day(original.get('time','')));sent=sent_day(later.get('time',''))
     parts=lambda value:set(re.findall(r'[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上',value))
-    return (bool(own) and own<=base and parts(text)<=parts(original['text'])
-            and bool(roles) and roles<=set(re.findall(r'交|带|检查|签',original['text'])))
+    roles=lambda value:set(re.findall(r'交|带|检查|签',value))
+    dated=[c for c in re.split(r'[，,。；;！!？?\n]',text) if _school_own_dates(c,sent) or parts(c)]
+    return bool(dated) and all((days:=_school_own_dates(c,sent)) and days<=base and parts(c)<=parts(original['text'])
+                               and roles(c) and roles(c)<=roles(original['text']) for c in dated)
 
 
 def _school_native_pointer_unproven(evidence,refs):
