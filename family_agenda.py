@@ -1750,9 +1750,13 @@ def _one_affair_versions(c,items,store):
             why.append('新要求的归纳与通知原文对不上')
         # After the current requirement's own basis: the latest of its own adopted originals (a 17:00 correction), not only its
         # first publication (15:40); a time no original proves leaves the notice for review.
-        basis=max([sent_at(str((_message(c,p['ref'])[0] or {}).get('time') or '')) for p in a.get('publications') or []
-                   if str(p.get('ref','')).startswith('message:')]+[str(a.get('published_at') or '')])
-        if not (m.get('published_at') and basis and m['published_at']>basis):why.append('不是原发布者之后的通知')
+        # Every adopted original's own sending time must be proved first: one known time beside a missing, invalid or absent
+        # one proves no notice later, and none is filled from the first publication, another message or today.
+        times=[sent_at(str((_message(c,p['ref'])[0] or {}).get('time') or '')) for p in a.get('publications') or []
+               if str(p.get('ref','')).startswith('message:')]
+        basis=max(times+[str(a.get('published_at') or '')])
+        if not all(times):why.append('原要求有原消息的发送时间未能核实，不能确认这条通知更晚')
+        elif not (m.get('published_at') and basis and m['published_at']>basis):why.append('不是原发布者之后的通知')
         if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
         # The latest is a whole requirement: every unchanged original unit kept, or only a proven count change put in.
         old_lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()];lines=list(rel['lines']);composed=False
