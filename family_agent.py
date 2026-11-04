@@ -7098,11 +7098,13 @@ def _school_role_day_pairs(text, sent):
     day its own clause states: 今天完成 gives (完成, today) and never lends that day to 明早交给我's handback."""
     marks={'今晚':'晚','明早':'早','明晚':'晚','早上':'早','早晨':'早','上午':'早','中午':'午','下午':'下午','晚上':'晚'}
     pairs=set()
-    for clause in re.split(r'[，,。；;！!？?\n：:]|然后|之后|以后|后',text):
+    # A colon between digits is a clock (8:00), never a clause break; an explicit HH:MM belongs to the clause's own time.
+    for clause in re.split(r'[，,。；;！!？?\n]|(?<!\d)[：:]|[：:](?!\d)|然后|之后|以后|后',text):
         days=_school_own_dates(clause,sent)
         if not days:continue
         if len(days)>1:return None
-        part=''.join(sorted({marks[w] for w in re.findall('|'.join(marks),clause)}))
+        clock=sorted('%d:%s'%(int(h),m) for h,m in re.findall(r'(\d{1,2})\s*[：:]\s*(\d{2})',clause))
+        part=''.join(sorted({marks[w] for w in re.findall('|'.join(marks),clause)}))+('@'+','.join(clock) if clock else '')
         for role in (set(re.findall(r'完成|做完|交|带|检查|签',clause)) or {''}):pairs.add((role,next(iter(days)),part))
     return pairs
 
@@ -7114,7 +7116,9 @@ def _school_same_role_day(text, later, original):
     not date, or a clause naming two days keeps it unproven. Undated clauses are its own steps, judged elsewhere."""
     from family_agenda import sent_day
     own=_school_role_day_pairs(text,sent_day(later.get('time','')));base=_school_role_day_pairs(original['text'],sent_day(original.get('time','')))
-    return bool(own) and base is not None and all(any(r==o_r and d==o_d and (not o_p or p==o_p) for o_r,o_d,o_p in base) for r,d,p in own)
+    # A daypart within a bare day may narrow it (明早 within 明天); an explicit clock must be the original's own clock.
+    fits=lambda p,o_p:p==o_p or not o_p or ('@' not in p and '@' not in o_p and not o_p)
+    return bool(own) and base is not None and all(any(r==o_r and d==o_d and fits(p,o_p) for o_r,o_d,o_p in base) for r,d,p in own)
 
 
 def _school_native_pointer_unproven(evidence,refs):

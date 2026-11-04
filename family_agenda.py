@@ -757,7 +757,7 @@ def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
     return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=(),reminders=()):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=(),reminders=(),cleared=False):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -845,7 +845,11 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
         if ranged and ranged[1]==due_on:due_kind=date_meaning(ranged[2],due_on,home,subject,goal)
     heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
     # A family plan (scheduled_on, box, next step) changes only the family's own day: the teacher's completion stays.
-    family_edited=bool(focus.get('goal') or focus.get('due_on'))
+    # The parent editor carries back the item's own school values (its action as goal, its saved due); a value equal to
+    # them is no edit. A different goal or due, or one a parent explicitly cleared (cleared), is the parent's choice.
+    school_goal={str(v).strip() for v in (action,goal) if str(v or '').strip()}
+    family_edited=bool(cleared or str(focus.get('goal') or '').strip() and str(focus.get('goal')).strip() not in school_goal
+                       or focus.get('due_on') and focus.get('due_on')!=date(due))
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
                  if len(own)==1 and (not family_edited or school_focus) else '')
     if complete_on and family_edited:
@@ -868,6 +872,14 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
                 # Its role is its own predicate's: an evening check (今晚老师检查《手工草图》) stays a check, never 先提交.
                 submit=dict(submit_on=earlier,submit_words=handed[earlier],**({'submit_role':'check'} if family_agent._school_earlier_role(handed[earlier])=='check' else {}))
             else:complete_on=earlier
+    if not submit and due_on and len(own)==1 and date_quote:
+        # The item's own words naming a later explicit check of the same work (明早我抽听, 明天早读检查) give that check its own
+        # day beside the due; never another clause, object, a negated or cancelled check, or a guess from a bare 明早.
+        for clause in re.split(r'[，,。；;！!？?\n]',date_quote):
+            if not re.search(r'检查|抽查|抽听|抽背',clause) or family_agent._school_step_negated(clause) or re.search(r'取消|不再|改为|改到|推迟|延期|顺延',clause):continue
+            days=family_agent._school_own_dates(clause,sent_day(own[0].get('time','')))
+            if len(days)==1 and next(iter(days))>due_on:
+                submit=dict(submit_on=next(iter(days)),submit_words=clause.strip(),submit_role='check');break
     return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
                 category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',
                 **({'complete_words':words} if words else {}),**submit)
@@ -886,6 +898,18 @@ def _stored_date_header(plan,quote):
     """The list heading saved with the same native action whose own words are quote; any other source gives none."""
     native=plan.get('school_native_action') or {}
     return native.get('header','') if isinstance(native,dict) and native.get('quote')==quote and isinstance(native.get('header'),str) else ''
+
+
+def _focus_cleared(c,task_id):
+    """Whether a saved focus version explicitly emptied a goal or due an earlier version held (a parent's clear), never a
+    value simply left unsent (the partial plan request keeps the earlier value)."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone():return False
+    previous={}
+    for row in c.execute('SELECT current FROM task_focus_history WHERE task_id=? ORDER BY rowid',(task_id,)):
+        current=json.loads(row['current'])
+        if any(previous.get(k) and not current.get(k) for k in ('goal','due_on')):return True
+        previous=current
+    return False
 
 
 def _school_focus(c,task,proposal,plan):
@@ -1081,7 +1105,7 @@ def enrich(app,c,tasks):
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
             saved_subject=captured[3] or ''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders)
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders,cleared=_focus_cleared(c,task['id']))
         # The latest confirmed updates on the task's current day decide its role: a later one moving no role on that same day
         # (只做第2题) keeps the earlier proven 交回; an update to another day ends the search (a parent's day reads as before).
         for event in reversed(confirmed):
@@ -1855,7 +1879,7 @@ def day_facts(agenda, day, today, school):
     submit = exact_day(a.get('submit_on'))
     if submit and submit != exact_day(a.get('due_on')):  # an earlier handback or check of the same thing, in its own words and role
         check = a.get('submit_role') == 'check'
-        facts.append(dict(role='check' if check else 'submit', label='先检查' if check else '先提交', value=submit, known=True,
+        facts.append(dict(role='check' if check else 'submit', label=('检查' if due and submit > due else '先检查') if check else '先提交', value=submit, known=True,
                           today=submit == today, words=str(a.get('submit_words') or '')))
     due = exact_day(a.get('due_on'))
     if due:
