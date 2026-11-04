@@ -2810,7 +2810,12 @@ def _school_append_brief(brief, evidence, targets):
     # A date expression that the deadline parser cannot resolve is still a
     # possible timing change. Shared routing/refining/save guards cover both
     # an empty model date and one copied from the target.
-    if any(_SCHOOL_DATE_MENTION.search(value) for value in (text,brief['goal'],brief.get('submission',''))):
+    # A date the supplement or its summary states must repeat one (role, day) pair of the target's own original on its
+    # sending day (明早带来 within 明天带来); any other day, role or time is a possible change and stays for review.
+    original=dict(text=selected.get('facts',''),time=(selected.get('sent') or [{}])[0].get('time',''))
+    dated=[v for v in [e['text'] for e in evidence]+[brief['goal'],brief.get('submission','')] if v and _SCHOOL_DATE_MENTION.search(v)]
+    if dated and not (len({str(x.get('time',''))[:10] for x in selected.get('sent') or []})==1
+                      and all(_school_same_role_day(v,evidence[0],original) for v in dated)):
         uncertain('补充含日期或期限表述，是否改变原截止待核对；原要求、安排和反馈保留。');return
     shared=selected.get('shared_standard')
     if shared and [e.get('ref') for e in evidence]==[shared['ref']]:
@@ -2827,7 +2832,6 @@ def _school_append_brief(brief, evidence, targets):
     # if exactly one saved task by this source/publisher has that activity.
     reading=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})朗读',text))
     textbook=bool(re.search(r'(?:只|仅)?补(?:充)?(?:[^。：:\n]{0,30})教材(?:作业)?',text))
-    if reading==textbook: uncertain();return
     specific=_school_named_objects(text)
     def matches(task):
         content=(task['title']+' '+task['goal']).lower()
@@ -2836,7 +2840,10 @@ def _school_append_brief(brief, evidence, targets):
         content=re.sub(r'不(?:替代|代替|取代)[^。；;，,\n]{0,12}?教材(?:作业)?','',content)
         activity=bool(re.search(r'朗读|跟读|读[一二两三四五六七八九十0-9]+(?:遍|次)',content)) if reading else '教材' in content
         return activity and specific.issubset(_school_named_objects(content))
-    peers=[t for t in targets if (t.get('source_id'),t.get('publisher')) in publishers and matches(t)]
+    # No activity word: the model's explicit target stands only as the one saved task of this source/publisher naming every
+    # object the supplement names (英语《每日练习》), never by subject, title or date alone.
+    named=lambda task:bool(specific) and specific.issubset(_school_named_objects((task['title']+' '+task['goal']).lower()))
+    peers=[t for t in targets if (t.get('source_id'),t.get('publisher')) in publishers and (named(t) if reading==textbook else matches(t))]
     if len(peers)!=1 or peers[0]['id']!=selected['id']:
         uncertain();return
     proposed=_school_named_objects(brief['title']+' '+brief['goal'])
@@ -3150,60 +3157,11 @@ def _school_same_own(text, others, own):
 _SCHOOL_CHANGED_REASON='提醒原文含更正、取消、新一轮或另外的要求，不能只当作原事项的重复提醒；原事项和提醒原文都保留。'
 
 
-# Whole learning operations a reminder may excuse as never asked: specific ones only, never 做/写/读/完成 or a paraphrase (动笔).
-_SCHOOL_EXCUSABLE_OPERATION=r'(?:背诵|抄写|默写|听写|跟读|订正|预习|复习)'
-
-
-def _school_excuse_unrequired(operation, plain, said=''):
-    """Whether an excused operation is positively one the affair never asks. Absence proves nothing (把《山溪》誊到本子上 is
-    copying though it shares no character with 抄写): the affair's own words and the reminder beside the excuse must both
-    name one same recognized learning operation (朗读…，不用背诵), and the excused one must be another whole specific
-    operation sharing none of its characters. Anything less (不用抄写。 alone, 不用动笔) stays for the change check."""
-    if not re.fullmatch(_SCHOOL_EXCUSABLE_OPERATION,operation) or any(c in plain for c in operation):return False
-    # Every obligation of the affair must be accounted for first: one shared operation proves no other one absent
-    # (先朗读《山溪》，再把这一段誊到本子上 still asks copying beside the shared 朗读).
-    own=_school_obligations_accounted(plain)
-    if not own or operation in own:return False
-    return bool(own&set(re.findall(_SCHOOL_OUTCOME_LEARN,said)))
-
-
-def _school_obligations_accounted(plain):
-    """The recognized operations of every obligation the affair's own words state, or None when any is unaccounted.
-
-    Each requirement part (_SCHOOL_STEP_PART), cut again where a following step begins (再、然后、并…, as
-    _school_role_days reads a continued step), is one obligation. It is accounted for only as negated (不用录音: none),
-    another person's own act (明早老师抽听, or the author's own 明早我抽听), or a step naming a specific recognized
-    operation (朗读, 读; generic 完成/做/练习 name none). Any other step (把这一段誊到本子上) leaves the affair's obligations
-    unknown, never absent: None."""
-    ops=set()
-    for part in re.findall(_SCHOOL_STEP_PART,plain):
-        for step in re.split(r'然后|再|接着|随后|之后|最后|并且|并|以后|后',re.sub(r'《[^》]*》','《》',part)):
-            step=re.sub(r'^[^：:]{1,6}[：:]','',step).strip()
-            if not step or _school_step_negated(step):continue
-            found=set(re.findall(_SCHOOL_OUTCOME_LEARN,step))-{'完成','做','练习'}
-            if found:ops|=found;continue
-            if _school_doer(step) in ('teacher','parent') or re.match(r'[^我，,]{0,4}我(?!们)',step):continue
-            return None
-    return ops
-
-
-def _school_unrequired_excuses_dropped(text, facts):
-    """The reminder's words without each whole clause excusing a step the affair never states (不用背诵 beside a reading
-    only): such an excuse takes away nothing the affair asks and adds nothing to do. An excuse any character of which the
-    affair states (不用读给家长听, 不用读了) stays and keeps every guard."""
-    plain=re.sub(r'[“”「」『』"]','',facts)
-    def kept(m):
-        found=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',m[1])
-        return '' if found and _school_excuse_unrequired(found[1],plain,text) else m[0]
-    return re.sub(r'([^，,。；;！!？?\n]*)([，,。；;！!？?\n]|$)',kept,text)
-
-
 def _school_literal_excuses_dropped(text, facts):
     """The reminder's words without each whole excuse clause that literally conflicts with nothing the affair writes. Whether
     such an excuse withdraws an original obligation is the model's same/update judgment, never code's; a same relation only
     binds the reminder to the original task and keeps every original requirement, so no obligation is dropped. An excuse
-    sharing any character with the affair (不用读了, 不用读给家长听) is a literal conflict and stays for the change check.
-    The string-only helpers _school_unrequired_excuses_dropped/_school_excuse_unrequired are no longer this path's authority."""
+    sharing any character with the affair (不用读了, 不用读给家长听) is a literal conflict and stays for the change check."""
     plain=re.sub(r'[“”「」『』"]','',facts)
     def kept(m):
         found=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',m[1])
@@ -7129,17 +7087,29 @@ def _school_native_waive_kept(action,waived,goal):
                     and 2*sum(c in kept for c in u['words'])>=len(u['words']) for u in rest))
 
 
+def _school_role_day_pairs(text, sent):
+    """(role, day, daypart) of each dated clause of one message read on its own sending day, or None when a clause names
+    two days. A clause is cut at punctuation and where a following step begins (完成后…明早带来), so a role takes only the
+    day its own clause states: 今天完成 gives (完成, today) and never lends that day to 明早交给我's handback."""
+    marks={'今晚':'晚','明早':'早','明晚':'晚','早上':'早','早晨':'早','上午':'早','中午':'午','下午':'下午','晚上':'晚'}
+    pairs=set()
+    for clause in re.split(r'[，,。；;！!？?\n：:]|然后|之后|以后|后',text):
+        days=_school_own_dates(clause,sent)
+        if not days:continue
+        if len(days)>1:return None
+        part=''.join(sorted({marks[w] for w in re.findall('|'.join(marks),clause)}))
+        for role in (set(re.findall(r'完成|做完|交|带|检查|签',clause)) or {''}):pairs.add((role,next(iter(days)),part))
+    return pairs
+
+
 def _school_same_role_day(text, later, original):
-    """Whether every dated clause of a follow-up's own words repeats its one original: the same day words (明早, never 明晚
-    after 明早), a day the original names (each read on its own sending day) and a role word the original states (明早交给我
-    after 明早交给我). Its undated clauses are its own supplement steps, judged by _school_native_step_kind, not a day claim."""
+    """Whether every dated clause of a follow-up repeats one (role, day) pair of its one original, each read on its own
+    sending day, with the original's required daypart (明早 after 明早; 明早 within a bare 明天): a repeat, not a day of
+    its own. Another day for that role (今天交给我 after 今天完成，明早交给我), another time (明晚), a role the original does
+    not date, or a clause naming two days keeps it unproven. Undated clauses are its own steps, judged elsewhere."""
     from family_agenda import sent_day
-    base=_school_own_dates(original['text'],sent_day(original.get('time','')));sent=sent_day(later.get('time',''))
-    parts=lambda value:set(re.findall(r'[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上',value))
-    roles=lambda value:set(re.findall(r'交|带|检查|签',value))
-    dated=[c for c in re.split(r'[，,。；;！!？?\n]',text) if _school_own_dates(c,sent) or parts(c)]
-    return bool(dated) and all((days:=_school_own_dates(c,sent)) and days<=base and parts(c)<=parts(original['text'])
-                               and roles(c) and roles(c)<=roles(original['text']) for c in dated)
+    own=_school_role_day_pairs(text,sent_day(later.get('time','')));base=_school_role_day_pairs(original['text'],sent_day(original.get('time','')))
+    return bool(own) and base is not None and all(any(r==o_r and d==o_d and (not o_p or p==o_p) for o_r,o_d,o_p in base) for r,d,p in own)
 
 
 def _school_native_pointer_unproven(evidence,refs):
