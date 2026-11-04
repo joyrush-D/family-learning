@@ -4096,7 +4096,12 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
             if rest==s.strip() or not all(w in text for w in words) or re.search(_SCHOOL_CHANGE+r'|改期|停办|取消|'+_SCHOOL_NATIVE_UNSETTLED,_titles_read_as_objects(rest)):return False
             kept=True
         return kept
-    dated=[e for e in cited if e is not homes[0] and not unchanged(e) and (_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']))]
+    def repeated(e):
+        # The same teacher's later supplement whose every dated clause repeats one of this item's own (role, day) pairs
+        # (明早带来 within 明天带来; _school_same_role_day, shared with the pointer and append proofs) gives no day of its own.
+        return (bool(e.get('publisher')) and e.get('publisher')==homes[0].get('publisher') and str(e.get('time',''))>str(homes[0].get('time',''))
+                and _school_same_role_day(e['text'],e,homes[0]))
+    dated=[e for e in cited if e is not homes[0] and not unchanged(e) and not repeated(e) and (_school_own_dates(e['text'],sent_day(e.get('time',''))) or re.search(day,e['text']))]
     restated=[(e,restating(e)) for e in dated]
     if not all(r for _,r in restated):return None
     start=text.index(quote);end=start+len(quote)
@@ -4238,7 +4243,7 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
                 or set(re.findall(_SCHOOL_NATIVE_SUBJECTS,named))-set(re.findall(_SCHOOL_NATIVE_SUBJECTS,own))
                 or _school_role_days(body,[dict(e,text=body)],[])!=(done,next(iter(due)))):return None
     if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]
-                                                                         and all(e is not r for r,_ in restated) and not unchanged(e)]):return None
+                                                                         and all(e is not r for r,_ in restated) and not unchanged(e) and not repeated(e)]):return None
     return (done,next(iter(due)),span) if words else (done,next(iter(due)))
 
 
