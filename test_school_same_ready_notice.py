@@ -96,7 +96,8 @@ class Run3RegressionTest(unittest.TestCase):
     def test_a_paraphrased_waiver_keeps_the_change_review(self):
         said = '《溪边》仍默写两遍，不用动笔。'
         self.assertIn('不用动笔', agent._school_unrequired_excuses_dropped(said, '语文：默写《溪边》两遍。'))
-        self.assertTrue(agent._school_restated_reason(said, '语文：默写《溪边》两遍。', '默写《溪边》两遍，不用动笔。'))
+        # run6 contract: no literal conflict, so the model's same/update judgment governs; same keeps 默写两遍 (nothing exempted).
+        self.assertEqual(agent._school_restated_reason(said, '语文：默写《溪边》两遍。', '默写《溪边》两遍，不用动笔。'), '')
 
     def test_unchanged_correction_keeps_the_role_words(self):
         home = ev('m:a', RoleDaysTest.HOME, '2026-11-04T15:40:00+08:00')
@@ -113,7 +114,8 @@ class CopyingExcuseTest(unittest.TestCase):
         self.assertFalse(agent._school_excuse_unrequired('抄写', self.FACTS))
         self.assertFalse(agent._school_excuse_unrequired('抄写', self.FACTS, '不用抄写。'))
         self.assertEqual(agent._school_unrequired_excuses_dropped('不用抄写。', self.FACTS), '不用抄写。')
-        self.assertTrue(agent._school_restated_reason('不用抄写。', self.FACTS, '不用抄写。'))
+        # run6 contract: the string-only helper is no longer authority; same keeps 誊到本子上, the model judges the excuse.
+        self.assertEqual(agent._school_restated_reason('不用抄写。', self.FACTS, '不用抄写。'), '')
 
     def test_reading_restated_beside_an_unasked_recitation_stays_positive(self):
         facts = '语文：朗读《溪边》第2、3自然段\n今晚朗读《溪边》第2、3自然段，各读两遍，读给家长听；明早我抽听'
@@ -128,7 +130,7 @@ class ParallelObligationTest(unittest.TestCase):
         facts, said = '先朗读《山溪》，再把这一段誊到本子上。', '朗读《山溪》，不用抄写。'
         self.assertFalse(agent._school_excuse_unrequired('抄写', facts, said))
         self.assertEqual(agent._school_unrequired_excuses_dropped(said, facts), said)
-        self.assertTrue(agent._school_restated_reason(said, facts, said))
+        self.assertEqual(agent._school_restated_reason(said, facts, said), '')  # run6: model judges; same keeps 誊到本子上
 
     def test_a_following_step_inside_one_part_is_its_own_obligation(self):
         self.assertIsNone(agent._school_obligations_accounted('朗读《山溪》后誊到本子上。'))
@@ -141,6 +143,34 @@ class ParallelObligationTest(unittest.TestCase):
         facts = '朗读《溪边》两遍，读给家长听；不用录音，明早老师抽听。'
         self.assertEqual(agent._school_obligations_accounted(facts), {'朗读', '读'})
         self.assertTrue(agent._school_excuse_unrequired('背诵', facts, '朗读《溪边》两遍，不用背诵。'))
+
+
+class Run6ContractTest(unittest.TestCase):
+    FACTS = '语文：朗读《溪边》第2、3自然段\n今晚朗读《溪边》第2、3自然段，各读两遍，读给家长听；明早我抽听'
+
+    def test_a_literal_conflict_stays_a_change(self):
+        said = '《溪边》第2、3自然段不用读了。'
+        self.assertIn('不用读了', agent._school_literal_excuses_dropped(said, self.FACTS))
+        self.assertTrue(agent._school_restated_reason(said, self.FACTS, said))
+
+    def test_an_excuse_with_no_literal_conflict_is_the_models_judgment(self):
+        said = '朗读仍是《溪边》第2、3自然段各两遍，不用背诵，明早抽听。'
+        self.assertEqual(agent._school_literal_excuses_dropped(said, self.FACTS), '朗读仍是《溪边》第2、3自然段各两遍，明早抽听。')
+        self.assertEqual(agent._school_restated_reason(said, self.FACTS, said), '')
+
+    def test_a_repeated_day_for_the_same_role_is_a_repeat(self):
+        original = ev('m:a', '语文《识字小卡》写好后明早交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        later = ev('m:b', '识字小卡明早交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertTrue(agent._school_same_role_day(later['text'], later, original))
+
+    def test_another_day_or_role_keeps_the_follow_up_unproven(self):
+        original = ev('m:a', '语文《识字小卡》写好后明早交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        next_day = ev('m:b', '识字小卡明早交给我。', '2026-11-05T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertFalse(agent._school_same_role_day(next_day['text'], next_day, original))
+        evening = ev('m:c', '识字小卡明晚交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertFalse(agent._school_same_role_day(evening['text'], evening, original))
+        signed = ev('m:d', '识字小卡明早请家长签字。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertFalse(agent._school_same_role_day(signed['text'], signed, original))
 
 
 if __name__ == '__main__':

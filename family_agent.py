@@ -2559,7 +2559,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
             try:
                 canonical=_school_origin(store,c,task,child_id)
                 if isinstance(json.loads(canonical['plan']).get('school_native_action'),dict):natives.append((task['id'],canonical))
-                originals=[];publishers=set();originals_read=True;facts=[]
+                originals=[];publishers=set();originals_read=True;facts=[];sent=[]
                 canonical_plan=json.loads(canonical['plan']);changes=canonical_plan.get('school_changes',[])
                 source_rows=[canonical]
                 for change in changes:
@@ -2578,6 +2578,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
                         originals.append([quote['ref'],_hash(message)])
                         original_evidence.append(dict(message,ref=quote['ref']))
                         facts.append(str(message.get('text') or ''))
+                        sent.append(dict(time=str(message.get('time') or ''),source=str(source.get('name') or '')))
                         originals_read=originals_read and message['kind']=='text' and not message['unread'] and bool(message['text'].strip()) and not _needs_task_details(message['text'])
                     recorded=json.loads(source_row['plan']).get('school_task',{}).get('origin_basis',{})
                     current_basis=_school_message_basis(original_evidence)
@@ -2598,7 +2599,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
             own_append=(last.get('change')=='append' and last.get('auto_added') is True and focus['title']==last.get('applied_title') and focus['goal']==last.get('applied_goal'))
             result.append(dict(id=task['id'],title=task['title'][:200],goal=task['action'][:400],goal_truncated=len(task['action'])>400,
                 due=task['agenda']['due_on'],status=app.task_status(task,update['status'] if update else None),source_id=source,publisher=publisher,
-                facts='\n'.join(facts)[:4000],append_basis=basis,same_as=str((canonical_plan.get('school_same_task') or {}).get('task_id') or ''),
+                facts='\n'.join(facts)[:4000],sent=sent[:12],append_basis=basis,same_as=str((canonical_plan.get('school_same_task') or {}).get('task_id') or ''),
                 # A linked reminder adds only provenance (sources/publications); the same-affair basis ignores just that part.
                 same_basis=dict(basis,fingerprint=_hash([dict(canonical),originals,task['title'],task['action'],focus,update,feedback,study,
                     {k:v for k,v in task['agenda'].items() if not k.startswith('publi') and 'source' not in k and 'sender' not in k}])),append_eligible=bool(publisher) and originals_read and requirements_kept and _school_active(store,c,canonical) and not update and not feedback and not study
@@ -3101,7 +3102,9 @@ def _school_same_changes(text, facts):
         if phrase not in facts and phrase not in plain:
             # Excusing a step the affair never asks for (不用背诵 beside a reading) changes nothing; one any word of which it states keeps the guard.
             excused=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',phrase)
-            if excused and _school_excuse_unrequired(excused[1],plain,text):continue
+            # Code proves only a literal conflict (不用读了 beside 读); otherwise the model's same relation governs and same keeps
+            # every original requirement, so nothing is exempted.
+            if excused and not any(c in plain for c in excused[1]):continue
             return True
     return False
 
@@ -3195,13 +3198,26 @@ def _school_unrequired_excuses_dropped(text, facts):
     return re.sub(r'([^，,。；;！!？?\n]*)([，,。；;！!？?\n]|$)',kept,text)
 
 
+def _school_literal_excuses_dropped(text, facts):
+    """The reminder's words without each whole excuse clause that literally conflicts with nothing the affair writes. Whether
+    such an excuse withdraws an original obligation is the model's same/update judgment, never code's; a same relation only
+    binds the reminder to the original task and keeps every original requirement, so no obligation is dropped. An excuse
+    sharing any character with the affair (不用读了, 不用读给家长听) is a literal conflict and stays for the change check.
+    The string-only helpers _school_unrequired_excuses_dropped/_school_excuse_unrequired are no longer this path's authority."""
+    plain=re.sub(r'[“”「」『』"]','',facts)
+    def kept(m):
+        found=re.fullmatch(r'\s*(?:也)?(?:不用|不需要|不需|无需|无须|不必)\s*([\u4e00-\u9fff]{1,6}?)(?:了|啦|吧)?\s*',m[1])
+        return '' if found and not any(c in plain for c in found[1]) else m[0]
+    return re.sub(r'([^，,。；;！!？?\n]*)([，,。；;！!？?\n]|$)',kept,text)
+
+
 def _school_restated_reason(said, facts, summary):
     """Why a reminder's own requirement words do not restate the affair, '' when they do: a change, new round or extra
     requirement it says itself, a requirement or standard the affair does not state, a swapped doer, or a unit, title, number
     or count the affair's own words and originals do not state, in its words or in the summary shown. One contract for a saved
     task (_school_same_brief) and a still-pending item (family_agenda._one_pending_affair): a restatement reads the same before
     and after acceptance."""
-    said=_school_unrequired_excuses_dropped(said,facts)
+    said=_school_literal_excuses_dropped(said,facts)
     if _school_same_changes(said,facts):return _SCHOOL_CHANGED_REASON
     if _school_same_unstated(said,facts):return '提醒写了原事项没有的要求或完成标准，不能只当作重复提醒；原事项和提醒原文都保留。'
     if _school_units_differ(said,facts):return '提醒中由谁做哪一步与原事项不一致（主体和动作对调或改变），不能当作重复提醒；原事项和提醒原文都保留。'
@@ -3251,7 +3267,7 @@ def _school_same_brief(brief, evidence, targets, others=()):
         attached=attached or bool(entry.get('attachments'));texts.append(entry['text'])
     text=own;facts=selected['title']+'\n'+selected['goal']+'\n'+str(selected.get('facts') or '')
     # Requirement units only: the reminder's proven relation clauses (元话语) state no change, count or step of this affair.
-    said,relation=_school_relation_body(text);said=_school_unrequired_excuses_dropped(said,facts)
+    said,relation=_school_relation_body(text);said=_school_literal_excuses_dropped(said,facts)
     problem=(_SCHOOL_CHANGED_REASON if brief.get('purpose') not in ('learning','admin') else
              _school_restated_reason(said,facts,brief['title']+' '+_school_relation_body(brief['goal'])[0]))
     if problem:
@@ -7113,6 +7129,16 @@ def _school_native_waive_kept(action,waived,goal):
                     and 2*sum(c in kept for c in u['words'])>=len(u['words']) for u in rest))
 
 
+def _school_same_role_day(text, later, original):
+    """Whether every day a follow-up's own words name is a day its one original names, each read on its own sending day, for
+    a role word the original states too (明早交 again after 明早交): a repeat, not a day of its own. Another day, a role the
+    original does not state, or a day either cannot read keeps the follow-up unproven."""
+    from family_agenda import sent_day
+    own=_school_own_dates(text,sent_day(later.get('time','')));base=_school_own_dates(original['text'],sent_day(original.get('time','')))
+    roles=set(re.findall(r'交|带|检查|签',text))
+    return bool(own) and own<=base and bool(roles) and roles<=set(re.findall(r'交|带|检查|签',original['text']))
+
+
 def _school_native_pointer_unproven(evidence,refs):
     """True when one task cites a follow-up pointing back to an object together with another message, while no positive
     identity proves the one message it means.
@@ -7132,8 +7158,9 @@ def _school_native_pointer_unproven(evidence,refs):
         if len(meant)!=1 or meant[0]['ref'] not in refs:return True
         # The ledger's own reading: a change, question, condition, own day, or no step/limit of that one object is unproven.
         named=re.match(r'([^：:\n]{2,40})[：:]\s*(.+)$',rest,re.S)
-        if (re.search(_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED+r'|[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上|周|星期|礼拜|'
-                      +_SCHOOL_NATIVE_DATE,rest) or _school_native_step_kind((named[2] if named else rest).strip(),meant[0]['text']) is None):
+        dated=re.search(r'[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上|周|星期|礼拜|'+_SCHOOL_NATIVE_DATE,rest)
+        if (re.search(_SCHOOL_NATIVE_CHANGE+'|'+_SCHOOL_NATIVE_UNSETTLED,rest) or dated and not _school_same_role_day(rest,later,meant[0])
+                or _school_native_step_kind((named[2] if named else rest).strip(),meant[0]['text']) is None):
             return True
     return False
 
