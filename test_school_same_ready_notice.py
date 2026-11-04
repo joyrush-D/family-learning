@@ -178,6 +178,9 @@ class ClockRoleDayTest(unittest.TestCase):
         bare = ev('m:d', '语文《识字小卡》明早交给我。', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
         timed = ev('m:e', '识字小卡明早8:00交给我。', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
         self.assertFalse(agent._school_same_role_day(timed['text'], timed, bare))
+        bare_day = ev('m:f', '识字小卡明天交给我', '2026-11-04T16:20:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        clocked = ev('m:g', '识字小卡明天8:00交给我', '2026-11-04T18:00:00+08:00', '语文周老师', 'publisher:fiction-cn')
+        self.assertFalse(agent._school_same_role_day(clocked['text'], clocked, bare_day))
 
 
 if __name__ == '__main__':
