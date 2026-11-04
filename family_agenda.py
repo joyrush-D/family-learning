@@ -757,7 +757,7 @@ def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
     return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
 
 
-def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=(),reminders=(),cleared=False):
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=(),reminders=(),cleared=False,school_action=''):
     focus=focus or {};messages=[];publications=[];original_time=''
     store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
     for ref in refs:
@@ -847,7 +847,9 @@ def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publicat
     # A family plan (scheduled_on, box, next step) changes only the family's own day: the teacher's completion stays.
     # The parent editor carries back the item's own school values (its action as goal, its saved due); a value equal to
     # them is no edit. A different goal or due, or one a parent explicitly cleared (cleared), is the parent's choice.
-    school_goal={str(v).strip() for v in (action,goal) if str(v or '').strip()}
+    # Compared only with the item's own school words not yet replaced by the parent (its canonical goal, the original action
+    # before a focus goal took its place): the current action may already be the parent's own goal (app.tasks).
+    school_goal={str(v).strip() for v in (school_action,goal) if str(v or '').strip()}
     family_edited=bool(cleared or str(focus.get('goal') or '').strip() and str(focus.get('goal')).strip() not in school_goal
                        or focus.get('due_on') and focus.get('due_on')!=date(due))
     complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
@@ -905,12 +907,12 @@ def _focus_cleared(c,task_id):
     """Whether a saved focus version explicitly emptied a goal or due an earlier version held (a parent's clear), never a
     value simply left unsent (the partial plan request keeps the earlier value)."""
     if not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone():return False
-    previous={}
+    held=set();last={}
     for row in c.execute('SELECT current FROM task_focus_history WHERE task_id=? ORDER BY rowid',(task_id,)):
-        current=json.loads(row['current'])
-        if any(previous.get(k) and not current.get(k) for k in ('goal','due_on')):return True
-        previous=current
-    return False
+        if last:held|={k for k in ('goal','due_on') if last.get(k)}
+        last=json.loads(row['current'])
+    # Only the current state decides: a value emptied now after an earlier version held it; a later restore lifts it.
+    return any(k in held and not last.get(k) for k in ('goal','due_on'))
 
 
 def _school_focus(c,task,proposal,plan):
@@ -1106,7 +1108,7 @@ def enrich(app,c,tasks):
             teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
             if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
             saved_subject=captured[3] or ''
-        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders,cleared=_focus_cleared(c,task['id']))
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders,cleared=_focus_cleared(c,task['id']),school_action=task.get('original_action',task.get('action','')))
         # The latest confirmed updates on the task's current day decide its role: a later one moving no role on that same day
         # (只做第2题) keeps the earlier proven 交回; an update to another day ends the search (a parent's day reads as before).
         for event in reversed(confirmed):

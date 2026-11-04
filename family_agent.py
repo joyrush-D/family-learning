@@ -7117,7 +7117,10 @@ def _school_same_role_day(text, later, original):
     from family_agenda import sent_day
     own=_school_role_day_pairs(text,sent_day(later.get('time','')));base=_school_role_day_pairs(original['text'],sent_day(original.get('time','')))
     # A daypart within a bare day may narrow it (明早 within 明天); an explicit clock must be the original's own clock.
-    fits=lambda p,o_p:p==o_p or not o_p or ('@' not in p and '@' not in o_p and not o_p)
+    def fits(p,o_p):
+        # An explicit clock must be the original's own clock (none added, none moved); only then may a daypart narrow a bare day.
+        part,_,clock=p.partition('@');o_part,_,o_clock=o_p.partition('@')
+        return clock==o_clock and (part==o_part or not o_part)
     return bool(own) and base is not None and all(any(r==o_r and d==o_d and fits(p,o_p) for o_r,o_d,o_p in base) for r,d,p in own)
 
 
