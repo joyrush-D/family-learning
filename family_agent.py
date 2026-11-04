@@ -7136,7 +7136,10 @@ def _school_same_role_day(text, later, original):
     from family_agenda import sent_day
     own=_school_own_dates(text,sent_day(later.get('time','')));base=_school_own_dates(original['text'],sent_day(original.get('time','')))
     roles=set(re.findall(r'交|带|检查|签',text))
-    return bool(own) and own<=base and bool(roles) and roles<=set(re.findall(r'交|带|检查|签',original['text']))
+    # The same calendar day at another time (明晚 after 明早) is another time: its own day words must be the original's too.
+    parts=lambda value:set(re.findall(r'[今明昨前后][天日晚早晨]|早上|上午|中午|下午|晚上',value))
+    return (bool(own) and own<=base and parts(text)<=parts(original['text'])
+            and bool(roles) and roles<=set(re.findall(r'交|带|检查|签',original['text'])))
 
 
 def _school_native_pointer_unproven(evidence,refs):
