@@ -137,6 +137,9 @@ final class WorkspaceStore: ObservableObject {
     private var dayCache: [String: (view: DayView, at: Date)] = [:]
     /// 缓存代数：写入（保存、补录、记错题等）时自增，进行中的相邻日预取回来发现代数变了就丢弃，不把写入前的旧数据塞回缓存。
     private var dayCacheGeneration = 0
+    /// Build 322：从 App 打开的「核对作业」网页窗口是否还等着回来刷新。窗口关掉时若已记完成/存了错题，重读这一天。
+    private var checkupRefreshPending = false
+    static let checkupWindowTitle = "核对作业"
     let client: WorkspaceClient
     var openDocument: (URL, String) -> Void = { _, _ in }
     /// 次级网页：同一份原作业，带明确意图（print-original / print-reference / check / original / history），由网页原流程接着做。
@@ -246,6 +249,29 @@ final class WorkspaceStore: ObservableObject {
     func invalidateDayCache() {
         dayCacheGeneration += 1
         dayCache.removeAll()
+    }
+
+    /// Build 322：从 App 直接进网页端的「核对这份作业」深链接——做题/听写/核对/手工这些有卷可逐题核对的事项，
+    /// 未完成且未取消时，主按钮打开该事项的核对第一步（选照片 → 逐题核对 → 存错题本），不再停在拍照反馈。
+    /// 链接由 `WorkspaceClient.checkupURL` 按同一 origin 拼；打开走 App 已有的同源 WKWebView 窗口（openDocument，
+    /// 即「原件」窗口那条路径），不新开系统浏览器。拼不出链接或窗口没能打开时返回 false，调用方退回原有落点。
+    @discardableResult
+    func openCheckup(_ item: DayItem) -> Bool {
+        guard let url = client.checkupURL(child: current?.child_id ?? childID,
+                                          day: current?.day ?? day,
+                                          task: item.task_id) else { return false }
+        checkupRefreshPending = true
+        openDocument(url, WorkspaceStore.checkupWindowTitle)
+        return true
+    }
+
+    /// 核对窗口关掉、回到工作台：那件事可能刚被标记完成或存进了错题本；整组日缓存失效后重读这一天。
+    /// 选中项与打开着的草稿原样保留（load(keepSelection:) 默认不清选中）。
+    func checkupWindowClosed(_ window: NSWindow) {
+        guard checkupRefreshPending, window.title == WorkspaceStore.checkupWindowTitle else { return }
+        checkupRefreshPending = false
+        invalidateDayCache()
+        Task { await load() }
     }
 
     private func cacheKey(_ child: String, _ day: String) -> String { child + "|" + day }
@@ -814,6 +840,10 @@ struct WorkspaceView: View {
         .background(Palette.paper)
         .environment(\.colorScheme, .light)
         .sheet(item: $store.sheet) { kind in SheetHost(store: store, kind: kind) }
+        // Build 322：从 App 打开的「核对作业」网页窗口关掉后，若那边已标记完成或存了错题，回到清单时重读这一天。
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)) { note in
+            if let window = note.object as? NSWindow { store.checkupWindowClosed(window) }
+        }
     }
 
     /// 错题本 / 学习进展的原布局（孩子与日期顶栏 → 模式与周导航 → 本周七天 → 主体）。
@@ -4139,6 +4169,16 @@ struct DayDetail: View {
 
     private var workActionKind: DayItem.DayWorkActionKind { item.workActionKind }
 
+    /// Build 322：有卷可逐题核对、且还没完成/取消的事项（做题 / 听写 / 核对 / 手工），主按钮直接进网页端核对深链接。
+    /// 类型按服务端 work.kind 判定，不按标题猜；事务、阅读等没有「卷」可核对的类型保持原落点不变。
+    private var opensCheckup: Bool {
+        guard !item.closed, !dayIsCancelled(item), !item.task_id.isEmpty else { return false }
+        switch item.work?.kind ?? "" {
+        case "practice", "dictation", "check", "craft": return true
+        default: return false
+        }
+    }
+
     private func completeButton(primary: Bool) -> some View {
         Button { markComplete() } label: {
             Text(completing ? "正在标记…" : (item.workActionLabel ?? "标记完成")).font(.system(size: 12))
@@ -4158,13 +4198,20 @@ struct DayDetail: View {
         .probe("feedback-new")
     }
 
+    /// Build 322：做题/听写/核对/手工且未完成未取消时，主按钮直接打开网页端这份作业的核对深链接
+    /// （work-action-<id> 与旧的 check-web 锚点都保留）；其他类型仍走原有拍照反馈落点，行为不变。
     private func photoButton(primary: Bool, title: String) -> some View {
-        Button { store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "check") } label: {
+        Button {
+            if opensCheckup, store.openCheckup(item) { return }
+            store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "check")
+        } label: {
             Text(title).font(.system(size: 12))
         }
         .buttonStyle(GroveButtonStyle(kind: primary ? .primary : .secondary))
         .disabled(item.task_id.isEmpty)
-        .help("在网页版同一份作业里交作答照片检查")
+        .help(opensCheckup
+              ? "在 App 里打开这份作业的核对：选照片 → 逐题核对 → 存错题本"
+              : "在网页版同一份作业里交作答照片检查")
         .probe("check-web")
     }
 

@@ -184,9 +184,10 @@ async function groveDeepRun(){
   let row=view?groveRows(view).find(r=>String(r.task_id||'')===groveDeep.task||String(r.id||'')===groveDeep.task):null,scope='open';
   if(!row&&view){const extra=[...(view.upcoming||[]).map(x=>x.item||x),...((view.undated||[]).flatMap(g=>g.items||[]))];row=extra.find(r=>String(r.task_id||'')===groveDeep.task||String(r.id||'')===groveDeep.task)||null;if(row)scope='upcoming'}
   if(!row){groveDeepBusy=false;return groveDeepMiss()}
-  groveScope=scope;groveSelected=row.id;groveDetailOpen=true;render();
-  if(typeof groveShowDetail==='function')groveShowDetail();
-  if(groveDeep.checkup&&typeof checkupEligible==='function'&&checkupEligible(row)&&typeof checkupOpen==='function')checkupOpen(row.id);
+  const phone=groveMode()!=='desktop',openCheckup=groveDeep.checkup&&typeof checkupEligible==='function'&&checkupEligible(row)&&typeof checkupOpen==='function';
+  groveScope=scope;groveSelected=row.id;groveDetailOpen=!(phone&&openCheckup);render();
+  if(groveDetailOpen&&typeof groveShowDetail==='function')groveShowDetail();
+  if(openCheckup)checkupOpen(row.id);
   groveDeep.done=true;groveDeepStripUrl();
  }catch(e){console.error('grove deep link',e);groveDeepBusy=false;groveDeepMiss();return}
  finally{groveDeepBusy=false}

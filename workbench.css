@@ -1357,3 +1357,6 @@ body.grove-wide[data-page="home"] aside nav.grove-rail-sets button{min-height:0!
 
 /* Build 321 深链接：找不到事项时的页顶灰字提示（不打断今天页）。 */
 .grove3 .grove-deep-notice{margin:0 auto 10px;max-width:940px;padding:8px 12px;border:1px solid var(--g-line);border-radius:10px;background:var(--g-surface2);color:var(--g-muted);font-size:12.5px}
+
+/* Build 322 深链接：核对面板去掉程序化 focus 的默认蓝框（键盘焦点仍在内部控件上） */
+.grove3 .grove-checkup:focus,.grove3 .grove-checkup:focus-visible{outline:none!important}

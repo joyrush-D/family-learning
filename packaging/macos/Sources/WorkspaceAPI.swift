@@ -262,6 +262,23 @@ final class WorkspaceClient: NSObject, URLSessionTaskDelegate {
         return c.url!
     }
 
+    /// 核对作业深链接（Build 322）：网页端从 `?child_id=<孩子>&day=<日期>&task=<作业>&checkup=1#checkup` 直接打开该事项的
+    /// 核对第一步（选照片 → 逐题核对 → 存错题本），不再落到网页版首页。只拼同一个已核实 origin；登录仍是同一 origin 的
+    /// 家长 cookie（与「网页版工具」一致，token 不写进 URL）。缺孩子/日期/作业编号时返回 nil，由调用方退回原有落点。
+    func checkupURL(child: String, day: String, task: String) -> URL? {
+        let child = child.trimmingCharacters(in: .whitespacesAndNewlines)
+        let day = day.trimmingCharacters(in: .whitespacesAndNewlines)
+        let task = task.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !child.isEmpty, !day.isEmpty, !task.isEmpty,
+              var c = URLComponents(url: origin.url, resolvingAgainstBaseURL: false) else { return nil }
+        c.queryItems = [URLQueryItem(name: "child_id", value: child),
+                        URLQueryItem(name: "day", value: day),
+                        URLQueryItem(name: "task", value: task),
+                        URLQueryItem(name: "checkup", value: "1")]
+        c.fragment = "checkup"
+        return c.url
+    }
+
     func message(_ data: Data, _ fallback: String) -> (String, String) {
         let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         return ((object?["error"] as? String) ?? fallback, (object?["code"] as? String) ?? "")
