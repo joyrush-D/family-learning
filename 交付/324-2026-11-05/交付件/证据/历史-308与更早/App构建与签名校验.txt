@@ -1,0 +1,127 @@
+=== 校验时间 2026-11-04T07:25:31Z ===
+
+### 1. codesign -dv --verbose=4
+Executable=/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app/Contents/MacOS/YiqiChengzhang
+Identifier=local.yiqichengzhang.desktop
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20400 size=12341 flags=0x2(adhoc) hashes=379+3 location=embedded
+VersionPlatform=1
+VersionMin=851968
+VersionSDK=1769984
+Hash type=sha256 size=32
+CandidateCDHash sha256=cf8c4c465da6701f4fc2b166d221db2e6ccb2e86
+CandidateCDHashFull sha256=cf8c4c465da6701f4fc2b166d221db2e6ccb2e8649b6473cba20d4b5a059b0b3
+Hash choices=sha256
+CMSDigest=cf8c4c465da6701f4fc2b166d221db2e6ccb2e8649b6473cba20d4b5a059b0b3
+CMSDigestType=2
+Executable Segment base=0
+Executable Segment limit=2048000
+Executable Segment flags=0x1
+Page size=16384
+CDHash=cf8c4c465da6701f4fc2b166d221db2e6ccb2e86
+Signature=adhoc
+Info.plist entries=13
+TeamIdentifier=not set
+Sealed Resources version=2 rules=13 files=1
+Internal requirements count=0 size=12
+Total signatures=1
+Chosen signature=1
+
+### 2. codesign --verify --deep --strict
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app: valid on disk
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app: satisfies its Designated Requirement
+verify exit=0
+
+### 3. plutil -p Contents/Info.plist
+{
+  "CFBundleDevelopmentRegion" => "zh_CN"
+  "CFBundleDisplayName" => "一起成长"
+  "CFBundleExecutable" => "YiqiChengzhang"
+  "CFBundleIconFile" => "AppIcon.icns"
+  "CFBundleIdentifier" => "local.yiqichengzhang.desktop"
+  "CFBundleInfoDictionaryVersion" => "6.0"
+  "CFBundleName" => "一起成长"
+  "CFBundlePackageType" => "APPL"
+  "CFBundleShortVersionString" => "0.2.0"
+  "CFBundleVersion" => "307"
+  "LSMinimumSystemVersion" => "13.0"
+  "NSHighResolutionCapable" => true
+  "NSMicrophoneUsageDescription" => "只在你于原入口开始录音补录时使用；拒绝后仍可用文字补录。"
+}
+
+### 4. otool -L 主可执行文件
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app/Contents/MacOS/YiqiChengzhang: Mach-O 64-bit executable arm64
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app/Contents/MacOS/YiqiChengzhang:
+	/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2775.20.133)
+	/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (compatibility version 1.0.0, current version 625.2.8)
+	/System/Library/Frameworks/SwiftUI.framework/Versions/A/SwiftUI (compatibility version 1.0.0, current version 8.1.13)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)
+	/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork (compatibility version 1.0.0, current version 3896.200.61)
+	/System/Library/Frameworks/Combine.framework/Versions/A/Combine (compatibility version 1.0.0, current version 3023.0.0)
+	/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5027.1.8)
+	/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics (compatibility version 64.0.0, current version 2050.1.6)
+	/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0, current version 5027.1.8)
+	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
+	/usr/lib/swift/libswiftCore.dylib (compatibility version 0.0.0, current version 0.0.0)
+	/usr/lib/swift/libswiftCoreAudio.dylib (compatibility version 1.0.0, current version 482.208.0, weak)
+	/usr/lib/swift/libswiftCoreFoundation.dylib (compatibility version 1.0.0, current version 120.100.0)
+	/usr/lib/swift/libswiftCoreImage.dylib (compatibility version 1.0.0, current version 3.0.0, weak)
+	/usr/lib/swift/libswiftDarwin.dylib (compatibility version 1.0.0, current version 428.40.1)
+	/usr/lib/swift/libswiftDispatch.dylib (compatibility version 1.0.0, current version 1605.40.4)
+	/usr/lib/swift/libswiftIOKit.dylib (compatibility version 1.0.0, current version 1.0.0, weak)
+	/usr/lib/swift/libswiftMetal.dylib (compatibility version 1.0.0, current version 383.1.0, weak)
+	/usr/lib/swift/libswiftOSLog.dylib (compatibility version 1.0.0, current version 10.0.0, weak)
+	/usr/lib/swift/libswiftObjectiveC.dylib (compatibility version 1.0.0, current version 973.1.0)
+	/usr/lib/swift/libswiftQuartzCore.dylib (compatibility version 1.0.0, current version 5.0.0, weak)
+	/usr/lib/swift/libswiftSpatial.dylib (compatibility version 1.0.0, current version 1.0.0, weak)
+	/usr/lib/swift/libswiftUniformTypeIdentifiers.dylib (compatibility version 1.0.0, current version 917.1.12)
+	/usr/lib/swift/libswiftXPC.dylib (compatibility version 1.0.0, current version 167.0.2, weak)
+	/usr/lib/swift/libswift_Concurrency.dylib (compatibility version 0.0.0, current version 0.0.0)
+	/usr/lib/swift/libswiftos.dylib (compatibility version 1.0.0, current version 1090.40.3)
+	/usr/lib/swift/libswiftsimd.dylib (compatibility version 1.0.0, current version 25.0.0, weak)
+	/usr/lib/swift/libswiftWebKit.dylib (compatibility version 1.0.0, current version 625.2.8)
+
+### 5. 包结构
+一起成长.app/Contents/Info.plist
+一起成长.app/Contents/MacOS/YiqiChengzhang
+一起成长.app/Contents/Resources/AppIcon.icns
+一起成长.app/Contents/_CodeSignature/CodeResources
+
+总字节数: 6980 KB
+
+=== 追加校验 2026-11-04T07:31:01Z（App 已移动到交付根目录） ===
+
+### 6. 交付根目录下复核：/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+--- codesign --verify --deep --strict --verbose=2 ---
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app: valid on disk
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app: satisfies its Designated Requirement
+verify exit=0
+--- codesign -dv（摘要） ---
+Identifier=local.yiqichengzhang.desktop
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20400 size=12341 flags=0x2(adhoc) hashes=379+3 location=embedded
+Signature=adhoc
+TeamIdentifier=not set
+--- plutil：CFBundleVersion / 标识 ---
+307
+local.yiqichengzhang.desktop
+--- 架构 ---
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang: Mach-O 64-bit executable arm64
+arm64
+--- 链接依赖是否只指向系统库 ---
+全部依赖均在 /System 或 /usr/lib（系统库）
+
+### 7. 未做可见窗口验收的静态替代证据
+--- 连接入口 UI 字符串确实编译进二进制（UTF-8 字节检索，不运行 App） ---
+二进制中 '连接本机一起成长服务' 出现次数: 2
+二进制中 '连接并打开' 出现次数: 1
+二进制中 'FAMILY_DESKTOP_SUPPORT_DIR' 出现次数: 1
+二进制中 'http://127.0.0.1:8765' 出现次数: 10
+二进制中 '一起成长' 出现次数: 11
+说明：Swift 对 ≤15 UTF-8 字节的字面量用 small-string 内联编码（desktop.json 12B / app.bundle.js 13B / service_origin 14B），按连续字节扫描会是 0；这里只列可检索到的长字面量，短字面量以 REPO 源码行号为准。
+--- 独立配置目录与配置文件名（REPO 源码行号） ---
+17:    if let dir = environment["FAMILY_DESKTOP_SUPPORT_DIR"], !dir.isEmpty { return URL(fileURLWithPath: dir, isDirectory: true) }
+33:    guard let dir = environment["FAMILY_DESKTOP_SUPPORT_DIR"], !dir.isEmpty, testOrigin != nil else { return false }
+53:    static var path: URL { supportDirectory().appendingPathComponent("desktop.json") }
+--- 本次交给 App 的独立配置（不覆盖 ~/Library/Application Support/local.yiqichengzhang.desktop） ---
+{"service_origin":"http://127.0.0.1:8771"}

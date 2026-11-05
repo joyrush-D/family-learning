@@ -1,0 +1,14 @@
+=== 校验时间 2026-11-04T07:29:09Z ===
+目的：确认本机 open -n --env 会把环境变量交给被启动的 App（启动器用它传 FAMILY_DESKTOP_SUPPORT_DIR）。
+方法：临时做一个 LSUIElement（无窗口）的一次性小 App，只把收到的环境变量写到文件；校验后删除。
+命令：open -n --env FAMILY_DESKTOP_SUPPORT_DIR="/tmp/演示 support dir" --env TESTVAR=hello <临时 App>
+--- 被启动进程实际收到的环境 ---
+FAMILY_DESKTOP_SUPPORT_DIR=/tmp/演示 support dir
+TESTVAR=hello
+--- man open 中 --env 的说明 ---
+	  [-b bundle_identifier] [-a application] [--env VAR] [--stderr PATH]
+	  [--stdin PATH] [--stdout PATH] [--arch ARCH] [--args arg1 ...]
+
+--
+     --env VAR
+	 Adds VAR to the environment of the launched application.  VAR should

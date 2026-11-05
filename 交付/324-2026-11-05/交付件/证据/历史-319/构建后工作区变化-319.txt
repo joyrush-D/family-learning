@@ -1,0 +1,15 @@
+# Build 319 构建后工作区变化
+生成时间: 2026-11-05T14:11:28Z
+构建 worktree HEAD: 5e3c57941670690a5fcae83da83ab9ad50ed0800
+worktree 状态: 0 个改动
+主仓库 HEAD: 5e3c57941670690a5fcae83da83ab9ad50ed0800
+主仓库状态:
+ M calendar.js
+ M family_agenda.py
+ M packaging/macos/Sources/Workspace.swift
+ M packaging/macos/Sources/WorkspaceAPI.swift
+ M test_daily_list_expression.py
+ M workbench.css
+
+结论：319 从 commit 5e3c579 的独立 worktree /tmp/rel-319 构建，未使用主工作区；构建期间 worktree 无改动。
+App 二进制 sha1: 7518e1cae6d27c58602555a5d27a37f93b6c324b

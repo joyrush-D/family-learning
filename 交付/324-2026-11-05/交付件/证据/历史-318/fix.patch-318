@@ -1,0 +1,2938 @@
+diff --git a/calendar.js b/calendar.js
+index ff19d9d..6bf919e 100644
+--- a/calendar.js
++++ b/calendar.js
+@@ -19,7 +19,12 @@ function calendarEventHTML(e){
+  return `<article tabindex="-1" data-query-target="calendar:${esc(e.id)}:${esc(e.day)}" class="calendar-event ${e.status==='cancelled'?'calendar-cancelled':''}"><div class="calendar-event-meta"><span>${esc(e.review?'家庭复习':calendarKinds[e.category]||'安排')}</span><span class="calendar-status calendar-${esc(e.status)}">${esc(calendarStatuses[e.status]||'状态待核对')}</span></div><h3>${esc(e.title)}</h3>${e.review?`<p class="small calendar-review" data-calendar-review="${esc(e.review.record_id)}">家长安排的复习，不是老师布置的作业；完成只记这次复习${e.review.basis_state==='basis_changed'?' · 原错题之后更正过，请核对':e.review.basis_state==='missing'?' · 原错题读不到，请核对':''}</p><button type="button" data-review-open="${esc(e.review.record_id)}" data-review-child="${esc(e.review.child_id)}">打开原错题与知识点</button>${e.review.task_id&&typeof openTaskFocus==='function'?`<button type="button" data-review-task="${esc(e.review.task_id)}">回原作业</button>`:''}`:''}<p class="calendar-time">${esc(e.day)} · ${e.start_time?esc(e.start_time)+(e.end_time?'–'+esc(e.end_time):''):'时间未填写'}</p><p class="calendar-who">${esc(calendarNames(e.child_ids))}${calendarRepeatLabel(e)?' · '+esc(calendarRepeatLabel(e)):''}</p>${e.location?`<p class="calendar-location">⌖ ${esc(e.location)}</p>`:''}${e.note?`<p class="source calendar-requirements">${esc(e.note)}</p>`:''}${e.source||e.repeat!=='none'?`<details><summary>出处与重复规则</summary>${e.source?`<p class="source">出处：${esc(e.source)}</p>`:''}${e.repeat!=='none'?`<p>起点 ${esc(e.series_day)}${e.until?' · 截至 '+esc(e.until):' · 未设截止'}</p>`:''}</details>`:''}${t?`<p class="calendar-task-status ${taskDismissed(t)?'calendar-family-decision':''}">${taskDismissed(t)?esc(t.child)+'：':'清单：'}${esc(taskStatusLabel(status(t)))}</p>`:''}${e.task_id?`<button class="calendar-card-action" data-calendar-task="${esc(e.task_id)}">核对原事项 →</button>`:''}${e.editable&&!e.occurrence?.series_id&&e.repeat==='none'&&!['cancelled','completed'].includes(e.status)?`<button data-calendar-complete="${esc(e.id)}">确认完成</button>`:''}${e.occurrence?.series_id?`<p class="small muted">${e.occurrence.day!==e.day?'从 '+esc(e.occurrence.day)+' 改期 · ':''}本次记录独立保留</p><button data-calendar-once="${esc(e.id)}" data-occurrence-day="${esc(e.day)}">处理本次</button>`:''}${e.editable&&(!e.occurrence?.series_id||e.repeat!=='none')?`<button class="calendar-card-action" data-calendar-edit="${esc(e.id)}">${e.repeat!=='none'?'编辑重复规则':'编辑安排'}</button>`:''}</article>`;
+ }
+ // A family review opens the same wrong item and topic (the existing record-topic dialog) or its original task; nothing is written.
+-if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('click',e=>{const b=e.target?.closest?.('[data-review-task]');if(b&&typeof openTaskFocus==='function')openTaskFocus(b.dataset.reviewTask);
++if(typeof document!=='undefined'&&document.addEventListener)document.addEventListener('keydown',e=>{
++ if(e.key!=='Escape')return;
++ const root=document.querySelector('.grove3');if(!root||!root.classList.contains('is-detail'))return;
++ e.preventDefault();groveCloseDetail();if(history.state?.grove)history.back();
++});
++document.addEventListener('click',e=>{const b=e.target?.closest?.('[data-review-task]');if(b&&typeof openTaskFocus==='function')openTaskFocus(b.dataset.reviewTask);
+  const o=e.target?.closest?.('[data-review-open]');if(o){recordTopicPending={id:Number(o.dataset.reviewOpen),child:o.dataset.reviewChild};revealRecordTopic()}});
+ function calendarTimetableHTML(t,options={}){return `<details ${options.open?'open':''} tabindex="-1" data-query-target="timetable:${esc(t.id)}:${esc(t.day)}" class="calendar-timetable"><summary><span>课表 · ${esc(calendarNames([t.child_id]))}</span><small>${t.sessions.length} 个节次</small></summary><p class="small">${esc(t.title)}</p><ol>${t.sessions.map(s=>`<li><span>${esc(s.slot)}</span><strong>${esc(s.title)}</strong></li>`).join('')}</ol>${t.note?`<p class="source small">${esc(t.note)}</p>`:''}${t.source?`<p class="source small">出处：${esc(t.source)}</p>`:''}${(t.uploads||[]).map(id=>`<a href="${endpoint('/upload/')}${encodeURIComponent(id)}" target="_blank" rel="noopener">查看课表原件</a>`).join(' ')}${t.import_id?`<button data-timetable-edit="${esc(t.import_id)}">更正课表</button>`:''}${t.attachment?`<a href="${endpoint('/attachment/')}${encodeURIComponent(t.attachment)}" target="_blank" rel="noopener">查看课表原件 ↗</a>`:''}<p class="small muted">按已提供节次展示，未填写的钟点和单双周仍待核对。</p></details>`}
+ function agendaDueLabel(m){return m?.due_kind==='event'?'活动日期':m?.due_kind==='handback'?'交回':m?.due_kind==='inspection'?'检查':m?.due_kind==='arranged'?'安排日':'截止'}
+@@ -263,17 +268,19 @@ function groveProgressWords(p){
+  return parts.join(' · ');
+ }
+ function groveSource(r){return [r.publisher,String(r.published_at||'').slice(11,16)].filter(Boolean).join(' ')}
+-function groveCheckHTML(r){
+- const t=r.task_id&&data.tasks.find(t=>t.id===r.task_id);
+- if(r.pending_review)return '<span class="grove-mark" role="img" aria-label="学校消息待核对，确认后才算正式事项">?</span>';
+- if(!t)return `<span class="grove-mark" aria-hidden="true">${r.closed?'✓':''}</span>`;
+- // One open same affair whose copies differ in completion (server same_affair) is never shown completed; checking it
+- // confirms only the still-open copies (shared change handler), already closed copies stay as they are.
++function groveCheckHTML(r,state){
++ // Build 318 P0-1：只有一个 18px 圆点，它同时是状态点与勾选控件（未完成空心可点、已完成实心绿+✓、过期橙描边、取消灰实心不可点）。
++ const t=r.task_id&&data.tasks.find(x=>x.id===r.task_id);
++ const circle=(glyph='')=>`<span class="grove-state" data-state="${state}" aria-hidden="true"><i>${glyph}</i></span>`;
++ const still=(word,glyph='')=>`<span class="grove-check is-static">${circle(glyph)}<span class="grove-sr">${esc(word)}</span></span>`;
++ if(state==='cancelled')return still('已取消');
++ if(r.pending_review)return still('学校消息待核对','?');
++ if(!t)return still(state==='done'?'已完成':'未完成',r.closed?'✓':'');
+  const uncertain=r.same_affair?.state==='uncertain'&&!r.closed;
+  const done=!uncertain&&status(t)==='已完成',pending=pendingTask?.id===t.id;
+- if(!uncertain&&taskClosed(t)&&!done)return '<span class="grove-mark" aria-hidden="true">−</span>';
+- if(t.agenda?.category==='homework'&&t.homework_report?.needs_review)return '<span class="grove-mark" role="img" aria-label="作业要求待核对，暂不能确认完成">?</span>';
+- return `<label class="checkhit grove-check"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`;
++ if(!uncertain&&taskClosed(t)&&!done)return still('已关闭，不能勾选','−');
++ if(t.agenda?.category==='homework'&&t.homework_report?.needs_review)return still('作业要求待核对，暂不能确认完成','?');
++ return `<label class="checkhit grove-check"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}">${circle()}<span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`;
+ }
+ // One affair's newer school notice on its one card (server version): a clear same-publisher update shows its latest
+ // requirement with one short change line; any other notice is named for review while the old requirement stays.
+@@ -409,7 +416,7 @@ function groveFollowUpsHintHTML(r){
+ }
+ function groveFollowUpsSectionHTML(r){
+  const list=groveFollowUps(r);if(!list.length)return '';
+- return `<section class="grove-card grove-followups" data-grove-followups aria-label="后续通知 ${list.length} 条"><h3>后续通知（${list.length}）</h3>`
++ return `<section class="grove-card grove-followups" data-grove-followups data-follow-ups="1" aria-label="后续通知 ${list.length} 条"><h3>后续通知（${list.length}）</h3>`
+   +`<ul class="grove-followups-list">${list.map(f=>`<li class="grove-followup" data-followup>`
+    +`<span class="grove-followup-time">${esc(groveFollowUpTime(f.time))}</span>`
+    +`<span class="grove-followup-label is-${groveFollowUpKind(f.label)}">${esc(f.label)}</span>`
+@@ -441,7 +448,7 @@ function groveCollections(view){
+ function groveSetListHTML(view,compact){
+  const n=groveCollections(view),out=[];
+  if(!compact)out.push('<h6 class="grove-set-head">今天</h6>');
+- out.push(`<button type="button" class="grove-set is-on" data-grove-set="today" aria-pressed="true"><span class="grove-set-dot is-today"></span>今天${compact?'要做':''}<i>${n.today}</i></button>`);
++ out.push(`<button type="button" class="grove-set" data-grove-set="today" aria-pressed="false"><span class="grove-set-dot is-today"></span>今天${compact?'要做':''}<i>${n.today}</i></button>`);
+  for(const [s,c] of n.subs)out.push(`<button type="button" class="grove-set" data-grove-set="subject" data-subject="${esc(s)}" aria-pressed="false"><span class="grove-set-dot subj-${esc(groveSubjectClass({subject:s}))}"></span>${esc(s)}<i>${c}</i></button>`);
+  if(!compact)out.push('<h6 class="grove-set-head">其它</h6>');
+  if(n.later)out.push(`<button type="button" class="grove-set" data-grove-set="later" aria-pressed="false"><span class="grove-set-dot is-later"></span>明后天<i>${n.later}</i></button>`);
+@@ -450,17 +457,23 @@ function groveSetListHTML(view,compact){
+  return out.join('');
+ }
+ // 桌面左栏：孩子切换 + 集合计数 + 日历块（三个 tab / 一周 7 天 / 当天课表）。测试要求 tab 在周条上方、都在同一条竖列里。
++function groveRailScheduleHTML(view){
++ const s=view?.schedule,empty=!!(s&&!(s.lessons||[]).length&&!(s.plans||[]).length&&!view?.schedule_error);
++ if(!empty)return groveScheduleHTML(view);
++ // F②：无课表时收成一行灰字，点击才展开导入入口（≤48px）。
++ return `<details class="grove-rail-empty"><summary>这天没有已存的课表或日程</summary><p class="grove-rail-empty-body"><button type="button" data-page="calendar">日历 / 导入课表</button></p></details><div hidden>${groveScheduleHTML(view)}</div>`;
++}
+ function groveRailHTML(view,day){
+  return `<div class="grove-rail-who"><span class="grove-rail-label">孩子</span><div class="today-controls">${filters()}</div></div>`
+   +`<nav class="grove-rail-sets" aria-label="清单集合">${groveSetListHTML(view)}</nav>`
+-  +`<div class="grove-rail-cal">${groveTabsHTML(view)}${groveWeekHTML(view,day)}${groveScheduleHTML(view)}</div>`;
++  +`<div class="grove-rail-cal">${groveTabsHTML(view)}${groveWeekHTML(view,day)}${groveRailScheduleHTML(view)}</div>`;
+ }
+ // 明后天/已取消：设计稿是轻量卡，不带要求正文；已取消仍可点开看原要求与取消依据。
+ function groveLaterCardHTML(r,kind){
+  const sub=String(r?.subject||'综合事务').trim()||'综合事务',cancelled=kind==='cancelled';
+  const head=`<span class="grove-card-k">${groveSubjectDot(sub)}<span class="grove-card-who">${esc(sub)}</span><span class="grove-k-flag ${cancelled?'is-cancel':'is-later'}">${cancelled?'已取消':'日期未定'}</span></span>`;
+  const body=`<span class="grove-later-title">${esc(groveTitleText(r))}</span><span class="grove-later-meta">${esc(groveCardSource(r))}</span>`;
+- return cancelled?`<article class="grove-later is-cancelled" data-grove-later="${esc(r?.id||'')}"><button type="button" class="grove-later-open" data-grove-open="${esc(r?.id||'')}" aria-controls="groveDetail">${head}${body}</button></article>`:`<article class="grove-later" data-grove-later="${esc(r?.id||'')}">${head}${body}</article>`;
++ return cancelled?`<article class="grove-later is-cancelled is-state-cancelled" data-grove-later="${esc(r?.id||'')}"><span class="grove-state" data-state="cancelled" aria-hidden="true"><i></i></span><button type="button" class="grove-later-open" data-grove-open="${esc(r?.id||'')}" aria-controls="groveDetail">${head}${body}</button></article>`:`<article class="grove-later" data-grove-later="${esc(r?.id||'')}">${head}${body}</article>`;
+ }
+ function groveUpcomingCardHTML(x){
+  const sub=String(x?.subject||'科目待定').trim()||'科目待定';
+@@ -486,14 +499,18 @@ function groveRowHTML(r){
+  const factChips=factChipsRaw.filter(x=>!seenBadge.has(x.label))
+   .map(x=>`<span class="grove-chip is-fact${x.state==='next_morning'||x.state==='overdue'?' is-coral':''}" data-fact="${esc(x.role)}">${esc(x.label)}</span>`).join('');
+  const more=pts.rest?`<span class="grove-point-more">还有 ${pts.rest} 条 · 查看详情 ›</span>`:'';
+- return `<article class="grove-row subj-${groveSubjectClass(r)}${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
++ const state=r.closed?'done':groveIsCancelled(r)?'cancelled':(r.when==='overdue'||(r.facts||[]).some(f=>f.role==='due'&&f.state==='overdue'))?'overdue':'open';
++ const stateWords={open:'未完成',done:'已完成',overdue:'已过期',cancelled:'已取消'}[state];
++ return `<article class="grove-row subj-${groveSubjectClass(r)} is-state-${state}${on?' is-selected':''}${r.closed?' is-done':''}${groveIsCancelled(r)?' is-cancelled':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
++  +`<span class="grove-sr">${stateWords}</span>`
+   +`${groveTitleText(r)!==String(r.title||'').trim()?`<span class="grove-sr" data-grove-full-title>${esc(r.title)}</span>`:''}`
+-  +groveCheckHTML(r)
++  +groveCheckHTML(r,state)
+   +`<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
+   +groveCardHeadHTML(r)
+   +`<span class="grove-title">${esc(groveTitleText(r))}</span>`
+   +(pts.points.length?`<span class="grove-points">${pts.points.map((p,i)=>`<span class="grove-point">${pts.points.length>1?['①','②'][i]+' ':''}${esc(p)}</span>`).join('')}${more}</span>`:'')
+-  +((capped.length||factChips)?`<span class="grove-badges">${capped.map(b=>b.html).join('')}${hiddenBadges?`<span class="grove-badge is-more">+${hiddenBadges}</span>`:''}${factChips?`<span class="grove-chips">${factChips}</span>`:''}</span>`:'')
++  +(capped.length?`<span class="grove-badges">${capped.map(b=>b.html).join('')}${hiddenBadges?`<span class="grove-badge is-more">+${hiddenBadges}</span>`:''}</span>`:'')
++  +(factChips?`<span class="grove-chips is-facts grove-sr">${factChips}</span>`:'')
+   +((times||r.pending_review)?`<span class="grove-chips is-times">${times}${r.pending_review?'<span class="grove-chip is-coral">待核对</span>':''}</span>`:'')
+   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:'')
+   +groveVersionLine(r.version)
+@@ -548,10 +565,18 @@ function groveDetailHTML(r){
+  const open=uncertain||!taskClosed(t),done=!uncertain&&status(t)==='已完成',homework=t.agenda?.category==='homework',reportPending=open&&homework&&t.homework_report?.needs_review;
+  const childID=data.children.find(c=>c.name===t.child)?.id;
+  const group=typeof sameAffairTasks==='function'?sameAffairTasks(t):[t],owned=group.flatMap(m=>String(m.source||'').split('\n').filter(x=>x.startsWith('message:')).map(x=>[x,m.school_origin?m.id:'']));const originals=schoolOriginalButtons(owned.map(x=>x[0]),childID,'看原消息',group.flatMap(m=>m.agenda?.publications||[]),Object.fromEntries([...owned].reverse()));const pendingOriginals=grovePendingOriginalsHTML(r,childID,owned.map(x=>x[0]));
+- const facts=(r.facts||[]).map(f=>`<div class="grove-fact${f.state==='next_morning'||f.state==='overdue'?' is-coral':''}" data-fact="${esc(f.role)}"><span>${esc(f.label)}</span><strong>${esc(f.known?(f.today?'今天 ':'')+f.value:'日期未写明，不猜')}</strong>${f.state==='next_morning'?'<em>明天</em>':f.state==='overdue'?'<em>已逾期</em>':''}</div>`).join('');
++ // Build 318 D：相对词放独立的 em（更醒目），绝对日期仍留在 strong 里（既有测试按 span/strong 读，字符串不变）。
++ const relToday=groveDay||data.today;
++ const facts=(r.facts||[]).map(f=>{
++  if(!f.known)return `<div class="grove-fact" data-fact="${esc(f.role)}"><span>${esc(f.label)}</span><strong>日期未写明，不猜</strong></div>`;
++  const diff=groveDayDiff(f.value,relToday);
++  const relWord=f.state==='next_morning'?'明天':f.state==='overdue'?(diff!==null&&diff<0?`已过期 ${-diff} 天`:'已过期'):(diff===0?'今天':diff===1?'明天':diff===2?'后天':(diff!==null&&diff>2&&diff<7?groveRelativeDay(f.value,relToday):''));
++  const strongVal=f.role==='complete'&&diff===0?'今天 '+f.value:f.value;
++  return `<div class="grove-fact${f.state==='next_morning'||f.state==='overdue'?' is-coral':''}" data-fact="${esc(f.role)}"><span>${esc(f.label)}</span><strong>${esc(strongVal)}</strong>${relWord?`<em class="grove-fact-rel">${esc(relWord)}</em>`:''}</div>`;
++ }).join('');
+  const history=[...(r.records||[]).map(x=>`<li data-grove-record="${esc(x.id)}"><span class="grove-chip">${esc(x.followup_kind||'反馈')}</span> <span class="small muted">${esc(String(x.created||'').slice(0,16).replace('T',' '))}${x.attachments?.length?` · 照片${x.attachments.length}份`:''}</span>${x.retry?retryViewHTML(x):`<p>${esc(x.note||x.title)}</p>`}</li>`),
+   ...(r.wrong||[]).map(w=>`<li data-grove-wrong="${esc(w.id)}"><span class="grove-chip${w.state==='待订正'?' is-coral':' is-leaf'}">${esc(w.state||'待订正')}</span> <span>错题：${esc(w.title)}</span></li>`)].join('');
+- const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open?`<button class="primary" data-task="${esc(t.id)}">${homework?'拍照反馈 / 写反馈':'写反馈'}</button>`:`<button data-task="${esc(t.id)}">查看反馈</button>`;
++ const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open?`<button class="primary" data-task="${esc(t.id)}" data-feedback-new="${esc(t.id)}">${homework?'拍照反馈 / 写反馈':'写反馈'}</button>`:`<button data-task="${esc(t.id)}">查看反馈</button>`;
+  const more=(open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button><button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:'')
+   +(open&&homework?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:'')+`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`
+   +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(!uncertain&&taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
+@@ -560,7 +585,7 @@ function groveDetailHTML(r){
+  const negRaw=rawLines.filter(l=>/^不/.test(l));
+  const negLines=negRaw.map(l=>groveStripTitlePrefix(l,titleText));
+  const detailLines=rawLines.filter(l=>!/^不/.test(l)).map(l=>groveStripTitlePrefix(l,titleText));
+- const standards=rawLines.length?`<ul class="grove-standards">${detailLines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
++ const standards=rawLines.length?`<ul class="grove-standards">${detailLines.map((l,i)=>`<li data-detail-line="${i}">${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
+  // 「不做什么」：原文里以「不」开头的完整否定句单独成节（数学“第4题不做”这类），不与要求混排；不进 ul.grove-standards。
+  const negHTML=negLines.length?`<section class="grove-card grove-detail-neg"><h3>不做什么</h3><ul class="grove-neg-list">${negLines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></section>`:'';
+  const plan=grovePlanLines(r);
+@@ -571,11 +596,12 @@ function groveDetailHTML(r){
+   t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''].filter(Boolean).join('');
+  // 来源消息：只列发送人/来源/发布时刻，原文点“看原消息”在既有弹窗里读，不在这里重写。
+  const pubs=(r.publications||[]).filter(p=>p&&p.ref&&p.pending!==true);
+- const sourcesSection=pubs.length?`<section class="grove-card grove-sources"><h3>来源消息</h3><ul class="grove-src-list">${pubs.map(p=>`<li><span class="grove-src-who">${esc(String(p.sender||'').trim()||'发言人未记录')}</span><span class="grove-src-meta">${esc([String(p.source_name||'').trim(),String(r.published_at||'').slice(0,16).replace('T',' ')].filter(Boolean).join(' · '))}</span><button type="button" data-grove-src-ref="${esc(p.ref)}" data-grove-src-child="${esc(childID||'')}">看原消息</button></li>`).join('')}</ul></section>`:'';
+- const itemActions=`<div class="grove-detail-bar">${primary}${open?`<button type="button" data-grove-complete="${esc(t.id)}">标记完成</button>`:''}</div>`;
+- return back
++ const sourcesSection=pubs.length?`<section class="grove-card grove-sources"><h3>来源消息</h3><ul class="grove-src-list">${pubs.map(p=>`<li><span class="grove-src-who">${esc(String(p.sender||'').trim()||'发言人未记录')}</span><span class="grove-src-meta">${esc([String(p.source_name||'').trim(),String(r.published_at||'').slice(0,16).replace('T',' ')].filter(Boolean).join(' · '))}</span><button type="button" data-grove-src-ref="${esc(p.ref)}" data-grove-src-child="${esc(childID||'')}" data-source-open="${esc(p.ref)}">看原消息</button></li>`).join('')}</ul></section>`:'';
++ const itemActions=`<div class="grove-detail-bar">${primary}${open?`<button type="button" data-grove-complete="${esc(t.id)}" data-mark-complete="${esc(t.id)}">标记完成</button>`:''}</div>`;
++ const closeBtn='<button type="button" class="grove-detail-close" data-grove-detail-close aria-label="关闭详情">✕</button>';
++ return back+closeBtn
+   +`<header class="grove-detail-hd"><p class="grove-crumb">${esc([dateLabel,r.subject].filter(Boolean).join(' · '))}</p>`
+-  +`<h2 class="grove-h grove-detail-title" aria-label="${esc(r.title)}">${(()=>{const full=String(r.title||'').trim(),pre=full.endsWith(titleText)?full.slice(0,full.length-titleText.length):'';return pre?`<span class="grove-hide">${esc(pre)}</span>`:''})()}${esc(titleText)}</h2>`
++  +`<h2 class="grove-h grove-detail-title" data-detail-title="${esc(r.id)}" aria-label="${esc(r.title)}">${(()=>{const full=String(r.title||'').trim(),pre=full.endsWith(titleText)?full.slice(0,full.length-titleText.length):'';return pre?`<span class="grove-hide">${esc(pre)}</span>`:''})()}${esc(titleText)}</h2>`
+   +((groveSource(r)||r.origin_label)?`<p class="grove-detail-source">${esc([groveSource(r)&&groveSource(r)+' 发布',r.origin_label].filter(Boolean).join(' · '))}</p>`:'')
+   +(facts||sourceRefs?`<div class="grove-detail-meta">${facts?`<div class="grove-facts grove-detail-badges">${facts}</div>`:''}${sourceRefs}</div>`:'')
+   +'</header><div class="grove-detail-body">'
+@@ -584,7 +610,7 @@ function groveDetailHTML(r){
+   +negHTML
+   +(completeBits?`<section class="grove-card grove-detail-standard"><h3>完成标准</h3>${completeBits}</section>`:'')
+   +groveFollowUpsSectionHTML(r)
+-  +(plan.length?`<section class="grove-card grove-plan-card" data-grove-plan-lines><h3>${esc(grovePlanLabel(r))}</h3><ul class="grove-plan-list">${plan.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></section>`:'')
++  +(plan.length?`<section class="grove-card grove-plan-card" data-grove-plan-lines data-family-plan="1"><h3>${esc(grovePlanLabel(r))}</h3><ul class="grove-plan-list">${plan.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></section>`:'')
+   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
+   +groveVersionHTML(r.version)
+   +sourcesSection
+@@ -597,12 +623,36 @@ function groveDetailHTML(r){
+ }
+ 
+ function groveSelect(id,user){
+- groveSelected=id;groveScope=groveScopeOf(groveView(),id);
+- if(!groveWide()){groveDetailOpen=true;if(user&&!history.state?.grove)history.pushState({grove:id},'',location.pathname+location.search)}
+- render();
+- requestAnimationFrame(()=>{const d=document.getElementById('groveDetail');if(!groveWide())window.scrollTo(0,0);d?.focus({preventScroll:true})});
++ const changed=id!==groveSelected;
++ groveSelected=id;groveScope=groveScopeOf(groveView(),id);groveDetailOpen=true;
++ if(user&&changed&&!history.state?.grove)history.pushState({grove:id},'',location.pathname+location.search);
++ groveShowDetail();
++}
++// Build 318：点卡片只打开浮层，列表 DOM/尺寸/滚动位置一律不动（用户抱怨“形变”的根因）。
++function groveShowDetail(){
++ const root=document.querySelector('.grove3');if(!root)return;
++ const d=document.getElementById('groveDetail');if(!d)return;
++ if(d.dataset.groveRendered!==String(groveSelected)){
++  const r=groveRows(groveView()).find(x=>x.id===groveSelected);
++  d.innerHTML=groveDetailHTML(r);d.dataset.groveRendered=String(groveSelected);groveLoadMaterialsFor(r);
++ }
++ root.classList.add('is-detail');root.dataset.view='detail';
++ const bd=root.querySelector('.grove-detail-backdrop');if(bd)bd.hidden=false;
++ groveSyncSelection();
++ d.focus({preventScroll:true});
++}
++function groveLoadMaterialsFor(r){if(r?.task_id)requestAnimationFrame(()=>groveLoadMaterials(r.task_id))}
++function groveCloseDetail(){
++ const root=document.querySelector('.grove3');if(!root)return;
++ groveDetailOpen=false;root.classList.remove('is-detail');root.dataset.view='list';
++ const bd=root.querySelector('.grove-detail-backdrop');if(bd)bd.hidden=true;
++ groveSyncSelection();
++}
++function groveSyncSelection(){
++ for(const row of document.querySelectorAll('.grove3 .grove-row')){const on=row.dataset.subjectItem===groveSelected;row.classList.toggle('is-selected',on);const b=row.querySelector('[data-grove-open]');if(b)b.setAttribute('aria-pressed',String(on))}
+ }
+ document.addEventListener('click',e=>{
++ const closeDetail=e.target.closest('[data-grove-detail-close]');if(closeDetail){groveCloseDetail();if(history.state?.grove)history.back();return}
+  const open=e.target.closest('[data-grove-open]');if(open){groveSelect(open.dataset.groveOpen,true);return}
+  // Switching the part only shows another list: no re-render, so the selected row's detail and any unsaved input there stay.
+  const part=e.target.closest('[data-grove-scope]');if(part){groveScope=part.dataset.groveScope;for(const b of document.querySelectorAll('[data-grove-scope]'))b.setAttribute('aria-pressed',String(b===part));for(const l of document.querySelectorAll('[data-grove-scope-list]'))l.hidden=l.dataset.groveScopeList!==groveScope;return}
+@@ -610,10 +660,10 @@ document.addEventListener('click',e=>{
+  const pick=e.target.closest('[data-grove-day],[data-grove-week]');
+  if(pick){const day=pick.dataset.groveDay||calendarAdd(groveDay||data.today,+pick.dataset.groveWeek);groveDay=day===data.today?'':day;groveSelected='';groveScope='open';groveDetailOpen=false;render();if(groveDay)groveLoadDay(groveDay);return}
+  const again=e.target.closest('[data-grove-day-retry]');if(again){groveLoadDay(groveDay,true);return}
+- if(e.target.closest('[data-grove-back]')){if(history.state?.grove)history.back();else{groveDetailOpen=false;render()}return}
++ if(e.target.closest('[data-grove-back]')){groveCloseDetail();if(history.state?.grove)history.back();return}
+  const retry=e.target.closest('[data-grove-materials-retry]');if(retry)groveLoadMaterials(retry.dataset.groveMaterialsRetry,true);
+ });
+-window.addEventListener('popstate',()=>{if(groveDetailOpen&&!history.state?.grove){groveDetailOpen=false;if(page==='home')render()}});
++window.addEventListener('popstate',()=>{if(groveDetailOpen&&!history.state?.grove)groveCloseDetail()});
+ function todayTasksHTML(){
+  const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
+  if(!groveToday())return todayTasksLegacyHTML();  // 旧后台或投影失败：保持原回退
+@@ -629,7 +679,7 @@ function todayTasksHTML(){
+  const rows=groveRows(view),part=k=>(view[k]||[]).flatMap(g=>g.items||[]);
+  // 宽屏自动选中“今天要做”的第一条；窄屏只在用户点过之后才打开详情。
+  const shown=groveScope!=='open'&&part(groveScope).length?part(groveScope):part('groups');
+- if(!rows.some(x=>x.id===groveSelected)){groveSelected=groveWide()?(shown[0]?.id||''):'';groveDetailOpen=false}
++ if(!rows.some(x=>x.id===groveSelected)){groveSelected='';groveDetailOpen=false}
+  const selected=rows.find(x=>x.id===groveSelected),c=view.counts||{};
+  setTimeout(()=>{revealTaskLink();revealRecordTopic();if(selected?.task_id)groveLoadMaterials(selected.task_id)});
+  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
+@@ -638,58 +688,69 @@ function todayTasksHTML(){
+  const originalGap=sources.some(s=>s.unread_count>0);
+  const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['passed','已过'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
+  const closedItems=(view.closed||[]).flatMap(g=>g.items||[]);
+- // 第一列：按科目分组的“今天要做”。subject 分组标题与 data-subject 保留（既有测试按此取组名）。
++ // Build 318：单列卡片流，不再分栏。已完成卡追加到自己科目组末尾（压灰+勾），组标题与 data-* 保留。
++ const closedBySubject=new Map();
++ for(const x of closedItems){const k=String(x.subject||'综合事务').trim()||'综合事务';if(!closedBySubject.has(k))closedBySubject.set(k,[]);closedBySubject.get(k).push(x)}
+  const groups=[];
+- for(const g of view.groups||[]){const items=g.items||[];if(!items.length)continue;
+-  groups.push(`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2>`
+-   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${items.map(groveRowHTML).join('')}</div></section>`);
++ for(const g of view.groups||[]){const key=String(g.subject||'').trim(),items=g.items||[],done=closedBySubject.get(key)||[];closedBySubject.delete(key);
++  if(!items.length&&!done.length)continue;
++  const all=[...items.filter(x=>!x.closed),...done];
++  groups.push(`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount({...g,items:all}))}</span></h2>`
++   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${all.map(groveRowHTML).join('')}</div></section>`);
+  }
+- const groupsHTML=(groups.join('')||'<p class="grove-empty-list">今天没有要做的事，已整理的都在这了。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
+- // 第二列：即将/待补、日期未定的、已取消的。已取消压灰且单独标出，不混进今天要做。
++ for(const [k,done] of closedBySubject){if(!done.length)continue;
++  groups.push(`<section class="grove-subject subject-group" data-subject="${esc(k)}" tabindex="-1"><h2 class="grove-tag">${esc(k)}<span>已完成 ${done.length}</span></h2><div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${done.map(groveRowHTML).join('')}</div></section>`);
++ }
++ const groupsHTML=(groups.join('')||'<p class="grove-empty-list">今天没有要做的事，已整理的都在这了。</p>')+groveMaterialLineHTML(view);
+  const undatedItems=(view.undated||[]).flatMap(g=>g.items||[]);
+- // 已取消不占“明后天”列位：只在左栏「已取消」集合里（点它才展开列表），列里只放真正 upcoming / 日期未定 的。
+  const cancelled=undatedItems.filter(groveIsCancelled),undatedOther=undatedItems.filter(x=>!groveIsCancelled(x));
+  const laterHTML=[...(view.upcoming||[]).map(groveUpcomingCardHTML),...undatedOther.map(x=>groveLaterCardHTML(x,'undated'))].join('');
+- const cancelledHTML=cancelled.length?`<section class="grove-cancelled" id="groveCancelled" data-grove-col="cancelled"${groveCancelledOpen?'':' hidden'} aria-label="已取消"><h2 class="grove-col-head">已取消<em>${cancelled.length}</em></h2><div class="grove-col-body">${cancelled.map(x=>groveLaterCardHTML(x,'cancelled')).join('')}</div></section>`:'';
+- const doneHTML=closedItems.map(groveRowHTML).join('');
++ const laterCount=(view.upcoming||[]).length+undatedOther.length;
++ const upcomingTitles=(view.upcoming||[]).map(x=>x.title||'').filter(Boolean);
++ const upcomingSum=upcomingTitles.slice(0,2).join('、')+(upcomingTitles.length>2?` 等 ${upcomingTitles.length} 件`:'');
++ const upcomingStrip=(mode!=='phone'&&laterCount)?`<div class="grove-upcoming-strip" data-grove-upcoming><span class="grove-upcoming-count">明后天 ${laterCount} 件</span>${upcomingSum?`<span class="grove-upcoming-sum">${esc(upcomingSum)}</span>`:''}<span class="grove-sr">即将/待补：${esc((view.upcoming||[]).map(x=>[x.day,x.title].filter(Boolean).join(' ')).join('；'))}</span><button type="button" class="grove-upcoming-more" data-grove-day="${esc(calendarAdd(day,1))}" aria-label="看明天">看明天 ›</button></div>`:'';
++ const laterSection=laterCount?`<section class="grove-later-list" data-grove-col="later" aria-label="明后天"><h2 class="grove-tag">明后天<span>${laterCount}</span></h2><div class="grove-rows">${laterHTML}</div></section>`:'';
++ const cancelledSection=cancelled.length?`<section class="grove-later-list is-cancelled-list" id="groveCancelled" data-grove-col="cancelled" aria-label="已取消"><h2 class="grove-tag">已取消<span>${cancelled.length}</span></h2><div class="grove-rows">${cancelled.map(x=>groveLaterCardHTML(x,'cancelled')).join('')}</div></section>`:'';
++ const listHTML=`<div class="grove-stack" data-grove-stack><div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${groveScope==='open'?'':' hidden'}>${groupsHTML}</div>${laterSection}${cancelledSection}</div>`+(mode==='phone'?groveUpcomingHTML(view):'');
++ const doneHTML='';
+  const gapHTML=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
+  const errorHTML=(r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:'')+gapHTML+schoolProcessingHTML();
+  const addBtn=data.children.filter(x=>x.name===child).map(x=>`<button class="primary grove-add" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
+- const doneN=c.closed||0,totalN=((c.today||0)+doneN)||rows.length,pct=totalN?Math.round(doneN*100/totalN):0;
++ // Build 318 A：标题数字 = 清单行数字 = 已完成分母 = 主列表实际渲染的卡片数（今天要做 + 已完成；明后天/已取消另有小节，不混算）。
++ const openCards=(view.groups||[]).reduce((n,g)=>n+((g.items||[]).filter(x=>!x.closed)).length,0);
++ const renderedCards=openCards+closedItems.length;
++ const doneN=c.closed||0,totalN=renderedCards,pct=totalN?Math.round(doneN*100/totalN):0;
+  const weekday='日一二三四五六'[new Date(day+'T12:00:00').getDay()],heroDate=groveShort(day)+' 周'+weekday;
+- const subjectLine=(view.groups||[]).map(g=>`${g.subject} ${(g.items||[]).length}`).join(' · ');
+- const summaryLine=[day===data.today?day+' 今天':day,...String(summary).split(' · ')].join(' · ');
++ const summaryLine=[day===data.today?day+' 今天':day,`共 ${renderedCards} 项`,...(laterCount?[`明后天 ${laterCount}`]:[]),...(cancelled.length?[`已取消 ${cancelled.length}`]:[]),`今天要做 ${openCards}`,...(doneN?[`已完成 ${doneN}`]:[])].join(' · ');
++ const legend=`<div class="grove-legend" aria-label="卡片状态图例"><span><i class="grove-legend-dot is-open"></i>未完成</span><span><i class="grove-legend-dot is-done"></i>已完成</span><span><i class="grove-legend-dot is-overdue"></i>过期</span><span><i class="grove-legend-dot is-cancelled"></i>取消</span></div>`;
++ const countLine=`<p class="grove-count-line" data-grove-count>今天要做 · <b>${renderedCards}</b>${doneN?` · 已完成 ${doneN}`:''}</p>`;
+  const progressHTML=`<span class="grove-bar-progress"><span class="grove-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${Math.max(totalN,1)}" aria-valuenow="${doneN}" aria-label="一天的完成进度"><i style="width:${pct}%"></i></span></span>`;
+- const barTitle=`<div class="grove-bar-title"><h1 id="groveListTitle" class="grove-bar-h">${day===data.today?'今天':'这天'} <strong>${totalN}</strong> 件事</h1><p class="grove-bar-sub">${esc(heroDate)}${subjectLine?' · '+esc(subjectLine):''}</p></div>`;
++ const barTitle=`<div class="grove-bar-title"><h1 id="groveListTitle" class="grove-bar-h">${day===data.today?'今天':'这天'} <strong>${totalN}</strong> 件事</h1><p class="grove-bar-sub">${esc(heroDate)}</p></div>`;
+  // 手机：第一行孩子+日期+已完成，第二行标题+细进度；补录/看明天都在底部固定条里，顶部不放按钮（把首卡留在首屏）。
+  const bar=mode==='phone'
+-  ?`<header class="grove-list-head grove-bar is-phone"><div class="grove-bar-kids"><div class="today-controls">${filters()}</div><span class="grove-bar-date">${esc(heroDate)}</span><span class="grove-bar-done">已完成 ${doneN}</span><span class="grove-bar-later">明天 ${(view.upcoming||[]).length}</span></div><div class="grove-bar-main">${barTitle}${progressHTML}${day===data.today?`<button type="button" class="grove-quiet grove-bar-daybtn" data-grove-day="${esc(calendarAdd(day,1))}">看明天 ›</button>`:`<button type="button" class="grove-quiet grove-bar-daybtn" data-grove-day="${esc(data.today)}">回到今天</button>`}</div><p class="grove-summary grove-sr" data-grove-summary>${esc(summaryLine)}</p></header>`
+-  :`<header class="grove-list-head grove-bar"><div class="grove-bar-main">${barTitle}<div class="grove-bar-side"><span class="grove-bar-done" title="已完成 / 一共">已完成 ${doneN} / ${totalN}</span>${progressHTML}${addBtn}${day===data.today?`<button type="button" class="grove-quiet" data-grove-day="${esc(calendarAdd(day,1))}">看明天 ›</button>`:`<button type="button" class="grove-quiet" data-grove-day="${esc(data.today)}">回到今天</button>`}</div></div>`
++  ?`<header class="grove-list-head grove-bar is-phone"><div class="grove-bar-kids"><div class="today-controls">${filters()}</div><span class="grove-bar-date">${esc(heroDate)}</span><span class="grove-bar-done">已完成 ${doneN}</span><button type="button" class="grove-bar-later" data-grove-day="${esc(calendarAdd(day,1))}" aria-label="看明天">明天 ${(view.upcoming||[]).length} ›</button></div><div class="grove-bar-main">${barTitle}${progressHTML}${day===data.today?'':`<button type="button" class="grove-quiet grove-bar-daybtn" data-grove-day="${esc(data.today)}">回到今天</button>`}</div><p class="grove-summary grove-sr" data-grove-summary>${esc(summaryLine)}</p></header>`
++  :`<header class="grove-list-head grove-bar"><div class="grove-bar-main">${barTitle}<div class="grove-bar-side"><span class="grove-bar-done" title="已完成 / 一共">已完成 ${doneN} / ${totalN}</span>${progressHTML}${addBtn}${day===data.today?`<button type="button" class="grove-quiet" data-grove-day="${esc(calendarAdd(day,1))}">看明天 ›</button>`:`<button type="button" class="grove-quiet" data-grove-day="${esc(data.today)}">回到今天</button>`}</div></div>${legend}<div class="grove-topnav" id="groveTopNav"></div>${countLine}`
+    +(mode==='desktop'?'<!--child-filters-->':`<div class="grove-bar-kids"><div class="today-controls">${filters()}</div></div>`)
+    +`<p class="grove-summary grove-sr" data-grove-summary>${esc(summaryLine)}</p></header>`;
+  // 手机/两列宽度：日历块放清单下方（点 tab 会自动滚到它）；桌面宽放左栏 rail，由 groveAfterRender 注入，不占看板高度。
+  const cal=`<div class="grove-cal">${groveTabsHTML(view)}${groveWeekHTML(view,day)}${groveScheduleHTML(view)}</div>`;
+  const chips=mode!=='desktop'?`<div class="grove-chips-row" role="group" aria-label="清单集合">${groveSetListHTML(view,true)}</div>`:'';
+- const cols=`<div class="grove-cols" data-layout="${mode}">`
+-  +`<section class="grove-col is-today" data-grove-col="today" aria-label="今天要做"><h2 class="grove-col-head">今天要做<em>${c.today||0}</em></h2><div class="grove-col-body"><div class="today-task-groups" id="task-groups" data-grove-scope-list="open">${groupsHTML}</div></div></section>`
+-  +groveColumnHTML('later','明后天',(view.upcoming||[]).length+undatedOther.length,laterHTML,'明后天没有要带的东西。')
+-  +groveColumnHTML('done','已完成',closedItems.length,doneHTML,'做完的会落到这里，今天清零。')
+-  +'</div>'+cancelledHTML;
+  const phoneBar='';
+  const tabCal=mode==='desktop'?'':`<div class="grove-cal">${groveTabsHTML(view)}</div>`;
+  const schedEmpty=!!(view.schedule&&!(view.schedule.lessons||[]).length&&!(view.schedule.plans||[]).length&&!view.schedule_error);
+- const chipsAdd=mode==='desktop'?'':`<div class="grove-chips-row" role="group" aria-label="清单范围"><button type="button" class="grove-chip is-add" data-homework-new="${esc(currentChild()?.id)}">＋补录</button>${groveSetListHTML(view,true)}${schedEmpty?`<button type="button" class="grove-chip" data-page="calendar">日历 / 导入课表</button>`:''}</div>`;
++ const chipsAdd=mode==='desktop'?'':`<div class="grove-chips-row" role="group" aria-label="清单范围"><button type="button" class="grove-chip is-add" data-homework-new="${esc(currentChild()?.id)}">＋补录</button>${groveSetListHTML(view,true)}${schedEmpty?`<button type="button" class="grove-chip" data-page="calendar">日历 / 导入课表</button>`:''}<span class="grove-chip is-count" data-grove-count>今天要做 · ${renderedCards}</span>${legend}</div>`;
+  const phoneCal=mode==='desktop'?'':`<div class="grove-cal-top">${groveTabsHTML(view)}${schedEmpty?'':`<div class="grove-cal-sched">${groveScheduleHTML(view)}</div>`}</div>${schedEmpty?`<div hidden>${groveScheduleHTML(view)}</div>`:''}`;
+  const phoneWeek=mode==='desktop'?'':`<div class="grove-cal-bottom">${groveWeekHTML(view,day)}</div>`;
+  const body=groveTab==='wrong'?`${tabCal}<div class="grove-wrongbook">${groveWrongHTML(view)}</div>`
+   :groveTab==='learning'?`${tabCal}<div class="grove-learning-list">${groveLearningHTML(view)}</div>`
+-  :`${mode==='desktop'?'':errorHTML}${mode==='desktop'?'':chipsAdd}${phoneCal}${mode==='desktop'?errorHTML:''}${cols}${mode==='desktop'?'':phoneWeek}`;
++  :`${mode==='desktop'?'':errorHTML}${mode==='desktop'?'':chipsAdd}${phoneCal}${mode==='desktop'?errorHTML:''}${upcomingStrip}${listHTML}${mode==='desktop'?'':phoneWeek}`;
+  const otherBar=groveTab==='wrong'||groveTab==='learning'
+   ?`<header class="grove-list-head grove-bar"><div class="grove-bar-main"><div class="grove-bar-title"><h1 id="groveListTitle" class="grove-bar-h">${groveTab==='wrong'?'错题本':'学习进展'}</h1><p class="grove-bar-sub">${groveTab==='wrong'?'该孩子全部错题，按科目；订正后仍保留原题与原作业。':'按科目看原错题、知识点线索与再试；线索不等于掌握。'}</p></div></div><p class="grove-summary grove-sr" data-grove-summary>${esc(day)}</p></header>`
+   :bar;
+- return `<div class="grove grove3" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}" data-tab="${esc(groveTab)}" data-layout="${mode}">`
++ return `<div class="grove grove3" data-view="${groveDetailOpen?'detail':'list'}" data-tab="${esc(groveTab)}" data-layout="${mode}">`
+   +`<section class="grove-board" aria-labelledby="groveListTitle">${otherBar}<div class="grove-board-scroll">${body}</div></section>`
+   +`<section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section>`
++  +`<div class="grove-detail-backdrop" data-grove-detail-close hidden></div>`
+   +phoneBar+'</div>';
+ }
+ 
+@@ -953,22 +1014,34 @@ window.addEventListener('beforeunload',e=>{if(occurrencePending||occurrenceDirty
+ // ———— Build 314 装配：每次 render 之后把左栏数据（桌面宽）合进既有 aside，并清理离开 home 的状态。
+ // 不改 site nav 的结构与位置：宽屏也留在原 aside 里，窄屏仍是底部固定条。
+ function groveRailHost(){return document.getElementById('groveRailData')}
++let groveSiteNav=null;
++function groveNavEl(){if(groveSiteNav&&groveSiteNav.isConnected)return groveSiteNav;groveSiteNav=document.querySelector('nav[aria-label="主导航"]');return groveSiteNav}
++function groveNavToAside(){const nav=groveNavEl(),aside=document.querySelector('aside');if(!nav||!aside||nav.parentElement===aside)return;const sf=aside.querySelector('.sidefoot');if(sf&&sf.parentElement===aside)aside.insertBefore(nav,sf);else aside.appendChild(nav)}
+ function groveAfterRender(){
+  const home=page==='home',view=home?groveView():null,mode=groveMode(),wide=home&&mode==='desktop'&&!!view;
+  document.body.classList.toggle('grove-wide',wide);
++ // 318：整页重渲染后恢复浮层状态（详情保存/刷新后浮层仍在原卡上）。
++ if(home){const root=document.querySelector('.grove3');
++  if(root){const open=!!(groveDetailOpen&&groveSelected&&groveView());root.classList.toggle('is-detail',open);root.dataset.view=open?'detail':'list';const bd=root.querySelector('.grove-detail-backdrop');if(bd)bd.hidden=!open}}
++
+  // 手机/两列：把「消息读取缺口」条挪到清单末尾，顶部让给今天要做（语义不变，仍可见可点）。
+- if(home&&mode!=='desktop'){const gapEl=document.querySelector('.grove-cols')?.parentElement?.querySelector('.today-source-gap'),colsEl=document.querySelector('.grove-cols');if(gapEl&&colsEl)colsEl.after(gapEl)}
++ if(home&&mode!=='desktop'){const gapEl=document.querySelector('.grove-board-scroll > .today-source-gap'),stackEl=document.querySelector('.grove-board-scroll > .grove-stack');if(gapEl&&stackEl)stackEl.after(gapEl)}
+  const aside=document.querySelector('aside');if(!aside)return;
+  let host=groveRailHost();
+  if(!wide){if(host)host.remove();return}
+  if(!host){host=document.createElement('div');host.id='groveRailData';host.className='grove-rail-data';aside.insertBefore(host,aside.firstChild)}
++ // P1-3：宽屏把主导航移出左栏，放到看板顶部的小导航条里（既有测试要求它在 1440 可见可点，故不隐藏）。
++ const topNav=document.getElementById('groveTopNav'),nav=groveNavEl();
++ if(topNav&&nav&&!topNav.contains(nav))topNav.appendChild(nav);
+  const day=groveDay||data.today;
+  host.innerHTML=groveRailHTML(view,day);
+ }
+ const groveRenderBase=render;
+-render=function(){const out=groveRenderBase.apply(this,arguments);try{groveAfterRender()}catch(err){console.error('grove rail',err)}return out};
++render=function(){try{groveNavToAside()}catch(err){console.error('grove nav',err)}const out=groveRenderBase.apply(this,arguments);try{groveAfterRender()}catch(err){console.error('grove rail',err)}return out};
+ // 集合胶囊/左栏计数：只做定位（滚到对应分组），不隐藏其他内容；滚动后把当前项标记出来。
+ document.addEventListener('click',e=>{
++ const groveRoot=document.querySelector('.grove3');
++ if(groveRoot?.classList.contains('is-detail')&&e.target.closest('.grove-board')&&!e.target.closest('#groveDetail')&&!e.target.closest('[data-grove-open]')&&!e.target.closest('[data-grove-detail-close]')){groveCloseDetail();if(history.state?.grove)history.back()}
+  const src=e.target.closest('[data-grove-src-ref]');if(src){if(typeof openSchoolOriginal==='function')openSchoolOriginal(src.dataset.groveSrcRef,src.dataset.groveSrcChild||'','');return}
+  const set=e.target.closest('[data-grove-set]');if(set){
+   for(const b of document.querySelectorAll('[data-grove-set]'))b.setAttribute('aria-pressed',String(b===set));
+@@ -976,10 +1049,11 @@ document.addEventListener('click',e=>{
+   groveCancelledOpen=key==='cancelled';
+   const cancelBox=document.getElementById('groveCancelled');
+   if(cancelBox)cancelBox.hidden=!groveCancelledOpen;
+-  const target=key==='today'?root?.querySelector('#task-groups')
++  let target=key==='today'?root?.querySelector('#task-groups')
+    :key==='subject'?root?.querySelector('.grove-subject[data-subject="'+CSS.escape(subject)+'"]')
+    :key==='cancelled'?cancelBox
+    :root?.querySelector('.grove-col[data-grove-col="'+CSS.escape(key==='done'?'done':'later')+'"]');
++  if(!target&&key==='later'){const panel=document.getElementById('groveLaterPanel');if(panel){panel.hidden=false;target=panel}}
+   target?.scrollIntoView({block:'start',behavior:'smooth'});return
+  }
+  // 详情底部“标记完成”走清单行里同一个 data-check（同一保存路径，未读清的作业仍不可勾）。
+diff --git a/packaging/macos/Sources/Workspace.swift b/packaging/macos/Sources/Workspace.swift
+index 9b3c6eb..4c0960e 100644
+--- a/packaging/macos/Sources/Workspace.swift
++++ b/packaging/macos/Sources/Workspace.swift
+@@ -132,6 +132,11 @@ final class WorkspaceStore: ObservableObject {
+     var sheetDirty = false
+     /// 家庭复习卡片的改期草稿与这次提交（按安排编号）：收起、换日/换孩子、列表复用都不丢；只是界面状态，不另存安排。
+     var reviewDrafts: [String: ReviewDraft] = [:]
++    /// 按 (孩子|日期) 记住最近读回的这一天：换日先把这份顶上（看板与常显详情不塌、不闪风格），随后仍由 load() 后台刷新。
++    /// 数据被写入后整组清空（invalidateDayCache）；相邻日由 load() 成功后预取，预取超过 20 秒就重取。
++    private var dayCache: [String: (view: DayView, at: Date)] = [:]
++    /// 缓存代数：写入（保存、补录、记错题等）时自增，进行中的相邻日预取回来发现代数变了就丢弃，不把写入前的旧数据塞回缓存。
++    private var dayCacheGeneration = 0
+     let client: WorkspaceClient
+     var openDocument: (URL, String) -> Void = { _, _ in }
+     /// 次级网页：同一份原作业，带明确意图（print-original / print-reference / check / original / history），由网页原流程接着做。
+@@ -224,6 +229,8 @@ final class WorkspaceStore: ObservableObject {
+                 else { notice = "原作业不在这一天的清单里；原错题和订正仍在错题本。" }
+             }
+             if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
++            dayCache[cacheKey(fresh.child_id, fresh.day)] = (fresh, Date())
++            prefetchNeighbourDays(of: fresh)
+             if let item = selected, !item.task_id.isEmpty { await loadMaterials(item) }
+         } catch {
+             guard mine == sequence else { return }
+@@ -235,6 +242,44 @@ final class WorkspaceStore: ObservableObject {
+         onLoaded()
+     }
+ 
++    /// 数据被写入（完成、反馈、口头补录、记错题/订正、照片纳入原错题）后整组失效：下一次换日重新读，不拿旧快照顶。
++    func invalidateDayCache() {
++        dayCacheGeneration += 1
++        dayCache.removeAll()
++    }
++
++    private func cacheKey(_ child: String, _ day: String) -> String { child + "|" + day }
++
++    /// 命中缓存时先用它顶上这一天：看板、常驻详情与计数立刻是这一天的样子，随后 load() 仍去后台刷新保持新鲜。
++    private func applyCachedDay() {
++        guard let hit = dayCache[cacheKey(childID, day)] else { return }
++        let cached = hit.view
++        guard cached.child_id == childID, cached.day == day else { return }
++        view = cached
++        error = ""
++        if let id = selection, !allItems.contains(where: { $0.id == id }) { selection = nil }
++        if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
++    }
++
++    /// 相邻日预取（不碰 view、失败静默）：前一天/后一天先读进内存，换日时直接顶上，不用每次等一次网络。
++    private func prefetchNeighbourDays(of fresh: DayView) {
++        guard let base = WorkspaceStore.date(fresh.day) else { return }
++        let cal = Calendar(identifier: .gregorian)
++        for delta in [-1, 1] {
++            guard let target = cal.date(byAdding: .day, value: delta, to: base) else { continue }
++            let neighbour = WorkspaceStore.text(target)
++            let key = cacheKey(fresh.child_id, neighbour)
++            if let hit = dayCache[key], Date().timeIntervalSince(hit.at) <= 20 { continue }
++            let child = fresh.child_id
++            let generation = dayCacheGeneration
++            Task { [weak self] in
++                guard let self, let loaded = try? await self.client.day(child: child, day: neighbour) else { return }
++                guard generation == self.dayCacheGeneration else { return }
++                self.dayCache[key] = (loaded, Date())
++            }
++        }
++    }
++
+     func loadMaterials(_ item: DayItem) async {
+         guard !item.task_id.isEmpty else { return }
+         let state = await client.materials(task: item.task_id)
+@@ -314,6 +359,8 @@ final class WorkspaceStore: ObservableObject {
+         sheet = nil; sheetDirty = false; notice = ""
+         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
+         if let newDay { day = newDay; selection = selection }
++        // 先顶上前一次读回的这一天，再去后台刷新：换日时看板与常驻详情不塌，也不会闪成另一种风格。
++        applyCachedDay()
+         Task { await load() }
+     }
+ 
+@@ -471,6 +518,23 @@ extension DayItem {
+         let all = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+         return (Array(all.prefix(2)), max(0, all.count - 2))
+     }
++    /// 单列卡片的摘要行：优先挑「会让人跑一趟」的要求（签字 / 交回 / 带什么 / 上传 / 回复家长…），
++    /// 其余按原文顺序补位；只挑行，不改写、不拼接。Build 318：卡面只放一条，完整要求仍在详情。
++    func cardPoints(limit: Int = 1) -> [String] {
++        let trimmed = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
++        guard !trimmed.isEmpty else { return [] }
++        let positive = trimmed.filter { !isNegativeLine($0) }
++        let pool = positive.isEmpty ? trimmed : positive
++        let keys = ["家长签字", "家长签名", "签字", "签名", "交回", "交给", "带来", "带到", "带去",
++                    "上传", "回复", "家长", "确认", "勾选", "装进", "放进", "带"]
++        var ranked: [(score: Int, index: Int)] = []
++        for (index, line) in pool.enumerated() {
++            let score = keys.firstIndex(where: { line.contains($0) }) ?? keys.count
++            ranked.append((score, index))
++        }
++        ranked.sort { $0.score == $1.score ? $0.index < $1.index : $0.score < $1.score }
++        return ranked.prefix(max(1, limit)).map { pool[$0.index] }
++    }
+     /// 行内徽章只用短词（≤6 字），最多 4 个：家长扫一眼就知道要不要签字、要不要带、要不要上传；
+     /// 完整句子留在详情页。日期类只在不是「当天到期」时出现（当天到期的截止不挂），用相对词。
+     func rowBadges(day: String) -> (shown: [String], extra: Int) {
+@@ -863,6 +927,35 @@ func factWords(_ f: DayFact) -> String {
+     return f.known ? f.label + " " + f.value : f.label + "时间未明确"
+ }
+ 
++/// 详情「截止 / 完成 / 交回」的主值：今天 / 明天 / 后天 / 本周X / 下周X；过期给「已过期 N 天」。
++/// 绝对日期由数据格放在下面一行灰色小字（Build 318 D）。解析不了返回 nil，退回 factWords。
++@MainActor
++func dayRelativeWord(_ f: DayFact, day: String) -> String? {
++    guard f.known, let value = WorkspaceStore.date(f.value) else { return nil }
++    let base = WorkspaceStore.date(day) ?? Date()
++    let cal = Calendar(identifier: .gregorian)
++    let diff = cal.dateComponents([.day], from: base, to: value).day ?? 0
++    if f.state == "overdue" || diff < 0 {
++        let late = max(0, -diff)
++        return late > 0 ? "已过期 \(late) 天" : "已过期"
++    }
++    if diff == 0 { return "今天" }
++    if diff == 1 { return "明天" }
++    if diff == 2 { return "后天" }
++    let names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
++    let weekday = names[max(0, min(6, cal.component(.weekday, from: value) - 1))]
++    if let week = cal.dateInterval(of: .weekOfYear, for: base), week.contains(value) {
++        return "本周" + weekday
++    }
++    if let week = cal.dateInterval(of: .weekOfYear, for: base),
++       let nextStart = cal.date(byAdding: .weekOfYear, value: 1, to: week.start),
++       let nextWeek = cal.dateInterval(of: .weekOfYear, for: nextStart),
++       nextWeek.contains(value) {
++        return "下周" + weekday
++    }
++    return weekday
++}
++
+ struct SubjectList: View {
+     @ObservedObject var store: WorkspaceStore
+     /// 宽窗里所选项的详情在右侧时清单变窄：行高要按新宽度重算。
+@@ -2082,14 +2175,35 @@ extension WorkspaceStore {
+         dayOpenItems.filter { $0.subject == subject }.count
+     }
+ 
++    /// 过期天数：已知日期的 facts 与当天比，取最负的那个；服务端标了 overdue 的至少算 1 天。
++    /// 卡片用它显示「已过期 N 天」，详情「截止」格也用它（Build 318 D）。
++    func dayOverdueDays(_ item: DayItem) -> Int {
++        guard !item.closed else { return 0 }
++        let base = WorkspaceStore.date(day) ?? Date()
++        var late = 0
++        for fact in item.facts where fact.known {
++            guard let value = WorkspaceStore.date(fact.value) else { continue }
++            let diff = Calendar(identifier: .gregorian)
++                .dateComponents([.day], from: base, to: value).day ?? 0
++            if diff < 0 { late = max(late, -diff) }
++        }
++        if item.facts.contains(where: { $0.state == "overdue" }) { late = max(late, 1) }
++        return late
++    }
++
++    /// 「今天要做」列当前真正渲染出来的卡片。服务端 counts.today 只数 today==true 的项，
++    /// 而清单还会渲染 today:false 的补做/过期项；标题、列头、进度分母一律以这里为准，
++    /// 保证「今天 N 件 / 已完成 M / 总数」和屏幕上的卡片数对得上（Build 318）。
++    var dayTodayCards: [DayItem] { dayOpenItems }
++
+     var dayProgress: (total: Int, done: Int) {
+-        (dayOpenItems.count + dayClosedItems.count, dayCompletedItems.count)
++        (dayTodayCards.count + dayClosedItems.count, dayCompletedItems.count)
+     }
+ 
+     /// 顶栏不再依赖旧 doneSwitch 的 showDone/showUndated 开关，自己算一行摘要。
+     /// 末尾保留「即将/待补 N」，与旧清单摘要同一句文案（原生验收按这句断言明后天的条数）。
+     var daySummaryLine: String {
+-        var text = "共 \(dayProgress.total) 项 · 今天要做 \(dayOpenItems.count) · 已完成 \(dayProgress.done)"
++        var text = "共 \(dayProgress.total) 项 · 今天要做 \(dayTodayCards.count) · 已完成 \(dayProgress.done)"
+         let later = dayUpcomingCards.count
+         if later > 0 { text += " · 即将/待补 \(later)" }
+         return text
+@@ -2118,13 +2232,16 @@ extension WorkspaceStore {
+ struct DayProgressBar: View {
+     let done: Int
+     let total: Int
++    var showsText = true
+ 
+     var body: some View {
+         HStack(spacing: 9) {
+-            Text("\(total) 件 · 已完成 \(done)")
+-                .font(.system(size: 12))
+-                .foregroundStyle(Palette.ink2)
+-                .lineLimit(1)
++            if showsText {
++                Text("\(total) 件 · 已完成 \(done)")
++                    .font(.system(size: 12))
++                    .foregroundStyle(Palette.ink2)
++                    .lineLimit(1)
++            }
+             ZStack(alignment: .leading) {
+                 Capsule().fill(Palette.line).frame(width: 104, height: 5)
+                 Capsule().fill(Palette.leaf)
+@@ -2146,120 +2263,86 @@ struct DayTag: View {
+             .foregroundStyle(ink)
+             .lineLimit(1)
+             .fixedSize()
+-            .padding(.horizontal, 6)
+-            .padding(.vertical, 4)
++            .padding(.horizontal, 7)
++            .padding(.vertical, 3)
+             .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(tone))
+             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(border, lineWidth: 1))
+     }
+ }
+ 
+-// MARK: 工作台外壳与三档布局
++// MARK: 工作台（单列卡片 + 浮层详情，Build 318）
+ 
+-struct DayWorkbench: View {
+-    @ObservedObject var store: WorkspaceStore
+-    let width: CGFloat
+-    let height: CGFloat
++/// 列表筛选：一列卡片，用左侧状态圆点和颜色区分做没做完，不再分栏、不再因为选中而重排。
++enum DayFilter: String, CaseIterable, Identifiable {
++    case all, open, overdue, done, cancelled, undated
+ 
+-    @State private var scope: DayScope = .today
+-    @State private var subject: String?
++    var id: String { rawValue }
+ 
+-    static let wideWidth: CGFloat = 1200
+-    static let midWidth: CGFloat = 900
++    var title: String {
++        switch self {
++        case .all: return "全部"
++        case .open: return "未完成"
++        case .overdue: return "已过期"
++        case .done: return "已完成"
++        case .cancelled: return "已取消"
++        case .undated: return "日期未定"
++        }
++    }
+ 
+-    var body: some View {
+-        VStack(spacing: 0) {
+-            DayTopBar(store: store, compact: width < 1180)
+-                .geoProbe("context-header", text: "width=\(Int(width))")
+-            if !store.notice.isEmpty {
+-                HStack(spacing: 8) {
+-                    Text(store.notice)
+-                        .font(.system(size: 12))
+-                        .foregroundStyle(Palette.coralInk)
+-                        .lineLimit(2)
+-                        .fixedSize(horizontal: false, vertical: true)
+-                        .probe("workspace-notice", text: store.notice)
+-                    Spacer(minLength: 8)
+-                    Button("知道了") { store.notice = "" }
+-                        .buttonStyle(GroveButtonStyle(kind: .quiet))
+-                        .probe("notice-dismiss")
+-                }
+-                .padding(.horizontal, 16)
+-                .padding(.vertical, 5)
+-                .background(Palette.coral)
+-            }
+-            DayNotices(store: store)
+-            if width >= Self.wideWidth {
+-                wideBody
+-            } else if width >= Self.midWidth {
+-                midBody
+-            } else {
+-                narrowBody
+-            }
++    var empty: String {
++        switch self {
++        case .all: return "今天没有要做的事了。"
++        case .open: return "今天没有未完成的事了。"
++        case .overdue: return "没有已过期还没做的事。"
++        case .done: return "今天还没有已完成的卡片。"
++        case .cancelled: return "没有已取消的卡片。"
++        case .undated: return "没有日期未定的卡片。"
+         }
+-        .background(Palette.paper)
+-        .geoProbe("workspace-body", text: "width=\(Int(width)) layout=day")
+-        .geoProbe("selected-context", text: [
+-            store.childID, store.day, scope.rawValue, subject ?? "", store.selection ?? "",
+-        ].joined(separator: "|"))
+     }
++}
+ 
+-    private var wideBody: some View {
+-        HStack(spacing: 0) {
+-            DayRail(store: store, scope: $scope, subject: $subject)
+-                .frame(width: 212)
+-                .geoProbe("master-pane", text: "layout=rail")
+-            Rectangle().fill(Palette.line).frame(width: 1)
+-            DayBoard(store: store, scope: scope, subject: subject, columns: 3, width: width)
+-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+-            if let item = store.selected {
+-                Rectangle().fill(Palette.line).frame(width: 1)
+-                DayDetail(store: store, item: item, page: false)
+-                    .frame(width: 424)
+-                    .geoProbe("detail-pane", text: "layout=split")
+-            }
++/// 卡片状态：未完成 / 已完成 / 已过期 / 已取消。图标 + 颜色是唯一的区分方式。
++enum DayCardState {
++    case open, done, overdue, cancelled
++}
++
++/// 18pt（图例里 11pt）圆形状态点：空心=未完成，实心绿+✓=已完成，橙色描边=已过期，灰实心=已取消。
++struct DayStateDot: View {
++    let state: DayCardState
++    var size: CGFloat = 18
++
++    private var stroke: Color {
++        switch state {
++        case .open: return Color(hex: 0xA9B3A8)
++        case .done: return Palette.leaf
++        case .overdue: return Palette.coralInk
++        case .cancelled: return Color(hex: 0xB9B3A4)
+         }
+     }
+ 
+-    private var midBody: some View {
+-        ZStack(alignment: .trailing) {
+-            VStack(spacing: 0) {
+-                DayChips(store: store, scope: $scope, subject: $subject)
+-                DayBoard(store: store, scope: scope, subject: subject, columns: 2, width: width)
+-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+-            }
+-            if let item = store.selected {
+-                HStack(spacing: 0) {
+-                    Color.black.opacity(0.10)
+-                        .contentShape(Rectangle())
+-                        .onTapGesture { store.closeDetail() }
+-                    DayDetail(store: store, item: item, page: true)
+-                        .frame(width: min(424, max(320, width - 160)))
+-                        .background(Palette.card)
+-                        .shadow(color: Color.black.opacity(0.16), radius: 18, x: -6, y: 0)
+-                        .geoProbe("detail-pane", text: "layout=drawer")
+-                }
+-            }
++    private var fill: Color {
++        switch state {
++        case .done: return Palette.leaf
++        case .cancelled: return Color(hex: 0xB9B3A4)
++        default: return Color.clear
+         }
+-        .animation(.easeOut(duration: 0.18), value: store.selection)
+     }
+ 
+-    private var narrowBody: some View {
+-        ZStack(alignment: .bottom) {
+-            VStack(spacing: 0) {
+-                DayChips(store: store, scope: $scope, subject: $subject)
+-                DayBoard(store: store, scope: scope, subject: subject, columns: 1, width: width)
+-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+-            }
+-            if let item = store.selected {
+-                DaySheet(store: store, item: item, height: max(300, height * 0.55))
+-                    .geoProbe("detail-pane", text: "layout=sheet")
++    var body: some View {
++        ZStack {
++            Circle().fill(fill)
++            Circle().strokeBorder(stroke, lineWidth: size >= 18 ? 1.6 : 1.4)
++            if state == .done {
++                Image(systemName: "checkmark")
++                    .font(.system(size: size * 0.56, weight: .bold))
++                    .foregroundStyle(Color.white)
+             }
+         }
+-        .animation(.easeOut(duration: 0.18), value: store.selection)
++        .frame(width: size, height: size)
+     }
+ }
+ 
+-// MARK: 顶栏：孩子 / 日期 / 模式 / 补录 / 网页版
++// MARK: 顶栏：孩子 / 模式 / 网页版（日期导航与补录在下面的页头里）
+ 
+ struct DayTopBar: View {
+     @ObservedObject var store: WorkspaceStore
+@@ -2267,6 +2350,18 @@ struct DayTopBar: View {
+ 
+     var body: some View {
+         HStack(spacing: compact ? 6 : 10) {
++            HStack(spacing: 6) {
++                Image(systemName: "leaf.fill")
++                    .font(.system(size: 13))
++                    .foregroundStyle(Palette.leafInk)
++                if !compact {
++                    Text("一起成长")
++                        .font(.system(size: 15, weight: .semibold))
++                        .foregroundStyle(Palette.leafInk)
++                        .lineLimit(1)
++                }
++            }
++
+             HStack(spacing: 3) {
+                 ForEach(Array((store.view?.children ?? []).enumerated()), id: \.element.id) { index, child in
+                     let on = child.id == store.childID
+@@ -2291,67 +2386,11 @@ struct DayTopBar: View {
+             .background(Capsule().fill(Palette.paper2))
+             .overlay(Capsule().strokeBorder(Palette.line, lineWidth: 1))
+ 
+-            Spacer(minLength: 4)
+-
+-            Button { store.shift(-1) } label: {
+-                Image(systemName: "chevron.left")
+-                    .font(.system(size: 12, weight: .semibold))
+-                    .frame(width: 30, height: 32)
+-                    .contentShape(Rectangle())
+-            }
+-            .buttonStyle(.plain)
+-            .foregroundStyle(Palette.ink)
+-            .accessibilityLabel("前一天")
+-            .probe("day-prev")
+-
+-            VStack(spacing: 1) {
+-                Text(store.dayTitle)
+-                    .font(.system(size: 16, weight: .semibold))
+-                    .foregroundStyle(Palette.ink)
+-                    .lineLimit(1)
+-                Text(store.daySub)
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                    .lineLimit(1)
+-            }
+-            .frame(minWidth: compact ? 108 : 140)
+-            .accessibilityElement(children: .combine)
+-            .probe("day-title", text: store.day + " " + store.daySub)
+-
+-            Button { store.shift(1) } label: {
+-                Image(systemName: "chevron.right")
+-                    .font(.system(size: 12, weight: .semibold))
+-                    .frame(width: 30, height: 32)
+-                    .contentShape(Rectangle())
+-            }
+-            .buttonStyle(.plain)
+-            .foregroundStyle(Palette.ink)
+-            .accessibilityLabel("后一天")
+-            .probe("day-next")
+-
+-            Button(compact ? "今天" : "回到今天") { store.change(day: store.view?.today ?? "") }
+-                .buttonStyle(GroveButtonStyle(kind: .quiet))
+-                .disabled(store.view == nil || store.day == store.view?.today)
+-                .help("回到今天 ⌘T")
+-                .probe("day-today")
+-
+-            Spacer(minLength: 4)
++            Spacer(minLength: 6)
+ 
+             DayModeSwitch(store: store, compact: compact)
+                 .geoProbe("mode-strip", text: "mode=" + store.mode.id)
+ 
+-            Button {
+-                store.sheetDirty = false
+-                store.sheet = .oral
+-            } label: {
+-                Label(compact ? "补录" : "补录口头作业", systemImage: "plus")
+-                    .font(.system(size: 12))
+-            }
+-            .buttonStyle(GroveButtonStyle(kind: .primary))
+-            .disabled(store.current == nil)
+-            .help("补录孩子口头转述的作业 ⌘N")
+-            .probe("oral-new")
+-
+             Button { store.openWebTools("", "") } label: {
+                 Label(compact ? "网页版" : "网页版工具", systemImage: "square.grid.2x2")
+                     .font(.system(size: 12))
+@@ -2360,10 +2399,10 @@ struct DayTopBar: View {
+             .help("在浏览器里打开网页版工具 ⌘E")
+             .probe("web-tools")
+         }
+-        .padding(.horizontal, 14)
++        .padding(.horizontal, 16)
+         .padding(.top, 8)
+-        .padding(.bottom, 9)
+-        .background(Palette.paper2)
++        .padding(.bottom, 8)
++        .background(Palette.paper)
+         .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+     }
+ }
+@@ -2410,552 +2449,333 @@ struct DayModeSwitch: View {
+     }
+ }
+ 
+-// MARK: 左栏集合（≥1200）
++// MARK: 单列看板 + 浮层详情
+ 
+-struct DayRail: View {
++struct DayWorkbench: View {
+     @ObservedObject var store: WorkspaceStore
+-    @Binding var scope: DayScope
+-    @Binding var subject: String?
++    let width: CGFloat
++    let height: CGFloat
+ 
+-    var body: some View {
+-        VStack(alignment: .leading, spacing: 0) {
+-            who
+-            railTitle("清单")
+-            row(.today, count: store.dayOpenItems.count, dot: nil) {
+-                scope = .today
+-                subject = nil
+-            }
+-            ForEach(store.daySubjects, id: \.self) { item in
+-                subjectRow(item)
+-            }
+-            railTitle("其它")
+-            row(.upcoming, count: store.dayUpcomingCards.count, dot: nil) {
+-                scope = .upcoming
+-                subject = nil
+-            }
+-            if !store.dayUndatedItems.isEmpty {
+-                row(.undated, count: store.dayUndatedItems.count, dot: nil) {
+-                    scope = .undated
+-                    subject = nil
+-                }
+-            }
+-            row(.cancelled, count: store.dayCancelledItems.count, dot: Palette.muted) {
+-                scope = .cancelled
+-                subject = nil
+-            }
+-            row(.closed, count: store.dayCompletedItems.count, dot: Palette.leaf) {
+-                scope = .closed
+-                subject = nil
+-            }
+-            Spacer(minLength: 8)
+-            Rectangle().fill(Palette.line).frame(height: 1)
+-            Text("只读清单：打开不会重新生成，也不会改任务状态。")
+-                .font(.system(size: 11))
+-                .foregroundStyle(Palette.muted)
+-                .fixedSize(horizontal: false, vertical: true)
+-                .padding(.top, 9)
+-            Text("完成、交回与反馈在右侧详情里看与记。")
+-                .font(.system(size: 11))
+-                .foregroundStyle(Palette.muted)
+-                .fixedSize(horizontal: false, vertical: true)
+-                .padding(.top, 4)
+-        }
+-        .padding(.horizontal, 12)
+-        .padding(.top, 12)
+-        .padding(.bottom, 12)
+-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+-        .background(Palette.paper2)
+-        .overlay(alignment: .trailing) { Rectangle().fill(Palette.line).frame(width: 1) }
+-        .probe("day-rail", text: "rail")
+-    }
++    @State private var filter: DayFilter = .all
+ 
+-    private var who: some View {
+-        HStack(spacing: 8) {
+-            Text(String(store.childName.prefix(1)))
+-                .font(.system(size: 11.5, weight: .semibold))
+-                .foregroundStyle(Palette.leafInk)
+-                .frame(width: 27, height: 27)
+-                .background(Circle().fill(Palette.leaf50))
+-            VStack(alignment: .leading, spacing: 1) {
+-                Text(store.childName.isEmpty ? "这个孩子" : store.childName)
+-                    .font(.system(size: 13.5, weight: .semibold))
+-                    .foregroundStyle(Palette.ink)
+-                    .lineLimit(1)
+-                Text("已完成 \(store.dayCompletedItems.count) 件")
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                    .lineLimit(1)
+-            }
+-            Spacer(minLength: 0)
+-        }
+-        .padding(.horizontal, 6)
+-        .padding(.top, 2)
+-        .padding(.bottom, 10)
+-    }
++    static let contentWidth: CGFloat = 900
++    /// 宽档用右侧浮动面板；窄档（<900）用底部 sheet。原生窗口最小 900，实际只会走浮动面板。
++    static let floatWidth: CGFloat = 430
+ 
+-    private func railTitle(_ text: String) -> some View {
+-        Text(text)
+-            .font(.system(size: 10, weight: .semibold))
+-            .kerning(1.2)
+-            .foregroundStyle(Palette.muted)
+-            .padding(.leading, 8)
+-            .padding(.top, 12)
+-            .padding(.bottom, 5)
+-    }
++    private var wideLayout: Bool { width >= 900 }
+ 
+-    private func row(_ target: DayScope, count: Int, dot: Color?, action: @escaping () -> Void) -> some View {
+-        let on = scope == target && subject == nil
+-        return Button(action: action) {
+-            HStack(spacing: 8) {
+-                Circle()
+-                    .fill(dot ?? Color.clear)
+-                    .frame(width: 7, height: 7)
+-                Text(target.title)
+-                    .font(.system(size: 13, weight: on ? .semibold : .regular))
+-                    .lineLimit(1)
+-                Spacer(minLength: 4)
+-                Text("\(count)")
+-                    .font(.system(size: 11.5))
+-                    .foregroundStyle(Palette.muted)
+-            }
+-            .foregroundStyle(on ? Palette.ink : Palette.ink2)
+-            .padding(.horizontal, 8)
+-            .padding(.vertical, 7)
+-            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Palette.card : Color.clear))
+-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
++    // 所有卡片都以「实际渲染出来的卡片」为准，不再用服务端的 counts.today（Build 318 A）。
++    private var openCards: [DayItem] { store.dayTodayCards }
++    private var doneCards: [DayItem] { store.dayCompletedItems }
++    private var cancelledCards: [DayItem] { store.dayCancelledItems }
++    /// 日期未定（when == unknown）的项不属于「今天要做」，但也不能凭空消失；
++    /// 有这类项时才多一个筛选胶囊，避免它们只在网页版可见。
++    private var undatedCards: [DayItem] { store.dayUndatedItems }
++    private var overdueCards: [DayItem] { openCards.filter { store.dayOverdueDays($0) > 0 } }
++    private var allCards: [DayItem] { openCards + doneCards }
++
++    private var cards: [DayItem] {
++        switch filter {
++        case .all: return allCards
++        case .open: return openCards
++        case .overdue: return overdueCards
++        case .done: return doneCards
++        case .cancelled: return cancelledCards
++        case .undated: return undatedCards
+         }
+-        .buttonStyle(.plain)
+-        .probe("rail-" + target.rawValue, text: target.title + " \(count)")
+     }
+ 
+-    private func subjectRow(_ item: String) -> some View {
+-        let on = scope == .today && subject == item
+-        let count = store.dayCount(item)
+-        return Button {
+-            scope = .today
+-            subject = item
+-        } label: {
+-            HStack(spacing: 8) {
+-                Circle()
+-                    .fill(Palette.subjectDot(item))
+-                    .frame(width: 7, height: 7)
+-                Text(daySubjectWords(item))
+-                    .font(.system(size: 13, weight: on ? .semibold : .regular))
+-                    .lineLimit(1)
+-                Spacer(minLength: 4)
+-                Text("\(count)")
+-                    .font(.system(size: 11.5))
+-                    .foregroundStyle(Palette.muted)
+-            }
+-            .foregroundStyle(on ? Palette.ink : Palette.ink2)
+-            .padding(.horizontal, 8)
+-            .padding(.vertical, 7)
+-            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Palette.card : Color.clear))
+-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
++    private func count(_ filter: DayFilter) -> Int {
++        switch filter {
++        case .all: return allCards.count
++        case .open: return openCards.count
++        case .overdue: return overdueCards.count
++        case .done: return doneCards.count
++        case .cancelled: return cancelledCards.count
++        case .undated: return undatedCards.count
+         }
+-        .buttonStyle(.plain)
+-        .probe("rail-subject-" + item, text: daySubjectWords(item) + " \(count)")
+     }
+-}
+-
+-// MARK: 顶部胶囊行（900–1199 / <900）
+-
+-struct DayChips: View {
+-    @ObservedObject var store: WorkspaceStore
+-    @Binding var scope: DayScope
+-    @Binding var subject: String?
+ 
+     var body: some View {
+-        ScrollView(.horizontal) {
+-            HStack(spacing: 6) {
+-                chip("今天 \(store.dayOpenItems.count)", key: "today", on: scope == .today && subject == nil) {
+-                    scope = .today
+-                    subject = nil
+-                }
+-                ForEach(store.daySubjects, id: \.self) { item in
+-                    chip("\(daySubjectWords(item)) \(store.dayCount(item))", key: "subject-" + item,
+-                         on: scope == .today && subject == item) {
+-                        scope = .today
+-                        subject = item
+-                    }
+-                }
+-                chip("明后天 \(store.dayUpcomingCards.count)", key: "upcoming",
+-                     on: scope == .upcoming) {
+-                    scope = .upcoming
+-                    subject = nil
+-                }
+-                if !store.dayUndatedItems.isEmpty {
+-                    chip("日期未定 \(store.dayUndatedItems.count)", key: "undated", on: scope == .undated) {
+-                        scope = .undated
+-                        subject = nil
+-                    }
+-                }
+-                chip("已取消 \(store.dayCancelledItems.count)", key: "cancelled", on: scope == .cancelled) {
+-                    scope = .cancelled
+-                    subject = nil
+-                }
+-                chip("已完成 \(store.dayCompletedItems.count)", key: "closed", on: scope == .closed) {
+-                    scope = .closed
+-                    subject = nil
++        ZStack(alignment: .topLeading) {
++            VStack(spacing: 0) {
++                DayTopBar(store: store, compact: width < 1180)
++                    .geoProbe("context-header", text: "width=\(Int(width))")
++                noticeStrip
++                DayNotices(store: store)
++                if store.current == nil {
++                    DayPlaceholder(store: store)
++                } else {
++                    head
++                    filterBar
++                    groupLabel
++                    list
+                 }
+             }
+-            .padding(.horizontal, 14)
+-            .padding(.vertical, 8)
++            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
++            .background(Palette.paper)
++
++            if let item = store.selected {
++                detailOverlay(item)
++            }
+         }
+-        .background(Palette.card)
+-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
++        .geoProbe("workspace-body", text: "width=\(Int(width)) layout=list")
++        .geoProbe("selected-context", text: [
++            store.childID, store.day, store.mode.id, store.selection ?? "",
++        ].joined(separator: "|"))
+     }
+ 
+-    private func chip(_ text: String, key: String, on: Bool, action: @escaping () -> Void) -> some View {
+-        Button(action: action) {
+-            Text(text)
+-                .font(.system(size: 12, weight: on ? .semibold : .regular))
+-                .lineLimit(1)
+-                .fixedSize()
+-                .padding(.horizontal, 10)
+-                .frame(minHeight: 30)
+-                .contentShape(Capsule())
+-                .foregroundStyle(on ? Color.white : Palette.ink2)
+-                .background(Capsule().fill(on ? Palette.leaf : Palette.paper2))
+-                .overlay(Capsule().strokeBorder(on ? Color.clear : Palette.line, lineWidth: 1))
++    /// 只让内容本身保持一条竖列、最宽 900 居中（加两侧 40 留白≈980，对齐 v3 稿）；打开浮层不会改变这里的任何尺寸。
++    private func centered<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
++        HStack(spacing: 0) {
++            Spacer(minLength: 0)
++            content()
++                .frame(maxWidth: Self.contentWidth, alignment: .leading)
++            Spacer(minLength: 0)
+         }
+-        .buttonStyle(.plain)
+-        .probe("chip-" + key, text: text)
++        .padding(.horizontal, 40)
+     }
+-}
+-
+-// MARK: 中栏看板
+-
+-struct DayBoard: View {
+-    @ObservedObject var store: WorkspaceStore
+-    let scope: DayScope
+-    let subject: String?
+-    let columns: Int
+-    let width: CGFloat
+ 
+-    var body: some View {
+-        VStack(spacing: 0) {
+-            if store.current != nil && width >= DayWorkbench.midWidth {
+-                WeekStrip(store: store)
+-                    .padding(.horizontal, 18)
+-                    .padding(.top, 10)
+-                    .padding(.bottom, 2)
+-                    .geoProbe("week-strip", text: "weekday=\(store.weekDays.count) day=\(store.day)")
+-            }
+-            DayBoardBar(store: store, scope: scope, subject: subject)
+-            if store.current == nil {
+-                DayPlaceholder(store: store)
+-            } else if scope == .today && columns >= 3 {
+-                threeColumns
+-            } else if scope == .today {
+-                twoColumns
+-            } else {
+-                singleColumn
++    private var noticeStrip: some View {
++        Group {
++            if !store.notice.isEmpty {
++                HStack(spacing: 8) {
++                    Text(store.notice)
++                        .font(.system(size: 12))
++                        .foregroundStyle(Palette.coralInk)
++                        .lineLimit(2)
++                        .fixedSize(horizontal: false, vertical: true)
++                        .probe("workspace-notice", text: store.notice)
++                    Spacer(minLength: 8)
++                    Button("知道了") { store.notice = "" }
++                        .buttonStyle(GroveButtonStyle(kind: .quiet))
++                        .probe("notice-dismiss")
++                }
++                .padding(.horizontal, 16)
++                .padding(.vertical, 5)
++                .background(Palette.coral)
+             }
+         }
+-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+-    }
+-
+-    // 当前集合 / 科目筛选后的卡片集合
+-    private var openCards: [DayItem] { filterSubject(store.dayOpenItems) }
+-    private var cancelledCards: [DayItem] { filterSubject(store.dayCancelledItems) }
+-    private var closedCards: [DayItem] { filterSubject(store.dayCompletedItems) }
+-    private var undatedCards: [DayItem] { filterSubject(store.dayUndatedItems) }
+-    private var upcomingCards: [UpcomingCardModel] {
+-        guard let subject = subject else { return store.dayUpcomingCards }
+-        return store.dayUpcomingCards.filter { daySubjectWords($0.subject) == daySubjectWords(subject) }
+     }
+ 
+-    /// 「明后天」列标题下一行小字；顶栏那行仍保留完整清单（原生验收按它核对每条标题）。
+-    private var upcomingHint: String { "即将/待补：\(upcomingCards.count) 项" }
+-    private var upcomingHintProbe: String { store.dayUpcomingLine ?? upcomingHint }
++    private var isToday: Bool { store.day == store.view?.today }
+ 
+-    private func filterSubject(_ list: [DayItem]) -> [DayItem] {
+-        guard let subject = subject else { return list }
+-        return list.filter { daySubjectWords($0.subject) == daySubjectWords(subject) }
+-    }
++    private var headWord: String { isToday ? "今天" : store.dayTitle }
+ 
+-    private var threeColumns: some View {
+-        GeometryReader { geo in
+-            let gap: CGFloat = 12
+-            let pad: CGFloat = 18
+-            let usable = max(300, geo.size.width - pad * 2 - gap * 2)
+-            let unit = usable / 2.75
+-            HStack(alignment: .top, spacing: gap) {
+-                DayColumn("今天要做", count: openCards.count, width: unit * 1.05, empty: DayScope.today.empty) {
+-                    ForEach(openCards) { item in
+-                        DayCard(store: store, item: item)
++    private var head: some View {
++        centered {
++            HStack(alignment: .bottom, spacing: 16) {
++                VStack(alignment: .leading, spacing: 5) {
++                    HStack(alignment: .firstTextBaseline, spacing: 8) {
++                        Text(headWord)
++                            .font(.system(size: 26, weight: .semibold))
++                            .foregroundStyle(Palette.ink)
++                            .lineLimit(1)
++                            .probe("board-title", text: headWord)
++                        Text("\(allCards.count)")
++                            .font(.system(size: 30, weight: .bold))
++                            .foregroundStyle(Palette.ink)
++                        Text("件事")
++                            .font(.system(size: 26, weight: .semibold))
++                            .foregroundStyle(Palette.ink)
+                     }
+-                }
+-                DayColumn("明后天", count: upcomingCards.count, width: unit * 0.9,
+-                          empty: DayScope.upcoming.empty,
+-                          hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
+-                    ForEach(upcomingCards) { card in
+-                        UpcomingDayCard(store: store, card: card)
++                    HStack(spacing: 6) {
++                        dayStep(-1, icon: "chevron.left", id: "day-prev")
++                        Text(store.dayTitle)
++                            .font(.system(size: 13))
++                            .foregroundStyle(Palette.muted)
++                            .lineLimit(1)
++                            .fixedSize()
++                            .probe("day-title", text: store.day + " " + store.daySub)
++                        dayStep(1, icon: "chevron.right", id: "day-next")
++                        Text("·")
++                            .font(.system(size: 13))
++                            .foregroundStyle(Palette.muted)
++                        Text("已完成 \(store.dayProgress.done) / \(store.dayProgress.total)")
++                            .font(.system(size: 13))
++                            .foregroundStyle(Palette.muted)
++                            .lineLimit(1)
++                            .probe("list-summary", text: store.daySummaryLine)
++                        if !isToday {
++                            Button("回到今天") { store.change(day: store.view?.today ?? "") }
++                                .buttonStyle(.plain)
++                                .font(.system(size: 12, weight: .medium))
++                                .foregroundStyle(Palette.leafInk)
++                                .help("回到今天 ⌘T")
++                                .probe("day-today")
++                        }
++                        if store.loading && !store.day.isEmpty {
++                            Text("正在读取…")
++                                .font(.system(size: 10))
++                                .foregroundStyle(Palette.muted)
++                                .lineLimit(1)
++                                .fixedSize()
++                                .probe("day-loading", text: "正在读取…")
++                        }
+                     }
+                 }
+-                DayColumn("已完成", count: closedCards.count, width: unit * 0.8, empty: DayScope.closed.empty) {
+-                    ForEach(closedCards) { item in
+-                        DayCard(store: store, item: item)
++
++                Spacer(minLength: 8)
++
++                HStack(spacing: 10) {
++                    DayProgressBar(done: store.dayProgress.done, total: store.dayProgress.total, showsText: false)
++                    if !store.dayUpcomingCards.isEmpty {
++                        Text("明后天 \(store.dayUpcomingCards.count) 件")
++                            .font(.system(size: 11.5))
++                            .foregroundStyle(Palette.muted)
++                            .lineLimit(1)
++                            .fixedSize()
++                            .probe("board-upcoming-count", text: "即将/待补：\(store.dayUpcomingCards.count) 项")
++                    }
++                    Button("看明天") { store.shift(1) }
++                        .buttonStyle(GroveButtonStyle())
++                        .help("切到明天，看明后天要带什么")
++                    Button {
++                        store.sheetDirty = false
++                        store.sheet = .oral
++                    } label: {
++                        Label("补录", systemImage: "plus")
++                            .font(.system(size: 12))
+                     }
++                    .buttonStyle(GroveButtonStyle(kind: .primary))
++                    .disabled(store.current == nil)
++                    .help("补录孩子口头转述的作业 ⌘N")
++                    .probe("oral-new")
+                 }
++                .probe("upcoming", text: store.dayUpcomingLine ?? "")
+             }
+-            .padding(.horizontal, pad)
+-            .padding(.top, 12)
+-            .padding(.bottom, 14)
++            .padding(.top, 16)
++            .padding(.bottom, 10)
+         }
+     }
+ 
+-    private var twoColumns: some View {
+-        GeometryReader { geo in
+-            let gap: CGFloat = 12
+-            let pad: CGFloat = 18
+-            let width = max(200, (geo.size.width - pad * 2 - gap) / 2)
+-            HStack(alignment: .top, spacing: gap) {
+-                DayColumn("今天要做", count: openCards.count, width: width, empty: DayScope.today.empty) {
+-                    ForEach(openCards) { item in
+-                        DayCard(store: store, item: item)
+-                    }
+-                }
+-                DayColumn("明后天", count: upcomingCards.count, width: width,
+-                          empty: DayScope.upcoming.empty,
+-                          hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
+-                    ForEach(upcomingCards) { card in
+-                        UpcomingDayCard(store: store, card: card)
+-                    }
+-                }
+-            }
+-            .padding(.horizontal, pad)
+-            .padding(.top, 12)
+-            .padding(.bottom, 14)
++    private func dayStep(_ delta: Int, icon: String, id: String) -> some View {
++        Button { store.shift(delta) } label: {
++            Image(systemName: icon)
++                .font(.system(size: 11, weight: .semibold))
++                .frame(width: 22, height: 22)
++                .contentShape(Rectangle())
+         }
++        .buttonStyle(.plain)
++        .foregroundStyle(Palette.ink2)
++        .accessibilityLabel(delta < 0 ? "前一天" : "后一天")
++        .probe(id)
+     }
+ 
+-    private var singleColumn: some View {
+-        ScrollView {
+-            VStack(alignment: .leading, spacing: 10) {
+-                if scope == .today {
+-                    singleSection("今天要做", count: openCards.count, empty: DayScope.today.empty) {
+-                        ForEach(openCards) { item in
+-                            DayCard(store: store, item: item)
+-                        }
+-                    }
+-                    singleSection("明后天", count: upcomingCards.count,
+-                                  empty: DayScope.upcoming.empty,
+-                                  hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
+-                        ForEach(upcomingCards) { card in
+-                            UpcomingDayCard(store: store, card: card)
+-                        }
+-                    }
+-                    singleSection("已完成", count: closedCards.count, empty: DayScope.closed.empty) {
+-                        ForEach(closedCards) { item in
+-                            DayCard(store: store, item: item)
+-                        }
+-                    }
+-                } else if scope == .upcoming {
+-                    ForEach(upcomingCards) { card in
+-                        UpcomingDayCard(store: store, card: card)
+-                    }
+-                    if upcomingCards.isEmpty {
+-                        emptyBox(DayScope.upcoming.empty)
+-                    }
+-                } else {
+-                    let items = scope == .cancelled ? cancelledCards : (scope == .closed ? closedCards : undatedCards)
+-                    if items.isEmpty {
+-                        emptyBox(scope.empty)
+-                    } else {
+-                        ForEach(items) { item in
+-                            DayCard(store: store, item: item, cancelled: scope == .cancelled || store.isCancelledItem(item))
++    private var filterBar: some View {
++        centered {
++            HStack(spacing: 8) {
++                ForEach(DayFilter.allCases.filter { $0 != .undated || !undatedCards.isEmpty }) { item in
++                    let on = filter == item
++                    Button { filter = item } label: {
++                        HStack(spacing: 4) {
++                            Text(item.title)
++                            Text("\(count(item))")
++                                .fontWeight(.semibold)
+                         }
++                        .font(.system(size: 12.5))
++                        .lineLimit(1)
++                        .fixedSize()
++                        .padding(.horizontal, 11)
++                        .frame(minHeight: 30)
++                        .contentShape(Capsule())
+                     }
++                    .buttonStyle(.plain)
++                    .foregroundStyle(on ? Palette.leafInk : Palette.ink2)
++                    .background(Capsule().fill(on ? Palette.leaf50 : Color.clear))
++                    .overlay(Capsule().strokeBorder(on ? Palette.leaf100 : Palette.line2, lineWidth: 1))
++                    .accessibilityAddTraits(on ? .isSelected : [])
++                    .probe("chip-" + item.id, text: item.title + " \(count(item))")
+                 }
++                Spacer(minLength: 8)
++                HStack(spacing: 10) {
++                    legendItem(.open, "未完成")
++                    legendItem(.done, "已完成")
++                    legendItem(.overdue, "过期")
++                    legendItem(.cancelled, "取消")
++                }
++                .help("卡片左侧圆点：空心未完成、绿勾已完成、橙圈过期、灰实心取消")
+             }
+-            .padding(14)
++            .padding(.top, 4)
++            .padding(.bottom, 8)
+         }
+     }
+ 
+-    private func singleSection<Content: View>(_ title: String, count: Int, empty: String,
+-                                              hint: String = "", hintID: String = "", hintProbe: String = "",
+-                                              @ViewBuilder content: () -> Content) -> some View {
+-        VStack(alignment: .leading, spacing: 8) {
+-            HStack(spacing: 6) {
+-                Text(title)
+-                    .font(.system(size: 12, weight: .semibold))
+-                    .foregroundStyle(Palette.ink2)
+-                Text("\(count)")
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                Spacer(minLength: 0)
+-            }
+-            if !hint.isEmpty {
+-                Text(hint)
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                    .lineLimit(1)
+-                    .probe(hintID, text: hintProbe.isEmpty ? hint : hintProbe)
+-            }
+-            if count == 0 {
+-                emptyBox(empty)
+-            } else {
+-                content()
+-            }
++    private func legendItem(_ state: DayCardState, _ text: String) -> some View {
++        HStack(spacing: 4) {
++            DayStateDot(state: state, size: 11)
++            Text(text)
++                .font(.system(size: 11.5))
++                .foregroundStyle(Palette.muted)
++                .lineLimit(1)
+         }
++        .fixedSize()
+     }
+ 
+-    private func emptyBox(_ text: String) -> some View {
+-        Text(text)
+-            .font(.system(size: 12))
+-            .foregroundStyle(Palette.muted)
+-            .fixedSize(horizontal: false, vertical: true)
+-            .padding(12)
+-            .frame(maxWidth: .infinity, alignment: .leading)
+-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+-                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+-    }
+-}
+-
+-struct DayBoardBar: View {
+-    @ObservedObject var store: WorkspaceStore
+-    let scope: DayScope
+-    let subject: String?
+-
+-    private var title: String {
+-        guard scope == .today, let subject = subject else { return scope.title }
+-        return daySubjectWords(subject)
++    private var groupLabel: some View {
++        centered {
++            Text("\(filter == .all ? "今天要做" : filter.title) · \(cards.count)")
++                .font(.system(size: 12))
++                .kerning(0.4)
++                .foregroundStyle(Palette.muted)
++                .lineLimit(1)
++                .padding(.bottom, 6)
++        }
+     }
+ 
+-    var body: some View {
+-        VStack(alignment: .leading, spacing: 3) {
+-            HStack(alignment: .center, spacing: 12) {
+-                VStack(alignment: .leading, spacing: 2) {
+-                    Text(title)
+-                        .font(.system(size: 16, weight: .semibold))
+-                        .foregroundStyle(Palette.ink)
+-                        .lineLimit(1)
+-                        .probe("board-title", text: title)
+-                    HStack(spacing: 6) {
+-                        Text(store.dayTitle)
+-                            .font(.system(size: 12))
+-                            .foregroundStyle(Palette.muted)
+-                            .lineLimit(1)
+-                        Text(store.daySummaryLine)
++    private var list: some View {
++        ScrollView {
++            centered {
++                LazyVStack(alignment: .leading, spacing: 8) {
++                    ForEach(cards) { item in
++                        DayCard(store: store, item: item)
++                    }
++                    if cards.isEmpty {
++                        Text(filter.empty)
+                             .font(.system(size: 12))
+                             .foregroundStyle(Palette.muted)
+-                            .lineLimit(1)
+-                            .probe("list-summary", text: store.daySummaryLine)
++                            .fixedSize(horizontal: false, vertical: true)
++                            .padding(14)
++                            .frame(maxWidth: .infinity, alignment: .leading)
++                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
++                                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+                     }
+-                }
+-                Spacer(minLength: 8)
+-                DayProgressBar(done: store.dayProgress.done, total: store.dayProgress.total)
+-            }
+-            if let line = store.dayUpcomingLine {
+-                Text(line)
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                    .lineLimit(1)
+-                    .help(line)
+-                    .probe("upcoming", text: line)
+-            }
+-            if let line = store.dayMaterialsLine {
+-                HStack(spacing: 8) {
+-                    Text(line)
+-                        .font(.system(size: 11))
+-                        .foregroundStyle(Palette.muted)
+-                        .lineLimit(1)
+-                        .help(line)
+-                        .probe("materials", text: line)
+-                    Button("去网页版") { store.openWebTools("", "school") }
+-                        .buttonStyle(.plain)
+-                        .font(.system(size: 11))
+-                        .foregroundStyle(Palette.leafInk)
+-                        .probe("materials-open")
++                    Color.clear.frame(height: 28)
+                 }
+             }
+         }
+-        .padding(.horizontal, 18)
+-        .padding(.top, 11)
+-        .padding(.bottom, 9)
+-        .frame(maxWidth: .infinity, alignment: .leading)
+-        .background(Palette.card)
+-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+     }
+-}
+ 
+-struct DayColumn<Content: View>: View {
+-    let title: String
+-    let count: Int
+-    let width: CGFloat
+-    let empty: String
+-    let hint: String
+-    let hintID: String
+-    let hintProbe: String
+-    let content: Content
+-
+-    init(_ title: String, count: Int, width: CGFloat, empty: String,
+-         hint: String = "", hintID: String = "", hintProbe: String = "",
+-         @ViewBuilder content: () -> Content) {
+-        self.title = title
+-        self.count = count
+-        self.width = width
+-        self.empty = empty
+-        self.hint = hint
+-        self.hintID = hintID
+-        self.hintProbe = hintProbe
+-        self.content = content()
+-    }
+-
+-    var body: some View {
+-        VStack(alignment: .leading, spacing: 0) {
+-            HStack(spacing: 6) {
+-                Text(title)
+-                    .font(.system(size: 12, weight: .semibold))
+-                    .foregroundStyle(Palette.ink2)
+-                Text("\(count)")
+-                    .font(.system(size: 11, weight: .medium))
+-                    .foregroundStyle(Palette.muted)
+-                Spacer(minLength: 0)
+-            }
+-            .padding(.horizontal, 5)
+-            .padding(.bottom, hint.isEmpty ? 8 : 3)
+-            if !hint.isEmpty {
+-                Text(hint)
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                    .lineLimit(1)
+-                    .padding(.horizontal, 5)
+-                    .padding(.bottom, 7)
+-                    .probe(hintID, text: hintProbe.isEmpty ? hint : hintProbe)
+-            }
+-            ScrollView {
+-                VStack(spacing: 8) {
+-                    if count == 0 {
+-                        emptyView
+-                    } else {
+-                        content
+-                    }
+-                }
+-                .padding(.bottom, 6)
++    @ViewBuilder
++    private func detailOverlay(_ item: DayItem) -> some View {
++        ZStack(alignment: wideLayout ? .topTrailing : .bottom) {
++            Color.black.opacity(0.18)
++                .ignoresSafeArea()
++                .contentShape(Rectangle())
++                .onTapGesture { store.closeDetail() }
++
++            if wideLayout {
++                DayDetail(store: store, item: item, page: false)
++                    .frame(width: Self.floatWidth, height: max(420, height - 52))
++                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card))
++                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
++                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
++                        .strokeBorder(Palette.line2, lineWidth: 1))
++                    .shadow(color: Color.black.opacity(0.22), radius: 26, x: 0, y: 12)
++                    .padding(.trailing, 26)
++                    .padding(.vertical, 26)
++                    .geoProbe("detail-pane", text: "layout=overlay")
++            } else {
++                DayDetail(store: store, item: item, page: false)
++                    .frame(width: width, height: max(320, height * 0.64))
++                    .background(Palette.card)
++                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
++                    .shadow(color: Color.black.opacity(0.20), radius: 20, x: 0, y: -6)
++                    .geoProbe("detail-pane", text: "layout=sheet")
+             }
+         }
+-        .padding(9)
+-        .frame(width: width)
+-        .frame(maxHeight: .infinity, alignment: .top)
+-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.paper2))
+-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+-        .probe("board-col-" + title, text: title + " \(count)")
+-    }
+-
+-    private var emptyView: some View {
+-        Text(empty)
+-            .font(.system(size: 12))
+-            .foregroundStyle(Palette.muted)
+-            .fixedSize(horizontal: false, vertical: true)
+-            .padding(12)
+-            .frame(maxWidth: .infinity, alignment: .leading)
+-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+-                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
++        .transition(.opacity)
++        .animation(.easeOut(duration: 0.16), value: store.selection)
+     }
+ }
+ 
+@@ -2966,10 +2786,18 @@ struct DayCard: View {
+     let item: DayItem
+     var cancelled = false
+ 
+-    private var selected: Bool { store.selection == item.id }
+-    private var done: Bool { item.closed }
+-    /// 一句要点：优先取第一条正面要求（跳过「不用…」这类否定句，它们进详情的「不做什么」），没有就退回第一条。
+-    private var line: String? { item.lines.first { !isNegativeLine($0) } ?? item.lines.first }
++    @State private var hovering = false
++
++    private var isCancelled: Bool { cancelled || store.isCancelledItem(item) }
++    private var done: Bool { item.closed && !isCancelled }
++
++    private var state: DayCardState {
++        if isCancelled { return .cancelled }
++        if item.closed { return .done }
++        if store.dayOverdueDays(item) > 0 { return .overdue }
++        return .open
++    }
++
+     /// 与网页端同一枚家里安排徽章：家里的安排里有时刻就写「家里 18:30」，没有就写「家里安排」。
+     private var planBadge: String? {
+         guard !item.planLines.isEmpty else { return nil }
+@@ -2992,126 +2820,116 @@ struct DayCard: View {
+         var parts: [String] = [daySubjectWords(item.subject)]
+         if let publisher = item.publisher, !publisher.isEmpty { parts.append(publisher) }
+         if !item.publishedTime.isEmpty { parts.append(item.publishedTime) }
+-        if cancelled { parts.append("已取消") }
+         return parts.joined(separator: " · ")
+     }
+ 
++    /// 卡片摘要：优先给「会让人跑一趟」的那条要求（签字/交回/带/上传…），只挑行，不改写。
++    private var keyLine: String? {
++        item.cardPoints(limit: 1).first
++    }
++
++    /// 状态小标签：过期显示「已过期 N 天」，today:false 的补做项显示「待补」。
++    private var stateNote: String? {
++        switch state {
++        case .overdue:
++            let days = store.dayOverdueDays(item)
++            return days > 0 ? "已过期 \(days) 天" : "已过期"
++        case .open:
++            return item.today ? nil : "待补"
++        default:
++            return nil
++        }
++    }
++
++    private var selected: Bool { store.selection == item.id }
++
+     var body: some View {
+         Button { store.select(item.id) } label: {
+-            VStack(alignment: .leading, spacing: 0) {
+-                HStack(spacing: 6) {
+-                    Circle()
+-                        .fill(cancelled ? Palette.muted : Palette.subjectDot(item.subject))
+-                        .frame(width: 7, height: 7)
+-                    Text(metaLine)
+-                        .font(.system(size: 11))
+-                        .foregroundStyle(Palette.muted)
+-                        .lineLimit(1)
+-                    Spacer(minLength: 0)
+-                    if item.pending_review {
+-                        Text("待核对")
+-                            .font(.system(size: 10))
+-                            .foregroundStyle(Palette.coralInk)
++            HStack(alignment: .top, spacing: 12) {
++                DayStateDot(state: state)
++                    .padding(.top, 3)
++
++                VStack(alignment: .leading, spacing: 3) {
++                    HStack(spacing: 5) {
++                        Circle()
++                            .fill(isCancelled ? Palette.muted : Palette.subjectDot(item.subject))
++                            .frame(width: 7, height: 7)
++                        Text(metaLine)
++                            .font(.system(size: 11.5))
++                            .foregroundStyle(Palette.muted)
++                            .lineLimit(1)
++                        if let note = stateNote {
++                            Text(note)
++                                .font(.system(size: 10.5))
++                                .foregroundStyle(Palette.coralInk)
++                                .lineLimit(1)
++                                .fixedSize()
++                                .padding(.horizontal, 5)
++                                .padding(.vertical, 1)
++                                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Palette.coral))
++                                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
++                                    .strokeBorder(Palette.coral400, lineWidth: 1))
++                        }
++                        Spacer(minLength: 0)
+                     }
+-                }
+-                .padding(.bottom, 4)
+-                Text(item.title)
+-                    .font(.system(size: 13.5, weight: .semibold))
+-                    .foregroundStyle(done ? Palette.ink2 : Palette.ink)
+-                    .strikethrough(done, color: Palette.muted)
+-                    .lineLimit(2)
+-                    .multilineTextAlignment(.leading)
+-                    .fixedSize(horizontal: false, vertical: true)
+-                    .frame(maxWidth: .infinity, alignment: .leading)
+-                    .padding(.bottom, 3)
+-                if let line = line {
+-                    Text(line)
+-                        .font(.system(size: 12))
+-                        .foregroundStyle(Palette.ink2)
++                    Text(item.title)
++                        .font(.system(size: 15, weight: .semibold))
++                        .foregroundStyle(done || isCancelled ? Palette.ink2 : Palette.ink)
++                        .strikethrough(isCancelled, color: Palette.muted)
+                         .lineLimit(2)
+                         .multilineTextAlignment(.leading)
+                         .fixedSize(horizontal: false, vertical: true)
+                         .frame(maxWidth: .infinity, alignment: .leading)
+-                        .padding(.bottom, 7)
+-                }
+-                if !badges.isEmpty {
+-                    FlowRow(spacing: 4, lineSpacing: 4) {
+-                        ForEach(badges, id: \.self) { text in
+-                            DayTag(text: text)
++                    if let key = keyLine {
++                        Text(key)
++                            .font(.system(size: 12.8))
++                            .foregroundStyle(Palette.ink2)
++                            .lineLimit(2)
++                            .multilineTextAlignment(.leading)
++                            .fixedSize(horizontal: false, vertical: true)
++                            .frame(maxWidth: .infinity, alignment: .leading)
++                            .padding(.top, 1)
++                    }
++                    if !badges.isEmpty {
++                        FlowRow(spacing: 6, lineSpacing: 4) {
++                            ForEach(badges, id: \.self) { text in
++                                badgeTag(text)
++                            }
+                         }
++                        .padding(.top, 4)
+                     }
+                 }
+-                if !item.followUps.isEmpty {
+-                    Text("后续通知 \(item.followUps.count) ›")
+-                        .font(.system(size: 11))
+-                        .foregroundStyle(Palette.planInk)
+-                        .padding(.top, 5)
+-                }
++
++                Image(systemName: "chevron.right")
++                    .font(.system(size: 11, weight: .semibold))
++                    .foregroundStyle(Color(hex: 0xC2BBAA))
++                    .padding(.top, 5)
+             }
+-            .padding(.horizontal, 10)
+-            .padding(.vertical, 9)
++            .padding(.horizontal, 12)
++            .padding(.vertical, 11)
+             .frame(maxWidth: .infinity, alignment: .leading)
+-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.card))
+-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
++            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.card))
++            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                 .strokeBorder(selected ? Palette.line2 : Palette.line, lineWidth: 1))
+-            .shadow(color: Palette.cardShadow, radius: selected ? 6 : 2, x: 0, y: selected ? 3 : 1)
+-            .opacity(done || cancelled ? 0.62 : 1)
+-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
++            .shadow(color: Color(hex: 0x3C321E).opacity(hovering || selected ? 0.10 : 0.04),
++                    radius: hovering || selected ? 10 : 2, x: 0, y: hovering || selected ? 3 : 1)
++            .opacity(done || isCancelled ? 0.62 : 1)
++            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+         }
+         .buttonStyle(.plain)
++        .onHover { hovering = $0 }
+         .probe("row-" + item.id, text: item.title)
+     }
+-}
+ 
+-struct UpcomingDayCard: View {
+-    @ObservedObject var store: WorkspaceStore
+-    let card: UpcomingCardModel
+-
+-    var body: some View {
+-        Button { store.change(day: card.day) } label: {
+-            VStack(alignment: .leading, spacing: 3) {
+-                HStack(spacing: 6) {
+-                    Circle()
+-                        .fill(card.cancelled ? Palette.muted : Palette.subjectDot(card.subject))
+-                        .frame(width: 7, height: 7)
+-                    Text(daySubjectWords(card.subject))
+-                        .font(.system(size: 11))
+-                        .foregroundStyle(Palette.muted)
+-                        .lineLimit(1)
+-                    Text(rowRelative(card.day, day: store.day))
+-                        .font(.system(size: 11))
+-                        .foregroundStyle(Palette.muted)
+-                        .lineLimit(1)
+-                    Spacer(minLength: 0)
+-                    if card.cancelled {
+-                        DayTag(text: "已取消", tone: Palette.paper2, ink: Palette.muted)
+-                    } else if card.pending {
+-                        DayTag(text: "待补", tone: Palette.coral, ink: Palette.coralInk, border: Palette.coral400)
+-                    }
+-                }
+-                Text(card.title)
+-                    .font(.system(size: 13.5, weight: .semibold))
+-                    .foregroundStyle(Palette.ink)
+-                    .lineLimit(2)
+-                    .multilineTextAlignment(.leading)
+-                    .fixedSize(horizontal: false, vertical: true)
+-                    .frame(maxWidth: .infinity, alignment: .leading)
+-                Text(card.change.isEmpty ? "点开去这一天" : card.change)
+-                    .font(.system(size: 11))
+-                    .foregroundStyle(Palette.muted)
+-                    .lineLimit(1)
+-            }
+-            .padding(.horizontal, 10)
+-            .padding(.vertical, 9)
+-            .frame(maxWidth: .infinity, alignment: .leading)
+-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.card))
+-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+-            .shadow(color: Palette.cardShadow, radius: 2, x: 0, y: 1)
+-            .opacity(card.cancelled ? 0.62 : 1)
+-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+-        }
+-        .buttonStyle(.plain)
+-        .probe("row-upcoming-" + card.id, text: card.title)
++    /// 徽章：签字类给提醒色（会让人跑一趟），其余用浅绿；都是原文短词，不改写。
++    private func badgeTag(_ text: String) -> some View {
++        let warn = text.contains("签字") || text.contains("签名")
++        return DayTag(
++            text: text,
++            tone: warn ? Palette.coral : Palette.leaf50,
++            ink: warn ? Palette.coralInk : Palette.leafInk,
++            border: warn ? Palette.coral400 : Palette.leaf100
++        )
+     }
+ }
+ 
+@@ -3157,6 +2975,7 @@ struct DayDetail: View {
+             switch outcome {
+             case .saved:
+                 completeDone = true
++                store.invalidateDayCache()
+                 await store.load(keepSelection: true)
+             case .refused(_, let message, _):
+                 completeError = message
+@@ -3318,28 +3137,44 @@ struct DayDetail: View {
+         }
+     }
+ 
++    /// 「截止 / 完成 / 交回」只读数据格：主值用相对词（今天/明天/本周五/已过期 N 天），
++    /// 绝对日期降级成下面一行灰色小字；probe 文案保持事实原句，原生验收仍按它断言。
+     private func factCell(_ fact: DayFact) -> some View {
+-        let urgent = fact.state == "next_morning" || fact.state == "overdue"
+-        return VStack(alignment: .leading, spacing: 2) {
++        let urgent = fact.state == "next_morning" || fact.state == "overdue" || dayOverdueDays(fact) > 0
++        let relative = dayRelativeWord(fact, day: store.day)
++        return VStack(alignment: .leading, spacing: 1) {
+             Text(fact.label)
+-                .font(.system(size: 10, weight: .medium))
+-                .kerning(0.7)
++                .font(.system(size: 10.5, weight: .medium))
++                .kerning(0.5)
+                 .foregroundStyle(Palette.muted)
+                 .lineLimit(1)
+-            Text(factWords(fact))
+-                .font(.system(size: 13.5, weight: .semibold))
++            Text(relative ?? factWords(fact))
++                .font(.system(size: 15, weight: .semibold))
+                 .foregroundStyle(urgent ? Palette.coralInk : Palette.ink)
+                 .lineLimit(2)
+                 .fixedSize(horizontal: false, vertical: true)
++            if relative != nil {
++                Text(fact.value)
++                    .font(.system(size: 11))
++                    .foregroundStyle(Palette.muted)
++                    .lineLimit(1)
++            }
+         }
+         .padding(EdgeInsets(top: 7, leading: 9, bottom: 8, trailing: 9))
+         .frame(maxWidth: .infinity, alignment: .leading)
+-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.paper2))
+-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
++        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.paper2))
++        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+             .strokeBorder(urgent ? Palette.coral400 : Palette.line, lineWidth: 1))
+         .probe("fact-" + fact.role, text: factWords(fact))
+     }
+ 
++    private func dayOverdueDays(_ fact: DayFact) -> Int {
++        guard fact.known, let value = WorkspaceStore.date(fact.value),
++              let base = WorkspaceStore.date(store.day) else { return 0 }
++        let diff = Calendar(identifier: .gregorian).dateComponents([.day], from: base, to: value).day ?? 0
++        return max(0, -diff)
++    }
++
+     private func block<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+         VStack(alignment: .leading, spacing: 6) {
+             Text(title)
+@@ -3783,6 +3618,27 @@ struct DayDetail: View {
+     }
+ }
+ 
++// ≥1200 三栏：右栏常显。没有选中时给占位（与网页 groveDetailHTML(null) 同一句），
++// 这里不放 detail-title / detail-line-* / fact-* 探针，免得旧冒烟断言误命中。
++struct DayDetailEmpty: View {
++    var body: some View {
++        VStack(spacing: 10) {
++            Image(systemName: "sidebar.right")
++                .font(.system(size: 20, weight: .light))
++                .foregroundStyle(Palette.muted.opacity(0.7))
++            Text("从清单里选一项，看要做什么、资料和反馈。")
++                .font(.system(size: 12))
++                .foregroundStyle(Palette.muted)
++                .multilineTextAlignment(.center)
++                .fixedSize(horizontal: false, vertical: true)
++                .padding(.horizontal, 28)
++        }
++        .frame(maxWidth: .infinity, maxHeight: .infinity)
++        .background(Palette.card)
++        .probe("detail-empty", text: "detail-empty")
++    }
++}
++
+ // <900：底部拉起约 55% 高的 sheet
+ struct DaySheet: View {
+     @ObservedObject var store: WorkspaceStore
+@@ -4237,6 +4093,7 @@ extension WorkspaceStore {
+             sheetDirty = false; sheet = nil; notice = done
+             // 记下的错题：错题本选中回执里的同一条记录编号（不按标题或第一条猜）；回执没有编号时不改选中。
+             if let id = ((object["saved"] as? [[String: Any]])?.first?["id"] as? NSNumber)?.intValue { record = id }
++            invalidateDayCache()
+             await load()
+         case .unknown(let text):
+             save.unknown = true; save.login = false; save.message = text
+@@ -4738,6 +4595,7 @@ extension WorkspaceStore {
+         let fresh = prints.allSatisfy { photoSyncedPrints[$0.key] == $0.value }
+         if !force { guard photoProblems["day"] == nil, missing || (mismatch && !fresh) else { return } }
+         if reviewLocked { photoProblems["day"] = "错题已保存，原错题清单暂未更新（有一条家庭复习保存待确认）；确认后点“重新读取”。"; return }
++        invalidateDayCache()
+         await load()
+         guard child == childID else { return }
+         if current != nil && error.isEmpty { photoSyncedRecords.formUnion(saved); photoSyncedPrints.merge(prints) { $1 }; photoProblems["day"] = nil }
+@@ -4861,6 +4719,7 @@ extension WorkspaceStore {
+         let outcome = await client.post("/api/photo-batch/include", ["batch_id": batch.id, "version": batch.version, "question_key": question.key])
+         guard context == photoContext, batch.child_id == childID else { return }
+         applyPhotoOutcome(outcome, done: "已纳入练习，记在原错题里（署名AI判断）。")
++        invalidateDayCache()
+         await load()
+     }
+ 
+diff --git a/workbench.css b/workbench.css
+index d2e67a4..84b71fe 100644
+--- a/workbench.css
++++ b/workbench.css
+@@ -1081,3 +1081,174 @@ body.grove-wide[data-page="home"] aside nav.grove-tabs button:hover{
+  .grove3,.grove3 .grove-board,.grove3 .grove-board-scroll,.grove3 .grove-list-head{max-width:100%;min-width:0;overflow-x:clip}
+  .grove3 .grove-tabs,.grove3 .grove-tabs button,.grove3 .grove-col{min-width:0}
+ }
++
++/* ———— Build 317（用户意见）：日视图不再单开「明后天」一列，改成看板上方一行预告条；今天/已完成两列。 ———— */
++@media (min-width:900px){
++ .grove3 .grove-cols{grid-template-columns:0.6fr 0.4fr}
++ .grove3 .grove-col.is-today,.grove3 .grove-col.is-done{grid-column:auto;grid-row:auto}
++}
++.grove3 .grove-upcoming-strip{display:flex;align-items:center;gap:8px;box-sizing:border-box;width:100%;height:38px;margin:0 0 10px;padding:0 10px;background:var(--g-surface);border:1px solid var(--g-line);border-radius:10px;font-size:12px;line-height:1.3;color:var(--g-ink2);overflow:hidden}
++.grove3 .grove-upcoming-label{flex:0 0 auto;font-weight:600;color:var(--g-ink);white-space:nowrap}
++.grove3 .grove-upcoming-sum{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g-muted)}
++.grove3 .grove-upcoming-more{flex:0 0 auto;margin-left:auto;min-height:30px;padding:0 6px;border:0;background:transparent;color:var(--g-accent);font:600 12px var(--round);white-space:nowrap;cursor:pointer}
++.grove3 .grove-upcoming-more:hover,.grove3 .grove-upcoming-more:focus-visible{text-decoration:underline}
++.grove3 .grove-later-panel{margin:10px 0 0;padding:8px;background:var(--g-surface2);border:1px solid var(--g-line);border-radius:12px}
++.grove3 .grove-later-panel[hidden]{display:none}
++.grove3 .grove-later-panel .grove-col-body{display:flex;flex-direction:column;gap:8px}
++
++/* Build 318：单列卡片流 + 浮层详情（不再分栏；打开浮层不改变列表尺寸/滚动） */
++.grove3{display:block!important}
++.grove3 .grove-board{width:100%}
++.grove3 .grove-board-scroll{max-width:940px;margin:0 auto;width:100%;padding:0 2px}
++.grove3 .grove-cols{display:none!important}
++.grove3 .grove-stack{display:flex;flex-direction:column;gap:12px}
++.grove3 .grove-subject{margin:0}
++.grove3 .grove-subject>.grove-tag{display:flex;align-items:center;gap:8px;margin:0 0 6px}
++.grove3 .grove-later-list{border-top:1px solid var(--g-line);padding-top:10px}
++.grove3 .grove-later-list>.grove-tag{display:flex;align-items:center;gap:8px;margin:0 0 6px}
++.grove3 .grove-later-list.is-cancelled-list{opacity:.9}
++.grove3 .grove-row{position:relative;padding-left:44px}
++.grove3 .grove-state{position:absolute;left:14px;top:16px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:transparent}
++.grove3 .grove-state i{width:14px;height:14px;border-radius:50%;border:1.5px solid #9aa89f;background:transparent;display:block}
++.grove3 .grove-row.is-state-done{opacity:.62}
++.grove3 .grove-row.is-state-done .grove-state i{background:var(--g-accent);border-color:var(--g-accent);position:relative}
++.grove3 .grove-row.is-state-done .grove-state i::after{content:"✓";position:absolute;inset:0;display:grid;place-items:center;font-size:10px;line-height:1;color:#fff;font-weight:700}
++.grove3 .grove-row.is-state-overdue .grove-state i{border-color:#b4701f}
++.grove3 .grove-row.is-state-cancelled .grove-state i{background:#9aa0a6;border-color:#9aa0a6}
++.grove3 .grove-row.is-state-cancelled .grove-title{text-decoration:line-through;color:var(--g-muted)}
++.grove-legend{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--g-muted);white-space:nowrap;flex-wrap:wrap}
++.grove-legend>span{display:inline-flex;align-items:center;gap:4px}
++.grove-legend-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid #9aa89f;display:inline-block}
++.grove-legend-dot.is-open{background:transparent}
++.grove-legend-dot.is-done{background:var(--g-accent);border-color:var(--g-accent)}
++.grove-legend-dot.is-overdue{border-color:#b4701f}
++.grove-legend-dot.is-cancelled{background:#9aa0a6;border-color:#9aa0a6}
++.grove-count-line{margin:6px 0 0;font-size:12px;color:var(--g-muted)}
++.grove-count-line b{font-size:13px;color:var(--g-ink)}
++.grove-detail-close{position:absolute;right:12px;top:10px;z-index:2;width:36px;height:36px;min-height:36px;border:1px solid var(--g-line);background:var(--g-surface);border-radius:50%;font-size:14px;line-height:1;color:var(--g-ink-2);cursor:pointer}
++.grove-detail{position:fixed!important;z-index:70;right:18px;top:18px;bottom:18px;width:430px;max-width:none;max-height:none;background:var(--g-surface);border:1px solid var(--g-line);border-radius:16px;box-shadow:0 18px 60px rgba(30,24,12,.28);transform:translateX(calc(100% + 40px));opacity:0;pointer-events:none;transition:transform .18s ease,opacity .18s ease;overflow:auto;margin:0;display:flex;flex-direction:column}
++.grove3.is-detail .grove-detail{transform:none;opacity:1;pointer-events:auto}
++.grove3 .grove-detail .grove-back{display:none}
++.grove3 .grove-detail .grove-detail-hd{position:relative;padding-right:44px}
++.grove-detail-backdrop{position:fixed;inset:0;z-index:65;background:rgba(20,16,8,.18);border:0;padding:0;margin:0}
++.grove-detail-backdrop[hidden]{display:none}
++.grove3 .grove-detail .grove-detail-bar{position:sticky;bottom:0;background:var(--g-surface);border-top:1px solid var(--g-line);padding:10px 16px;margin-top:auto;z-index:2}
++.grove3 .grove-detail .grove-fact{flex-wrap:nowrap;gap:4px}
++.grove3 .grove-detail .grove-fact-rel{order:-1;font-style:normal;font-weight:600;font-size:13.5px;color:var(--g-ink);white-space:nowrap}
++.grove3 .grove-detail .grove-fact strong{font-size:11px;font-weight:400;color:var(--g-muted)}
++.grove-rail-empty{margin:4px 0 0;font-size:12px;color:var(--g-muted)}
++.grove-rail-empty>summary{min-height:32px;display:flex;align-items:center;gap:6px;cursor:pointer}
++.grove-rail-empty-body{margin:4px 0 0}
++.grove-rail-empty-body button{min-height:32px;padding:4px 8px;font-size:12px}
++.grove-bar-later{border:1px solid var(--g-line);background:var(--g-surface);border-radius:999px;padding:0 10px;height:36px;min-height:36px;font-size:12px;color:var(--g-ink-2);position:relative}
++.grove-bar-later::after{content:"";position:absolute;inset:-4px;border-radius:999px}
++@media (max-width:899px){
++ .grove3{grid-template-columns:minmax(0,1fr)!important}
++ .grove3 .grove-board-scroll{max-width:none;padding:0}
++ .grove3 .grove-legend{font-size:10.5px;gap:8px}
++ .grove3 .grove-count-line{margin:2px 0 0}
++ .grove3 .grove-state{left:10px;top:14px}
++ .grove3 .grove-row{padding-left:38px}
++ .grove3 .grove-detail{left:0;right:0;top:auto;bottom:calc(64px + env(safe-area-inset-bottom));width:auto;border-radius:16px 16px 0 0;transform:translateY(105%);max-height:62vh;box-shadow:0 -10px 40px rgba(30,24,12,.24)}
++ .grove3.is-detail .grove-detail{transform:none}
++ .grove3 .grove-detail .grove-back{display:flex;margin:0 0 6px}
++ .grove-detail-close{display:none}
++}
++@media (min-width:900px){.grove3 .grove-detail-close{display:block}}
++
++/* Build 318 修正 A：单列列表 + 浮层细节（手机高度 / 首卡 / 抽屉） */
++@media (max-width:899px){
++ body[data-page="home"] .grove3 .grove-bar{margin-bottom:8px!important}
++ body[data-page="home"] .grove3 .grove-chips-row{margin:0!important}
++ body[data-page="home"] .grove3 .grove-cal-top{margin:4px 0 0!important}
++ body[data-page="home"] .grove3 .grove-stack{margin-top:6px!important}
++ body[data-page="home"] .grove3.is-detail .grove-detail,
++ body[data-page="home"] .grove3[data-view="detail"] .grove-detail{height:62vh!important;max-height:62vh!important;min-height:56vh!important;display:flex!important}
++}
++.grove3 .grove-legend{display:inline-flex;align-items:center;gap:10px;font-size:11px;color:var(--g-muted);white-space:nowrap}
++.grove3 .grove-legend span{display:inline-flex;align-items:center;gap:4px}
++.grove3 .grove-legend-dot{width:11px;height:11px;border-radius:50%;display:inline-block;box-sizing:border-box}
++.grove3 .grove-legend-dot.is-open{border:2px solid #8ea79a;background:transparent}
++.grove3 .grove-legend-dot.is-done{background:#3f7a4f}
++.grove3 .grove-legend-dot.is-overdue{border:2px solid #c2762a;background:transparent}
++.grove3 .grove-legend-dot.is-cancelled{background:#9aa0a6}
++/* 单列卡片流：940 上限居中；旧两列布局全部失效 */
++.grove3 .grove-cols{display:block!important}
++.grove3 .grove-stack{max-width:940px;margin:6px auto 0;display:flex;flex-direction:column;gap:6px}
++.grove3 .grove-stack #task-groups{display:block}
++.grove3 .grove-later-list{margin:10px 0 0}
++.grove3 .grove-later-list>h2{margin:0 0 4px}
++/* 状态点 18px */
++.grove3 .grove-row{position:relative;padding-left:38px!important}
++.grove3 .grove-state{position:absolute;left:14px;top:16px;width:18px;height:18px;display:grid;place-items:center}
++.grove3 .grove-state i{width:18px;height:18px;border-radius:50%;box-sizing:border-box;display:grid;place-items:center;font-style:normal}
++.grove3 .grove-row.is-state-open .grove-state i{border:2px solid #93aaa0;background:transparent}
++.grove3 .grove-row.is-state-done .grove-state i{background:#3f7a4f;border:2px solid #3f7a4f}
++.grove3 .grove-row.is-state-done .grove-state i::after{content:"✓";color:#fff;font-size:11px;line-height:1}
++.grove3 .grove-row.is-state-overdue .grove-state i{border:2px solid #c2762a;background:transparent}
++.grove3 .grove-row.is-state-cancelled .grove-state i{background:#9aa0a6;border:2px solid #9aa0a6}
++.grove3 .grove-row.is-state-done.active,.grove3 .grove-row.is-state-done{opacity:.62}
++.grove3 .grove-row.is-state-cancelled .grove-title{text-decoration:line-through}
++/* 浮层详情：桌面右侧 430 fixed；列表不重排 */
++.grove3{position:relative}
++.grove3 .grove-detail{position:fixed!important;top:18px;right:18px;bottom:18px;width:430px;max-width:calc(100vw - 36px);z-index:40;border-radius:16px;box-shadow:0 18px 48px rgba(20,16,8,.28);transform:translateX(calc(100% + 24px));transition:transform .16s ease;display:flex!important;flex-direction:column;overflow:hidden;max-height:none}
++.grove3.is-detail .grove-detail,.grove3[data-view="detail"] .grove-detail{transform:none}
++.grove3 .grove-detail-backdrop{position:fixed;inset:0;background:rgba(20,16,8,.18);z-index:39;display:none}
++.grove3.is-detail .grove-detail-backdrop,.grove3[data-view="detail"] .grove-detail-backdrop{display:block}
++.grove3 .grove-detail-close{position:absolute;top:8px;right:10px;z-index:2;width:32px;height:32px;min-height:0;border-radius:50%;border:1px solid var(--g-line);background:var(--g-surface);color:var(--g-ink);font-size:14px}
++@media (max-width:899px){
++ .grove3 .grove-detail{left:0;right:0;top:auto;bottom:0;width:auto;max-width:none;border-radius:16px 16px 0 0;box-shadow:0 -10px 34px rgba(20,16,8,.22);transform:translateY(calc(100% + 12px))}
++ .grove3.is-detail .grove-detail,.grove3[data-view="detail"] .grove-detail{transform:none}
++}
++
++/* Build 318 修正 B：手机「明天 N」热区补到 44（视觉仍 36） */
++@media (max-width:899px){
++ .grove3 .grove-bar-later{position:relative}
++ .grove3 .grove-bar-later::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
++}
++
++/* Build 318 修正 C：已取消卡也用同一状态点，保持单列观感一致 */
++.grove3 .grove-later{position:relative;padding-left:38px}
++.grove3 .grove-later .grove-state{left:14px;top:14px}
++
++/* Build 318 修正 D：遮罩不吞点击（点空白/✕关闭；点卡片直接切换，列表与导航保持可点） */
++.grove3 .grove-detail-backdrop{pointer-events:none!important}
++
++/* Build 318 修正 E：浮层正文独立滚动（详情变长时可滚到「更多操作」） */
++.grove3 .grove-detail-body{overflow-y:auto;overscroll-behavior:contain;min-height:0}
++
++/* Build 318 修正 F：浮层关闭时内容不可见（避免离屏内容仍被判定 visible），打开态由 is-detail / data-view 控制 */
++.grove3 .grove-detail{visibility:hidden}
++.grove3.is-detail .grove-detail,
++.grove3[data-view="detail"] .grove-detail{visibility:visible}
++
++/* Build 318 修正 G：手机浮层底部让出「主导航」高度，保证 nav 可点、列表尾部不被遮 */
++@media (max-width:899px){
++ .grove3 .grove-detail{bottom:calc(64px + env(safe-area-inset-bottom))!important;max-height:62vh}
++ .grove3 .grove-detail-bar{padding-bottom:10px} 
++}
++
++/* Build 318 修正 H：左栏页脚装饰线与导航不再叠字；「今天」高亮只留导航一处 */
++body.grove-wide[data-page="home"] aside .sidefoot{display:none!important}
++body.grove-wide[data-page="home"] aside nav[aria-label="主导航"]{padding-bottom:4px}
++body.grove-wide[data-page="home"] aside nav[aria-label="主导航"] button[data-page="home"]{display:none}
++
++
++/* Build 318 P0-1：一张卡只有一个 18px 圆点（状态点 + 勾选控件合体） */
++.grove3 .grove-check{position:absolute;left:14px;top:16px;width:18px;height:18px;min-height:0;margin:0;padding:0;display:grid;place-items:center;background:transparent;border:0;box-shadow:none}
++.grove3 .grove-check::after{content:"";position:absolute;inset:-13px;border-radius:50%}
++.grove3 .grove-check input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:2}
++.grove3 .grove-check.is-static{cursor:default}
++.grove3 .grove-check .grove-state{position:static;left:auto;top:auto;width:18px;height:18px}
++.grove3 .grove-check .grove-state i{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;border:1.6px solid #9aa89f;background:transparent;color:#fff;font-size:10px;line-height:1;font-weight:700}
++.grove3 .grove-row.is-state-done .grove-check .grove-state i{background:var(--g-accent);border-color:var(--g-accent)}
++.grove3 .grove-row.is-state-overdue .grove-check .grove-state i{border-color:#b4701f}
++.grove3 .grove-row.is-state-cancelled .grove-check .grove-state i{background:#9aa0a6;border-color:#9aa0a6}
++.grove3 .grove-check input:focus-visible+.grove-state{outline:2px solid var(--g-accent);outline-offset:3px;border-radius:50%}
++/* P0-2：事实相对词不再进徽章行（.grove-chips.is-facts 仅保留给读屏与既有测试，视觉隐藏但不影响 innerText） */
++/* P1-3：看板顶部小导航（宽屏把左栏主导航移到这里；手机仍用底部固定导航） */
++.grove-topnav{display:flex;justify-content:flex-end;margin:2px 0 0}
++.grove-topnav nav[aria-label="主导航"]{display:flex!important;flex-direction:row!important;gap:2px!important;margin:0!important;padding:0!important;width:auto!important;grid-auto-flow:row!important}
++.grove-topnav nav button{width:auto!important;min-height:26px!important;height:26px;padding:0 8px!important;border:0!important;background:transparent!important;box-shadow:none!important;font-size:11.5px!important;color:var(--g-muted)!important;text-align:center!important;letter-spacing:0!important}
++.grove-topnav nav button.active{color:var(--g-accent)!important;font-weight:600!important;text-decoration:underline;text-underline-offset:3px}
++@media (max-width:899px){.grove3 .grove-check{left:10px;top:14px}.grove-topnav{display:none}}
+diff --git a/test_daily_list_expression.py b/test_daily_list_expression.py
+new file mode 100644
+index 0000000..8423bac
+--- /dev/null
++++ b/test_daily_list_expression.py
+@@ -0,0 +1,449 @@
++#!/usr/bin/env python3
++"""Display-only contract for the daily-list body: one requirement reads once (C1-C8).
++
++The product's daily card used to stack a task's body, 提交要求 and 补充要求 on top of each other, repeat the title's
++own words in the body, and fold the family's arrangement into the teacher's words. These tests pin the display contract
++on fully fictional tasks: labels never read in the body, a clause reads once, a restatement of the title goes, the
++title's opening is not repeated, a line the card already reads goes, labelled lines keep their new words, the family's
++arrangement reads apart in plan_lines, and no line this display edited keeps a dangling full-width semicolon. Nothing
++here writes a store: the same saved action and the same task dict read unchanged after the call.
++
++The comparison is the display's own: _plain (NFKC, case, whitespace, punctuation) equality, continuous substring, or
++the same words with only particles (了/着/里/也/都/就/和…) differing. There is no similarity threshold: a word that is
++not exactly (or particle-)equal is never a repeat, so 明天/后天, 练习册/练习本, 1号本/2号本 and a title's 第1题 never
++swallow a line that adds one.
++"""
++import copy
++import unittest
++
++import family_agenda
++
++
++DAY = '2026-11-04'
++CHILD = {'id': 'child-display-1', 'name': '小禾'}
++
++# The three fictional tasks from the parent's report, rebuilt from the saved words. The actions are display input only:
++# no store and no model is involved in this file.
++ENGLISH_TITLE = '英语：完成《每日练习》'
++ENGLISH_ACTION = ('完成英语《每日练习》：一、看图选词第1—3题；二、标星单词 under、near 各抄写一遍。不需要录音。'
++                  '做完放进英语夹里，明天带来。\n'
++                  '提交要求：做完放进英语夹，明天带来。\n'
++                  '补充要求：完成英语《每日练习》。\n'
++                  '完成后放进英语夹里，明天带到学校。\n'
++                  '不用在群里发照片。')
++ENGLISH_LINES = ['一、看图选词第1—3题',
++                 '二、标星单词 under、near 各抄写一遍。',
++                 '不需要录音。',
++                 '做完放进英语夹里，明天带来。',
++                 # Kept on purpose: 完成后…带到学校 is neither a continuous part of, nor particle-equal to,
++                 # 做完…明天带来, so dropping it would delete the words 学校/完成 rather than a pure repetition. This is
++                 # exactly the case where a similarity score is not allowed to decide: C2 still reads every identical
++                 # clause once, and C3 below shows no line only retells the title.
++                 '完成后放进英语夹里，明天带到学校。',
++                 '不用在群里发照片。']
++
++MATH_TITLE = '数学：完成《每日练习》第26页第1—3题'
++MATH_ACTION = ('完成数学《每日练习》第26页第1—3题；第4题不做。每题写出算式并验算。\n'
++               '提交要求：家长签字后周五交给数学周老师')
++MATH_LINES = ['第4题不做。', '每题写出算式并验算。', '家长签字后周五交给数学周老师']
++
++CHINESE_TITLE = '语文：朗读《风经过小巷》第2、3自然段'
++CHINESE_ACTION = ('朗读《风经过小巷》第2、3自然段。各读两遍，读给家长听。\n'
++                  '补充要求：不用录音，也不用上传，明早我抽听。')
++CHINESE_LINES = ['各读两遍，读给家长听。', '不用录音，也不用上传，明早我抽听。']
++CHINESE_PLAN = '林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍'
++
++LABELS = ('提交要求', '补充要求', '补充说明', '正文')
++
++
++def plain(text):
++    """The same comparison shape the display uses: NFKC width, case, whitespace and punctuation do not make a word new."""
++    import unicodedata
++    text = unicodedata.normalize('NFKC', str(text)).lower()
++    return ''.join(ch for ch in text if not (ch.isspace() or unicodedata.category(ch).startswith('P')))
++
++
++class LabelTests(unittest.TestCase):
++    """C1: no 提交要求：/补充要求：/补充说明：/正文： tag reads in the body; the colon goes with the tag."""
++
++    def test_each_label_tag_is_left_out_whole_with_its_colon(self):
++        for tag in LABELS:
++            for mark in ('：', ':'):
++                with self.subTest(tag=tag, mark=mark):
++                    shown = family_agenda.action_lines('语文：A', tag + mark + '明天早上交练习册。')
++                    self.assertEqual(shown, ['明天早上交练习册。'])
++                    self.assertFalse(any(line.startswith(tag) for line in shown), shown)
++                    self.assertNotIn(tag + mark, ''.join(shown))
++
++    def test_a_label_whose_content_the_body_already_reads_is_dropped_whole(self):
++        # 提交要求 repeats 做完放进英语夹里，明天带来, which the card already shows: only the tag word changes.
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown, ENGLISH_LINES)
++        self.assertNotIn('提交要求', ''.join(shown))
++
++
++class ClauseOnceTests(unittest.TestCase):
++    """C2: a clause reads once across lines and inside one line; full-width/half-width and spacing do not hide it."""
++
++    def test_the_same_clause_is_not_read_twice_across_lines(self):
++        shown = family_agenda.action_lines('语文：A', '读第3课两遍，家长签字。\n家长签字。')
++        self.assertEqual(shown, ['读第3课两遍，家长签字。'])
++        self.assertEqual(plain(''.join(shown)).count('家长签字'), 1)
++
++    def test_the_same_clause_is_not_read_twice_inside_one_line_and_keeps_the_full_stop(self):
++        shown = family_agenda.action_lines('语文：A', '读第3课，读第3课。')
++        self.assertEqual(shown, ['读第3课。'])
++        self.assertEqual(plain(''.join(shown)).count('读第3课'), 1)
++
++    def test_a_dropped_middle_clause_keeps_the_remaining_order_and_separator(self):
++        self.assertEqual(family_agenda.action_lines('语文：A', '读第3课，读第3课，家长签字。'), ['读第3课，家长签字。'])
++        self.assertEqual(''.join(family_agenda.action_lines('语文：A', 'A，A，B。')), 'A，B。')
++
++    def test_spacing_and_punctuation_do_not_make_a_new_clause(self):
++        shown = family_agenda.action_lines('语文：A', '家长签字。\n 家长 签字！')
++        self.assertEqual(plain(''.join(shown)).count('家长签字'), 1)
++
++    def test_a_shorter_form_of_a_shown_clause_is_a_repeat(self):
++        shown = family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。')
++        self.assertEqual(shown, ['做完放进英语夹里，明天带来。'])
++
++
++class RestatementTests(unittest.TestCase):
++    """C3: a line the title already says whole is left out, but only when nothing of it is new."""
++
++    def test_a_line_that_only_retells_the_title_is_left_out(self):
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '补充要求：完成英语《每日练习》。'), [])
++
++    def test_one_new_word_keeps_the_line_even_when_the_title_says_the_rest(self):
++        # 本 is not in the title: this is a different object, not a restatement.
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》本。'),
++                         ['完成英语《每日练习》本。'])
++        # 自然段 says a real word the title's 段 does not: the frozen line stays.
++        self.assertEqual(family_agenda.action_lines('语文：朗读《秋天的小院》第2、3段两遍',
++                                                   '朗读《秋天的小院》第2、3自然段两遍。'),
++                         ['朗读《秋天的小院》第2、3自然段两遍。'])
++
++
++class TitleOpeningTests(unittest.TestCase):
++    """C4: the title's own opening reads once in the title; the rest of the line stays, with its own new words."""
++
++    def test_the_titles_own_opening_gives_way_and_the_new_requirement_stays(self):
++        shown = family_agenda.action_lines(MATH_TITLE, '完成数学《每日练习》第26页第1—3题；第4题不做。')
++        self.assertEqual(shown, ['第4题不做。'])
++        self.assertFalse(any('第26页' in line for line in shown), shown)
++
++    def test_a_title_word_the_line_itself_adds_keeps_the_whole_line(self):
++        # 完成 is that line's own word (the title is 数学：练习册第18页第2、4、6题).
++        shown = family_agenda.action_lines('数学：练习册第18页第2、4、6题',
++                                           '完成练习册第18页第2、4、6题；每题先列式，再写完整计算过程，算完后逐题验算。')
++        self.assertEqual(shown, ['完成练习册第18页第2、4、6题；', '每题先列式，再写完整计算过程，算完后逐题验算。'])
++
++    def test_a_new_question_number_is_never_cut_as_a_title_repeat(self):
++        # The title says 第1题 only; 第2题 is new, so the opening cannot give way (RED counter-example).
++        self.assertEqual(family_agenda.action_lines('数学：完成第20页第1题', '完成第20页第1、2题'),
++                         ['完成第20页第1、2题'])
++
++    def test_a_swapped_page_and_question_number_is_not_a_title_repeat(self):
++        self.assertEqual(family_agenda.action_lines('语文：完成练习册第2页第3题', '完成练习册第3页第2题'),
++                         ['完成练习册第3页第2题'])
++
++
++class SameContentTests(unittest.TestCase):
++    """C5: a line identical to a shown line, or different only by particles, goes; near-but-different words stay."""
++
++    def test_an_identical_later_line_is_dropped(self):
++        self.assertEqual(family_agenda.action_lines('语文：A', '读第3课两遍，家长签字。\n读第3课两遍，家长签字！'),
++                         ['读第3课两遍，家长签字。'])
++
++    def test_a_line_differing_only_by_particles_is_the_same_clause(self):
++        # 里 is a particle: 做完放进英语夹 and 做完放进英语夹里 are the same words.
++        self.assertEqual(family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。'),
++                         ['做完放进英语夹里，明天带来。'])
++
++    def test_near_but_different_words_are_never_swallowed(self):
++        cases = [('明天交练习册。\n明天不交练习册。', ['明天交练习册。', '明天不交练习册。']),
++                 ('今天交练习册。\n明天交练习册。', ['今天交练习册。', '明天交练习册。']),
++                 ('带上练习册。\n带上练习本。', ['带上练习册。', '带上练习本。']),
++                 ('不用明天交。\n不用后天交。', ['不用明天交。', '不用后天交。']),
++                 ('1号本写。\n2号本写。', ['1号本写。', '2号本写。'])]
++        for action, expected in cases:
++            with self.subTest(action=action):
++                self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', action), expected)
++
++    def test_the_english_completion_line_stays_because_it_is_not_the_same_words(self):
++        self.assertIn('完成后放进英语夹里，明天带到学校。', family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION))
++
++
++class NewInformationTests(unittest.TestCase):
++    """C6: a labelled line's new clauses stay; only the clauses the card already reads are left out."""
++
++    def test_a_labels_new_requirement_is_kept_without_its_label(self):
++        shown = family_agenda.action_lines(MATH_TITLE, MATH_ACTION)
++        self.assertFalse(any(line.startswith('提交要求') for line in shown), shown)
++        self.assertTrue(any('交给数学周老师' in line for line in shown), shown)
++
++    def test_a_labelled_extension_folds_into_the_shown_line_once(self):
++        # The frozen card from test_child_study_ui.cjs, unchanged: 明天早上交练习册 extends 明天早上交.
++        shown = family_agenda.action_lines('语文：完成《星芽阅读练习册》第28页第1、2题',
++                                           '完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。\n'
++                                           '提交要求：明天早上交练习册。')
++        self.assertEqual(shown, ['答案写在练习册上。', '今晚完成，明天早上交练习册。'])
++        self.assertEqual(''.join(shown).count('明天早上交'), 1)
++
++    def test_a_label_that_does_not_extend_the_last_clause_becomes_its_own_line_not_a_scramble(self):
++        # RED counter-example: folding this into the first sentence produced a sentence that is not a continuous part
++        # of the saved words (明天交练习册和卷子，然后读课文。). It must instead read as its own line after the saved one.
++        shown = family_agenda.action_lines('语文：A', '明天交练习册，然后读课文。\n提交要求：明天交练习册和卷子。')
++        self.assertEqual(shown, ['明天交练习册，然后读课文。', '明天交练习册和卷子。'])
++        self.assertIn(''.join(shown), '明天交练习册，然后读课文。明天交练习册和卷子。')
++
++
++class GoldenTaskTests(unittest.TestCase):
++    """The three fictional tasks from the parent's report, in their fixed display form (C1-C8 together)."""
++
++    def test_english_card_reads_once(self):
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown, ENGLISH_LINES)
++        self.assertFalse(any(line.startswith(label) for line in shown for label in LABELS), shown)
++        self.assertFalse(any('每日练习' in line for line in shown), shown)
++
++    def test_math_card_reads_once_and_keeps_the_new_handback(self):
++        self.assertEqual(family_agenda.action_lines(MATH_TITLE, MATH_ACTION), MATH_LINES)
++
++    def test_chinese_body_reads_once(self):
++        self.assertEqual(family_agenda.action_lines(CHINESE_TITLE, CHINESE_ACTION), CHINESE_LINES)
++
++
++class PlanLineTests(unittest.TestCase):
++    """C7: the family's arrangement reads apart in plan_lines; lines keeps only the teacher's words."""
++
++    def _row(self, task, item):
++        view = family_agenda.day_view([item], [task], [], CHILD, DAY, DAY, 'wrong')
++        return view['groups'][0]['items'][0], view
++
++    def _task_and_item(self, focus='next', scheduled=True):
++        task = {'id': 'task-display-1', 'child': CHILD['name'], 'title': CHINESE_TITLE, 'action': CHINESE_ACTION,
++                'action_lines': family_agenda.action_lines(CHINESE_TITLE, CHINESE_ACTION),
++                'focus': {'next_action': CHINESE_PLAN} if focus == 'next' else None,
++                'source': 'school', 'school_origin': True, 'progress': None}
++        agenda = {'due_on': DAY, 'due_kind': 'deadline', 'category': 'homework'}
++        if scheduled:
++            agenda['scheduled_on'] = DAY
++        item = {'id': 'item-display-1', 'kind': 'task', 'task_id': task['id'], 'title': CHINESE_TITLE,
++                'child_ids': [CHILD['id']], 'agenda': agenda, 'closed': False, 'status': '待跟进'}
++        return task, item, agenda
++
++    def test_the_family_arrangement_reads_apart_from_the_teachers_words(self):
++        task, item, _ = self._task_and_item()
++        before = copy.deepcopy(task)
++        row, _ = self._row(task, item)
++        self.assertEqual(row['lines'], CHINESE_LINES)
++        self.assertEqual(row['plan_lines'], [CHINESE_PLAN])
++        self.assertFalse(any('家庭安排' in line for line in row['lines']), row['lines'])
++        self.assertFalse(any('家庭安排' in line for line in row['plan_lines']), row['plan_lines'])
++        self.assertEqual(task, before, 'display only: the task is not rewritten')
++
++    def test_the_family_text_is_truly_removed_from_lines_not_copied(self):
++        task, item, _ = self._task_and_item()
++        row, _ = self._row(task, item)
++        self.assertEqual(len(row['lines']), len(CHINESE_LINES))
++        self.assertNotIn(CHINESE_PLAN, row['lines'])
++
++    def test_plan_lines_defaults_to_empty_and_keeps_every_other_row_key(self):
++        task, item, _ = self._task_and_item(focus=None)
++        row, _ = self._row(task, item)
++        self.assertEqual(row['plan_lines'], [])
++        self.assertEqual(row['lines'], CHINESE_LINES)
++        for key in ('id', 'kind', 'task_id', 'title', 'subject', 'category', 'status', 'closed', 'pending_review',
++                    'origin', 'origin_label', 'lines', 'complete_words', 'facts', 'today', 'when',
++                    'publications', 'published_at', 'publisher', 'progress', 'records', 'wrong'):
++            self.assertIn(key, row)
++        # A conditional key stays conditional: no school_material on this item, so no material key and no version key.
++        self.assertNotIn('material', row)
++        self.assertNotIn('version', row)
++
++    def test_a_version_latest_family_line_is_still_read_as_a_plan(self):
++        task, item, _ = self._task_and_item(focus=None)
++        item = dict(item, version={'state': 'latest', 'title': CHINESE_TITLE,
++                                   'lines': ['家庭安排（计划 ' + DAY + '）：家长自己的安排']})
++        row, _ = self._row(task, item)
++        self.assertEqual(row['plan_lines'], ['家长自己的安排'])
++        self.assertEqual(row['lines'], [])
++
++
++class FollowUpTests(unittest.TestCase):
++    """C9: a later notice's whole original reads apart in follow_ups; a bare line with no label stays in lines.
++
++    The merge labels update/append/cancel originals; a same-fold original is stored bare. The display separates only the
++    labelled ones, because a bare line can as well be a new requirement (不用在群里发照片) as a restatement. That choice is
++    pinned here so a later cleanup cannot quietly move every same-fold line out of the card.
++    """
++
++    BASE = '完成练习册第3页第2题。\n每题写出算式并验算。\n不用在群里发照片。'
++    LATER = ('\n后到更正原文（2026-11-04 16:00）：第4题不做。'
++             '\n后到补充原文（2026-11-04 17:00）：周五交给数学周老师。'
++             '\n取消依据（2026-11-04 18:00）：原订美术课带落叶事项取消。'
++             '\n后到原文（更正/取消依据，不进本事项日期判断）：2026-11-04 16:00（message:qa:x）「原第1—4题」')
++
++    def _row(self, task, item):
++        view = family_agenda.day_view([item], [task], [], CHILD, DAY, DAY, 'wrong')
++        return view['groups'][0]['items'][0]
++
++    def _task_and_item(self, action, focus='next', version=None):
++        title = '数学：完成练习册第3页第2题'
++        task = {'id': 'task-follow-1', 'child': CHILD['name'], 'title': title, 'action': action,
++                'focus': {'next_action': CHINESE_PLAN} if focus == 'next' else None,
++                'source': 'school', 'school_origin': True, 'progress': None}
++        agenda = {'due_on': DAY, 'due_kind': 'deadline', 'category': 'homework', 'scheduled_on': DAY}
++        item = {'id': 'item-follow-1', 'kind': 'task', 'task_id': task['id'], 'title': title,
++                'child_ids': [CHILD['id']], 'agenda': agenda, 'closed': False, 'status': '待跟进'}
++        if version is not None:
++            item['version'] = version
++        return task, item
++
++    def test_the_four_labelled_later_notices_read_apart_from_the_requirements(self):
++        task, item = self._task_and_item(self.BASE + self.LATER)
++        before = copy.deepcopy(task)
++        row = self._row(task, item)
++        self.assertEqual(row['lines'], self.BASE.splitlines())
++        self.assertEqual(row['follow_ups'], [
++            {'label': '更正', 'time': '2026-11-04 16:00', 'text': '第4题不做。'},
++            {'label': '提醒', 'time': '2026-11-04 16:00', 'text': '（message:qa:x）「原第1—4题」'},
++            {'label': '补充', 'time': '2026-11-04 17:00', 'text': '周五交给数学周老师。'},
++            {'label': '取消', 'time': '2026-11-04 18:00', 'text': '原订美术课带落叶事项取消。'},
++        ])
++        self.assertEqual(task, before, 'display only: the task and its saved action are not rewritten')
++
++    def test_a_bare_same_fold_line_without_a_label_stays_in_lines(self):
++        task, item = self._task_and_item(self.BASE + '\n朗读仍是《风经过小巷》第2、3自然段各两遍。\n今天18:30由家长听读。')
++        row = self._row(task, item)
++        self.assertEqual(row['follow_ups'], [])
++        self.assertIn('朗读仍是《风经过小巷》第2、3自然段各两遍。', row['lines'])
++        self.assertIn('今天18:30由家长听读。', row['lines'])
++
++    def test_a_prior_reminder_reads_before_the_later_correction_and_keeps_its_label(self):
++        later = ('\n后到更正原文（2026-11-04 17:00）：只做第1—3题。'
++                 '\n先前提醒（2026-11-04 16:00）：再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
++        task, item = self._task_and_item(self.BASE + later)
++        row = self._row(task, item)
++        self.assertEqual([f['label'] for f in row['follow_ups']], ['先前提醒', '更正'])
++        self.assertEqual([f['time'] for f in row['follow_ups']], ['2026-11-04 16:00', '2026-11-04 17:00'])
++        self.assertEqual(row['follow_ups'][0]['text'],
++                         '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
++
++    def test_multi_line_originals_are_kept_whole_in_arrival_order_at_the_same_time(self):
++        later = ('\n后到补充原文（2026-11-04 17:00）：交回时间不变。'
++                 '\n后到补充原文（2026-11-04 17:00）：周五仍交给数学周老师。'
++                 '\n后到更正原文（2026-11-04 16:00）：第4题不做。')
++        task, item = self._task_and_item(self.BASE + later)
++        row = self._row(task, item)
++        self.assertEqual([f['text'] for f in row['follow_ups']],
++                         ['第4题不做。', '交回时间不变。', '周五仍交给数学周老师。'])
++        self.assertEqual([f['time'] for f in row['follow_ups']],
++                         ['2026-11-04 16:00', '2026-11-04 17:00', '2026-11-04 17:00'])
++
++    def test_no_follow_up_payload_reads_unchanged_and_keeps_the_row_keys(self):
++        task, item = self._task_and_item(self.BASE, focus=None)
++        row = self._row(task, item)
++        self.assertEqual(row['follow_ups'], [])
++        self.assertEqual(row['plan_lines'], [])
++        self.assertEqual(row['lines'], self.BASE.splitlines())
++        self.assertIn('follow_ups', row)
++        self.assertEqual(set(row['follow_ups']), set())
++
++    def test_plan_lines_and_follow_ups_read_side_by_side(self):
++        task, item = self._task_and_item(self.BASE + self.LATER)
++        row = self._row(task, item)
++        self.assertEqual(row['plan_lines'], [CHINESE_PLAN])
++        self.assertEqual(len(row['follow_ups']), 4)
++        self.assertFalse(any('家庭安排' in line for line in row['lines']), row['lines'])
++
++    def test_a_version_latest_follow_up_is_read_as_a_notice(self):
++        task, item = self._task_and_item(self.BASE, focus=None,
++                                         version={'state': 'latest', 'title': '数学：完成练习册第3页第2题',
++                                                  'lines': ['家庭安排（计划 ' + DAY + '）：家长自己的安排',
++                                                            '后到更正原文（2026-11-04 16:00）：第4题不做。']})
++        row = self._row(task, item)
++        self.assertEqual(row['lines'], [])
++        self.assertEqual(row['plan_lines'], ['家长自己的安排'])
++        self.assertEqual(row['follow_ups'], [{'label': '更正', 'time': '2026-11-04 16:00', 'text': '第4题不做。'}])
++
++
++class CompoundRestatementTests(unittest.TestCase):
++    """C9b: a line that joins two already-shown requirements with 后/，/； reads once; no similarity, only exact pieces.
++
++    Each piece must read earlier; a digit or negation of its own must also read earlier; and at least two lines stay,
++    so a two-line card is never emptied. A compound line with one new piece stays whole instead of being split into a
++    fragment (带跳绳，穿运动鞋 keeps 穿运动鞋 and the sentence it was written in)."""
++
++    TITLE = '数学：完成练习册第3页第2题'
++
++    def test_a_line_combining_two_shown_requirements_is_left_out(self):
++        shown = family_agenda.action_lines(
++            self.TITLE, '完成练习册第3页第2题。\n请家长签字。\n周五交给数学老师。\n家长签字后周五交给数学老师。')
++        self.assertEqual(shown, ['请家长签字。', '周五交给数学老师。'])
++
++    def test_a_different_number_keeps_both_lines(self):
++        shown = family_agenda.action_lines('语文：A', '交作业到1号本。\n交作业到2号本。')
++        self.assertEqual(shown, ['交作业到1号本。', '交作业到2号本。'])
++
++    def test_a_negation_of_its_own_keeps_both_lines(self):
++        shown = family_agenda.action_lines('语文：A', '明天交练习册。\n明天不交练习册。')
++        self.assertEqual(shown, ['明天交练习册。', '明天不交练习册。'])
++
++    def test_a_compound_line_with_one_new_piece_keeps_its_whole_sentence(self):
++        shown = family_agenda.action_lines('语文：A', '带跳绳。\n带跳绳，穿运动鞋。')
++        self.assertEqual(shown, ['带跳绳。', '带跳绳，穿运动鞋。'])
++
++    def test_at_least_two_lines_remain(self):
++        shown = family_agenda.action_lines('语文：A', '请家长签字，周五交给数学老师。\n家长签字后周五交给数学老师。')
++        self.assertEqual(shown, ['请家长签字，周五交给数学老师。', '家长签字后周五交给数学老师。'])
++
++
++class PunctuationTests(unittest.TestCase):
++    """C8: a line this display edited never keeps a dangling full-width semicolon; lines stay whole short phrases."""
++
++    def test_no_edited_line_starts_or_ends_on_a_full_width_semicolon(self):
++        for title, action in ((ENGLISH_TITLE, ENGLISH_ACTION), (MATH_TITLE, MATH_ACTION), (CHINESE_TITLE, CHINESE_ACTION)):
++            with self.subTest(title=title):
++                shown = family_agenda.action_lines(title, action)
++                self.assertTrue(all(line.strip() for line in shown), shown)
++                self.assertFalse([line for line in shown if line.startswith('；') or line.endswith('；')], shown)
++
++    def test_the_english_first_step_keeps_no_dangling_semicolon(self):
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown[0], '一、看图选词第1—3题')
++        self.assertFalse(shown[0].endswith('；'))
++
++
++class FoldSemanticsTests(unittest.TestCase):
++    """C2/C5: only particles fold; an adverb that adds a step (再/也/还/都/就) never disappears as a repeat."""
++
++    def test_an_incremental_adverb_keeps_its_own_line(self):
++        for action, second in (('读一遍。\n再读一遍。', '再读一遍。'),
++                               ('语文要交。\n语文也要交。', '语文也要交。'),
++                               ('明天带练习册。\n明天再带练习册。', '明天再带练习册。'),
++                               ('明天不带练习册。\n明天不再带练习册。', '明天不再带练习册。')):
++            with self.subTest(action=action):
++                shown = family_agenda.action_lines('语文：A', action)
++                self.assertIn(second, shown)
++
++    def test_fold_still_joins_a_true_particle_only_repeat(self):
++        shown = family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。')
++        self.assertEqual(shown, ['做完放进英语夹里，明天带来。'])
++
++
++class TitleNumberGuardTests(unittest.TestCase):
++    """C3: a title range and a saved single number never flatten into one another."""
++
++    def test_a_saved_single_item_is_not_covered_by_the_title_range(self):
++        self.assertEqual(family_agenda.action_lines('数学：完成第1—3题', '完成第13题'), ['完成第13题'])
++        self.assertEqual(family_agenda.action_lines('语文：朗读第1、2段', '朗读第12段'), ['朗读第12段'])
++
++    def test_a_title_that_really_covers_the_line_still_reads_once(self):
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/test_school_fold_visibility.py b/test_school_fold_visibility.py
+new file mode 100644
+index 0000000..ee349b2
+--- /dev/null
++++ b/test_school_fold_visibility.py
+@@ -0,0 +1,274 @@
++"""Fictional regressions: a fold's later original stays visible for all four changes and its day wins.
++
++The program folds a proved later notice into the waiting card or the saved task instead of opening an orphan card. These
++tests keep that fold from hiding its own text: every line of the later original stays in order (a correction may state
++its new range on one line and its new day on the next), the labelled replacement and the ground of a cancellation stay
++readable, a moved day counts with or without a hand-back verb, and the later message stays readable in the task's
++sources by the same note convention on both the pending-card and the saved-task path (never a cited message line, which
++the agenda would read as one of the affair's own day-role messages).
++"""
++import datetime as dt
++import json
++import sqlite3
++import unittest
++
++import family_agent as agent
++
++NOW = dt.datetime(2026, 11, 4, 20, 0, tzinfo=agent.TZ)
++
++
++class _DB:
++    def __init__(self, connection):
++        self.connection = connection
++
++    def __enter__(self):
++        return self.connection
++
++    def __exit__(self, *error):
++        return False
++
++
++class _Store:
++    """A store shim with only the read/write surface the fold helpers touch."""
++
++    def __init__(self, connection):
++        self.connection = connection
++
++    def _db(self):
++        return _DB(self.connection)
++
++
++def quote(ref, text, time, change='same'):
++    return dict(ref=ref, text=text, time=time, sender='数学李老师', publisher='publisher:fiction-math',
++                kind='text', content_incomplete=False, attachments=[], related_messages=[ref], source='虚构班级')
++
++
++def folded(change, ref='message:fiction-group:9', text='数学《星河练习》第12页第1—3题，今晚完成。'):
++    return dict(item_id='agent-card', refs=[ref], change=change, at=NOW.isoformat(),
++                originals=[dict(ref=ref, text=text, time='2026-11-04T17:00:00+08:00')])
++
++
++class FoldedLinesTest(unittest.TestCase):
++    def test_reminder_moves_to_a_later_notice_not_the_body(self):
++        # A same-fold reminder is a later notice, not another current requirement: its whole original is a follow-up line.
++        lines = agent._school_folded_lines(dict(school_folded=[folded('same')]))
++        self.assertEqual(lines, ['后到提醒原文（2026-11-04 17:00）：数学《星河练习》第12页第1—3题，今晚完成。'])
++        import family_agenda
++        parsed = family_agenda._follow_up(lines[0])
++        self.assertEqual(parsed['label'], '提醒')
++        self.assertEqual(parsed['time'], '2026-11-04 17:00')
++        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', parsed['text'])
++
++    def test_appended_and_updated_lines_stay_labelled(self):
++        appended = agent._school_folded_lines(dict(school_folded=[folded('append', text='交回时间不变。')]))
++        self.assertIn('后到补充原文（2026-11-04 17:00）：交回时间不变。', appended)
++        updated = agent._school_folded_lines(dict(school_folded=[folded('update', text='更正第12页范围：只做第1—3题，第4题不做。')]))
++        self.assertTrue(any(line.startswith('后到更正原文（2026-11-04 17:00）：') and '第4题不做' in line for line in updated), updated)
++
++    def test_every_line_of_a_multiline_correction_stays_in_order(self):
++        text = '更正：数学《每日练习》第26页只做第1—3题。\n明天早上交回。'
++        lines = agent._school_folded_lines(dict(school_folded=[folded('update', text=text)]))
++        joined = '\n'.join(lines)
++        self.assertIn('只做第1—3题', joined)
++        self.assertIn('明天早上交回', joined)
++        self.assertLess(joined.index('只做第1—3题'), joined.index('明天早上交回'))
++
++    def test_every_line_of_a_multiline_cancellation_stays(self):
++        text = '明天美术改用教室材料，刚才收集落叶那一项取消。\n不用带叶子和旧书。'
++        lines = agent._school_folded_lines(dict(school_folded=[folded('cancel', text=text)]))
++        joined = '\n'.join(lines)
++        self.assertIn('取消', joined)
++        self.assertIn('不用带叶子和旧书', joined)
++
++    def test_cancellation_ground_stays_labelled(self):
++        lines = agent._school_folded_lines(dict(school_folded=[folded('cancel', text='刚才带落叶那一项取消，不用带。')]))
++        self.assertTrue(any(line.startswith('取消依据（2026-11-04 17:00）：') and '取消' in line for line in lines), lines)
++
++    def test_a_correction_line_names_the_sending_moment(self):
++        lines = agent._school_folded_lines(dict(school_folded=[folded('update', text='更正：只做第1—3题。')]))
++        self.assertTrue(lines and all(line.startswith('后到更正原文（2026-11-04 17:00）：') for line in lines), lines)
++
++    def test_an_unfolded_plan_adds_nothing(self):
++        self.assertEqual(agent._school_folded_lines({}), [])
++
++    def test_body_carries_every_change_after_the_first_lines(self):
++        plan = dict(school_folded=[folded('update', text='第12页只做第1—3题，第4题不做。')])
++        body = agent._school_folded_body(plan, '完成数学《星河练习》第12页。')
++        self.assertEqual(body.split('\n')[0], '完成数学《星河练习》第12页。')
++        self.assertTrue(any('第4题不做' in line for line in body.split('\n')))
++
++
++class FoldedDueTest(unittest.TestCase):
++    def test_an_update_states_its_own_new_day(self):
++        originals = [dict(text='改为下周一交回。', time='2026-11-04T17:00:00+08:00')]
++        self.assertEqual(agent._school_late_due(originals), '2026-11-09')
++
++    def test_a_reminder_keeping_the_day_states_the_same_day(self):
++        originals = [dict(text='数学《星河练习》今晚完成，周五交给我。', time='2026-11-04T16:00:00+08:00')]
++        self.assertEqual(agent._school_late_due(originals), '2026-11-06')
++
++    def test_a_moved_day_counts_without_a_hand_back_verb(self):
++        for text in ('改到11月10日交。', '推迟到11月10日交。', '改为11月10日交。', '改到11月10日。'):
++            originals = [dict(text=text, time='2026-11-04T17:00:00+08:00')]
++            self.assertEqual(agent._school_late_due(originals), '2026-11-10', text)
++
++    def test_no_stated_day_returns_nothing(self):
++        self.assertEqual(agent._school_late_due([dict(text='第12页范围不变。', time='2026-11-04T17:00:00+08:00')]), '')
++
++    def test_a_plain_completion_day_is_never_a_new_deadline(self):
++        self.assertEqual(agent._school_late_due([dict(text='今晚完成。', time='2026-11-04T17:00:00+08:00')]), '')
++
++
++class FoldPendingTest(unittest.TestCase):
++    """The waiting card keeps one identity: its body shows the later original and its due follows the change."""
++
++    def setUp(self):
++        self.connection = sqlite3.connect(':memory:')
++        self.connection.row_factory = sqlite3.Row
++        self.connection.execute('CREATE TABLE agent_items(id TEXT PRIMARY KEY, job_id TEXT, child_id TEXT, kind TEXT, '
++                                'title TEXT, body TEXT, evidence TEXT, due TEXT, created TEXT, updated TEXT, '
++                                'state TEXT, task_id TEXT, plan TEXT)')
++        self.store = _Store(self.connection)
++
++    def tearDown(self):
++        self.connection.close()
++
++    def save_card(self, body, due, plan):
++        self.connection.execute("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,created,updated,state,task_id,plan)"
++                                " VALUES('agent-card','job','child-1','school','待核对：数学','%s','[]','%s','%s','%s','pending','','%s')"
++                                % (body, due, NOW.isoformat(), NOW.isoformat(), json.dumps(plan)))
++        self.connection.commit()
++        return self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++
++    def fold(self, change, incoming_body='数学《每日练习》第26页只做第1—3题，第4题不做，今晚完成。'):
++        row = self.save_card('完成数学《每日练习》第26页。', '2026-11-06', dict(school_task=dict(state='review', goal='完成数学《每日练习》第26页。')))
++        item = dict(child_id='child-1', body=incoming_body, due='2026-11-06',
++                    evidence=[quote('message:fiction-wx:9', incoming_body, '2026-11-04T16:00:00+08:00')])
++        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
++                                              dict(item_id='agent-card', change=change), NOW)
++        self.assertTrue(ok)
++        return self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++
++    def test_a_replacement_joins_the_body_and_keeps_its_day(self):
++        row = self.fold('update')
++        self.assertIn('第4题不做', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++
++    def test_a_multiline_replacement_keeps_both_the_range_and_the_new_day(self):
++        row = self.fold('update', '更正：数学《每日练习》第26页只做第1—3题。\n明天早上交回。')
++        self.assertIn('只做第1—3题', row['body'])
++        self.assertIn('明天早上交回', row['body'])
++        self.assertEqual(row['due'], '2026-11-05')
++
++    def test_a_cancellation_shows_its_ground_and_clears_the_day(self):
++        row = self.fold('cancel', '刚才带两片落叶那一项取消，不用带叶子和旧书。')
++        self.assertIn('取消依据（2026-11-04 16:00）：', row['body'])
++        self.assertIn('不用带叶子和旧书', row['body'])
++        self.assertEqual(row['due'], '')
++
++    def test_a_notice_older_than_the_adopted_correction_is_not_called_a_correction(self):
++        # m04 arrived at 20:00 but was sent 16:00, before m09 (17:00) that already changed the range: it repeats the older
++        # wording, so the card must read it as an earlier reminder, never as the correction of "第1—4题" beside "第1—3题".
++        self.connection.execute('CREATE TABLE agent_messages(source_id TEXT, id TEXT, payload TEXT)')
++        for source_id, message_id, when, text in (
++                ('fiction-qq', '1', '2026-11-04T15:40:00+08:00', '数学《每日练习》第26页第1—4题，今晚完成。'),
++                ('fiction-qq', '9', '2026-11-04T17:00:00+08:00', '更正：第26页只做第1—3题，第4题不做。')):
++            self.connection.execute('INSERT INTO agent_messages VALUES(?,?,?)',
++                                    (source_id, message_id, json.dumps(dict(time=when, text=text), ensure_ascii=False)))
++        self.connection.commit()
++        plan = dict(school_task=dict(state='ready', goal='完成数学《每日练习》第26页第1—3题。'),
++                    school_messages=[dict(source_id='fiction-qq', message_id='1'),
++                                     dict(source_id='fiction-qq', message_id='9')])
++        self.save_card('完成数学《每日练习》第26页第1—3题，第4题不做。', '2026-11-06', plan)
++        item = dict(child_id='child-1', body='完成数学《每日练习》第26页1—4题，今晚做并签字，周五交。',
++                    due='2026-11-06',
++                    evidence=[quote('message:fiction-wx:4', '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。',
++                                    '2026-11-04T16:00:00+08:00')])
++        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
++                                              dict(item_id='agent-card', change='update'), NOW)
++        self.assertTrue(ok)
++        row = self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++        self.assertIn('先前提醒（2026-11-04 16:00）：', row['body'])
++        self.assertIn('第26页1—4题', row['body'])
++        self.assertNotIn('后到更正原文', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++        plan = json.loads(row['plan'])
++        self.assertEqual(plan['school_folded'][-1]['change'], 'earlier')
++        lines = [line for line in row['body'].split('\n') if '先前提醒' in line]
++        self.assertEqual(len(lines), 1)
++        # A string assertion is not enough: the projection must parse this line as one follow-up (label + time), or it stays
++        # in the card's own body and the old "1—4题" wording still reads beside "1—3题".
++        import family_agenda
++        parsed = family_agenda._follow_up(lines[0])
++        self.assertIsNotNone(parsed)
++        self.assertEqual(parsed['label'], '先前提醒')
++        self.assertEqual(parsed['time'], '2026-11-04 16:00')
++        self.assertIn('第26页1—4题', parsed['text'])
++
++    def test_a_plain_reminder_keeps_one_body_and_its_day(self):
++        row = self.fold('same')
++        # The reminder's words read as its own later notice; the card body keeps the requirement in force only.
++        self.assertIn('后到提醒原文（2026-11-04 16:00）：', row['body'])
++        self.assertIn('今晚完成', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++
++
++class FoldAcceptTest(unittest.TestCase):
++    """Accepting a card writes the folded lines into the task's action and the later message into its sources."""
++
++    def setUp(self):
++        self.connection = sqlite3.connect(':memory:')
++        self.connection.row_factory = sqlite3.Row
++        self.connection.execute('CREATE TABLE agent_items(id TEXT PRIMARY KEY, task_id TEXT)')
++        self.connection.execute('CREATE TABLE manual_tasks(id TEXT PRIMARY KEY, action TEXT, source TEXT, due TEXT)')
++        self.connection.execute("INSERT INTO agent_items(id,task_id) VALUES('agent-card','TASK-1')")
++        self.connection.execute("INSERT INTO manual_tasks(id,action,source,due) VALUES('TASK-1','完成数学《每日练习》。',"
++                                "'Agent建议:agent-card\\nmessage:fiction-qq:1\\n完成数学《每日练习》。','2026-11-06')")
++        self.connection.commit()
++        self.store = _Store(self.connection)
++
++    def tearDown(self):
++        self.connection.close()
++
++    def plan_for(self, change, text):
++        return dict(school_folded=[dict(refs=['message:fiction-wx:9'], change=change, at=NOW.isoformat(),
++                                        originals=[dict(ref='message:fiction-wx:9', text=text,
++                                                        time='2026-11-04T16:00:00+08:00')])])
++
++    def test_action_source_and_day_after_acceptance(self):
++        plan = self.plan_for('update', '数学《每日练习》第26页只做第1—3题，第4题不做。')
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        task = self.connection.execute("SELECT * FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        self.assertIn('第4题不做', task['action'])
++        self.assertIn('后到原文', task['source'])
++        self.assertIn('2026-11-04 16:00', task['source'])
++        self.assertIn('只做第1—3题', task['source'])
++        # A replacement is a readable note, never a cited message line: the agenda must not read the old range as a day role.
++        self.assertNotIn('\nmessage:fiction-wx:9', '\n' + task['source'])
++
++    def test_a_reminder_is_still_cited_as_a_message(self):
++        plan = self.plan_for('same', '数学《每日练习》第26页1—3题，今晚做，周五交。')
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        task = self.connection.execute("SELECT * FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        self.assertIn('message:fiction-wx:9', task['source'])
++
++    def test_the_note_carries_words_and_time_on_both_paths(self):
++        note = agent._school_fold_note(('message:fiction-wx:9', '只做第1—3题，第4题不做。', 'update',
++                                        '2026-11-04T16:00:00+08:00'))
++        self.assertTrue(note.startswith(agent._SCHOOL_FOLD_NOTE))
++        self.assertIn('2026-11-04 16:00', note)
++        self.assertIn('只做第1—3题', note)
++        self.assertFalse(note.startswith('message:'))
++
++    def test_a_second_acceptance_does_not_duplicate_lines(self):
++        plan = dict(school_folded=[folded('same')])
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        once = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        twice = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        self.assertEqual(once['action'], twice['action'])
++        self.assertEqual(once['source'], twice['source'])
++
++
++if __name__ == '__main__':
++    unittest.main()

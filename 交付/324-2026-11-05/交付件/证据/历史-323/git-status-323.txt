@@ -1,0 +1,2 @@
+# 构建源 /tmp/rel-323 @ 5c980dd：git status --porcelain 为空（干净），10 个输入全部来自 commit。
+# 主仓库同 HEAD，构建期间未写入；主仓库工作区无本轮改动。

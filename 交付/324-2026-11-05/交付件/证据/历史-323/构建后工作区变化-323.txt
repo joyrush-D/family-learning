@@ -1,0 +1,7 @@
+Build 323 构建后工作区复核（记录时间 2026-11-05T15:25Z）
+
+构建源: /tmp/rel-323 @ 5c980dd6d1b34e25417cb0224d8ad39d48c8413c
+构建后 git status --porcelain: 空（worktree 干净，10 个输入全部来自 commit）
+主仓库: HEAD 5c980dd6d1b34e25417cb0224d8ad39d48c8413c，构建期间只读；git status --porcelain: 空
+
+复核结论：构建输入与冻结 sha 一致，构建前后无漂移；323 只改后台 Python 与文档，App 代码（Swift/网页资源）与 322 相同，二进制只差 CFBundleVersion。

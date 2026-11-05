@@ -1,0 +1,6 @@
+构建源 worktree（/tmp/rel-322，commit 9a5d4d7）：git status --porcelain 为空（干净）。
+
+构建期间主仓库（/Users/joyrush/.local/share/family-learning/public-integration-20260926）工作区另有 2 个未提交文件：
+  M family_agent.py                (sha1 3d8807c8…，与 commit 内版本相同 = 无内容变化，仅 mtime）
+  M test_school_fold_visibility.py (sha1 90e84511…，与 commit 内版本相同 = 无内容变化，仅 mtime）
+  说明：这是 323 的后台改动草稿区，不属于 322 的构建输入；322 App 全部输入取自 commit 9a5d4d7。

@@ -1,0 +1,38 @@
+记录时间: 2026-11-05T15:07:00Z
+构建源: commit worktree /tmp/rel-322（git worktree add /tmp/rel-322 9a5d4d731035b93a136dba680d5915271f121b00）
+HEAD: 9a5d4d731035b93a136dba680d5915271f121b00
+lead 冻结 HEAD: 9a5d4d731035b93a136dba680d5915271f121b00
+HEAD 与冻结 sha1: 一致
+构建号: 322
+构建时间: 2026-11-05T15:03:36Z – 2026-11-05T15:04:16Z
+构建源 worktree 状态: git status --porcelain 为空（干净）
+
+十个输入文件 sha1（全部取自该 commit，逐项与 lead 冻结表核对一致）:
+  3ccac719db31aade28f5afd2691ce20a8801c0b1  packaging/macos/Sources/Workspace.swift   (5611 行)
+  6623929e1529d5226af4fbce06ac28dc2d76afe7  packaging/macos/Sources/WorkspaceAPI.swift (500 行)
+  89606c23d0ccbda14ef462f18b7d9ff474d4ae48  calendar.js                                (1433 行)
+  6ecf5ad184f1cbecef4704f1c6c86457f0a3932d  workbench.css                              (1362 行)
+  4c17738bb0917e0eee4c098214502ddbc363b333  app.js                                     (2564 行)
+  3d8807c865287b8fc46fc6ff7495df4b40fd1235  family_agent.py
+  fd7e690a0f2288f09e73d8bb581ed70e3a0fe0f3  family_agenda.py
+  bf2c974be34b6460d980d18b8e2ffc1498611be1  family_llm.py
+  6a000a30061f64b46acf0620c27906f20c2976f2  test_daily_list_expression.py
+  43f18a4235a36b6267a110ccdbd3cb41979304c3  test_native_workspace.cjs
+
+被 .gitignore 忽略但在 commit 里跟踪的测试: test_daily_list_expression.py、test_school_fold_visibility.py
+（两者内容已随 commit 9a5d4d7 固定；test_school_fold_visibility.py sha1 = 90e84511c610506ad54d1beceddeb89ee47e7401）
+
+二进制:
+  path: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang
+  bytes: 8476960
+  sha1:  32b053e8200363b80a8f81df341592a231e08c65
+  CFBundleVersion: 322
+
+关于 fix.patch:
+  本次构建输入全部来自 commit 9a5d4d7 的干净 worktree，没有本地未提交补丁，因此不生成 fix.patch
+  （同 319：源码已 committed）。构建进行时主仓库工作区另有 2 个未提交文件（family_agent.py、
+  test_school_fold_visibility.py，属于 323 的后台改动），它们不属于本包的构建输入，也不进入本 App/证据。
+
+后台后续（仅记录，不含在 App 二进制里）:
+  出包后 lead 又随后台更新 family_agenda.py → 234a99794c4e2a22d631ed1520b44b7dd81f3d50（HEAD c513d44e，
+  纯 Python 分类器正则收紧），以及 test_daily_list_expression.py → 58cc5a28…。App 二进制不变，不需要重装。

@@ -1,0 +1,55 @@
+# Build 319 网页六宽度实测（跨天标尺 + 详情时间线）
+
+数据：`演示数据/十八渠道快照/`（隔离副本）+ `FAMILY_TODAY=2026-11-04`（固定快照日）+ 1 条虚构单日任务「语文：完成《识字小卡》练习」→ child-1 今天 4 张卡（含 1 张单日无标尺）。
+脚本：`工具/ui六宽度.sh` → `工具/ui七宽度.cjs`（Playwright headless，chrome 通道）。REPO：`/tmp/rel-319`（commit 5e3c579 worktree），不打开 App、不写 REPO/快照。
+
+## 断言
+
+```
+failures: []
+```
+
+## 逐宽度
+
+| 宽度 | 模式 | 行数 | 首卡 top | 横向滚动 | pageerror | 非 GET 请求 | 跨天标尺（天/点） | 浮层宽/高 |
+|---|---|---|---|---|---|---|---|---|
+| 360 | phone | 4 | 200 | 0 | 0 | 0 | 语文:单日天/0点, 语文:2天/2点, 英语:2天/2点, 数学:3天/3点 | 360×484 |
+| 390 | phone | 4 | 200 | 0 | 0 | 0 | 语文:单日天/0点, 语文:2天/2点, 英语:2天/2点, 数学:3天/3点 | 390×523 |
+| 768 | phone | 4 | 200 | 0 | 0 | 0 | 语文:单日天/0点, 语文:2天/2点, 英语:2天/2点, 数学:3天/3点 | 760×558 |
+| 1024 | medium | 4 | 356 | 0 | 0 | 0 | 语文:单日天/0点, 语文:2天/2点, 英语:2天/2点, 数学:3天/3点 | 430×864 |
+| 1200 | desktop | 4 | 188 | 0 | 0 | 0 | 语文:单日天/0点, 语文:2天/2点, 英语:2天/2点, 数学:3天/3点 | 430×824 |
+| 1440 | desktop | 4 | 188 | 0 | 0 | 0 | 语文:单日天/0点, 语文:2天/2点, 英语:2天/2点, 数学:3天/3点 | 430×824 |
+
+## 标尺与时间线文本（1440）
+
+- `语文` 完成《识字小卡》练习 → span=- days=- bar=0；卡面文本：今天截止
+- `语文 · 语文林老师 · 15:45` 朗读《风经过小巷》第2、3自然段 → span=2 days=2 bar=2；卡面文本：跨 2 天 / 明天截止 / 起点 2026-11-04，终点 2026-11-05，共 2 天
+- `英语 · 英语唐老师 · 16:05` 完成《每日练习》并明天带回 → span=2 days=2 bar=2；卡面文本：跨 2 天 / 明天截止 / 起点 2026-11-04，终点 2026-11-05，共 2 天
+- `数学 · 数学周老师 · 15:40` 完成《每日练习》第26页第1—3题 → span=3 days=3 bar=3；卡面文本：跨 3 天 / 还剩 2 天 / 起点 2026-11-04，终点 2026-11-06，共 3 天
+- 详情时间线（1440）：时间线 / 今天 / 11月4日 周三 / 截止 / 11月4日 周三 /  / 没有记录布置日期（span=, days=）
+
+## 列表不动 / 浮层锚点（1440）
+
+- `listMoved`: False（打开浮层前后 stack rect / scrollTop / docH 不变）
+- 详情锚点: {"title": true, "lines": 1, "plan": false, "follow": false, "source": false, "feedback": true, "mark": true}
+- 视图: 430 宽，浮层 右侧面板，没有出现「。；」：是
+
+## 手机命中区（360/390/768）
+- 360: {"childFilter": {"hit": true, "four": true, "h": 44, "box": {"x": 12, "y": 8, "w": 55, "h": 44}}, "setChip": {"hit": true, "four": true, "h": 44, "box": {"x": 67, "y": 80, "w": 80, "h": 44}}, "dayBtn": {"hit": true, "four": true, "h": 36, "box": {"x": 287, "y": 12, "w": 61, "h": 36}}, "tab": {"hit": true, "four": true, "h": 44, "box": {"x": 12, "y": 128, "w": 111, "h": 44}}, "add": {"hit": true, "four": true, "h": 44, "box": {"x": 14, "y": 80, "w": 49, "h": 44}}, "calChip": {"hit": true, "four": true, "h": 44, "box": {"x": 170, "y": 80, "w": 93, "h": 44}}}
+- 390: {"childFilter": {"hit": true, "four": true, "h": 44, "box": {"x": 12, "y": 8, "w": 55, "h": 44}}, "setChip": {"hit": true, "four": true, "h": 44, "box": {"x": 67, "y": 80, "w": 80, "h": 44}}, "dayBtn": {"hit": true, "four": true, "h": 36, "box": {"x": 317, "y": 12, "w": 61, "h": 36}}, "tab": {"hit": true, "four": true, "h": 44, "box": {"x": 12, "y": 128, "w": 121, "h": 44}}, "add": {"hit": true, "four": true, "h": 44, "box": {"x": 14, "y": 80, "w": 49, "h": 44}}, "calChip": {"hit": true, "four": true, "h": 44, "box": {"x": 200, "y": 80, "w": 93, "h": 44}}}
+- 768: {"childFilter": {"hit": true, "four": true, "h": 44, "box": {"x": 12, "y": 8, "w": 55, "h": 44}}, "setChip": {"hit": true, "four": true, "h": 44, "box": {"x": 67, "y": 80, "w": 80, "h": 44}}, "dayBtn": {"hit": true, "four": true, "h": 36, "box": {"x": 695, "y": 12, "w": 61, "h": 36}}, "tab": {"hit": true, "four": true, "h": 44, "box": {"x": 12, "y": 128, "w": 247, "h": 44}}, "add": {"hit": true, "four": true, "h": 44, "box": {"x": 14, "y": 80, "w": 49, "h": 44}}, "calChip": {"hit": true, "four": true, "h": 44, "box": {"x": 476, "y": 80, "w": 93, "h": 44}}}
+
+## 截图（证据/screens-319/六宽度/）
+
+- `w1024-list.png` sha1 d1447d22db00e0b65b0ebdd232b190d1d8605361
+- `w1024-overlay.png` sha1 7756f4229fae21aca34c9ac02850ea6b9ff64cf7
+- `w1200-list.png` sha1 e7b650fea6bf075edad36b4edf9641a97636840d
+- `w1200-overlay.png` sha1 41c6c162836f21eea2be693fd6f69017a18c9d68
+- `w1440-list.png` sha1 06e78478288b3c900ff3ea71a4f6101f4d7703c7
+- `w1440-overlay.png` sha1 29fd373577ec6a58cfe8fc5c82343321cdac1b7f
+- `w360-list.png` sha1 dfe46957026d5c787a48a38e08947432d6ec1e2f
+- `w360-overlay.png` sha1 c93d6fb1381a400136ca2022172d260e70242138
+- `w390-list.png` sha1 a2433d4d3ff705ffdc2871f270e6fb29967d2ea6
+- `w390-overlay.png` sha1 84bd00619f2aad95338630105bdea3cb54cb8424
+- `w768-list.png` sha1 0136c88d9cac7c48bce2fc382ac230a3542e4532
+- `w768-overlay.png` sha1 46d5c5112a3e8d7e6ae7e095baaff163a95f9b7a

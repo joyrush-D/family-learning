@@ -1,0 +1,6 @@
+ M app.py
+ M family_agent.py
+
+# 被 .gitignore 忽略的新文件（不在上面 porcelain 输出里，仍已写入 fix.patch）
+  58cc5a28683a207be3baa9f8202a25b0908a3704  test_daily_list_expression.py
+  1ed4ade54f781de969ca0afe035be04c26617714  test_school_fold_visibility.py

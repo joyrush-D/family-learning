@@ -1,0 +1,61 @@
+记录时间: 2026-11-05T15:21:59Z
+二进制: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang
+二进制 sha1: 2b78dc75ce509d6361b11f01cb3bca449151d967
+
+### 先说明：BSD strings 只输出可打印 ASCII，会把 UTF-8 中文丢掉，所以它统计中文必然为 0；
+### 中文按 UTF-8 字节在二进制里直接统计（Python，与 strings 等价但保留非 ASCII）。
+
+### strings -a | grep -c 家庭安排（BSD strings 不保留中文，预期 0）
+0
+
+### Python UTF-8 字节计数（真实证据）
+家庭安排                         1
+家庭安排：                        0
+row-plan-                    0
+plan_lines                   2
+连接本机一起成长服务                   2
+FAMILY_DESKTOP_SUPPORT_DIR   1
+一起成长                         11
+
+### 源码里的行号
+511:    /// 家庭安排（服务端 plan_lines）：家长自己的计划，不是老师的要求；单独一段，不并进要求正文。旧后台没有这个键时为空。
+513:    /// 家庭安排各句照原文接起来，与 standardWords 同一规则：句末已有标点的不再补“；”，不出现“。；”。
+515:    /// 家庭安排小标签：能拿到计划日（facts 里 role=scheduled）就带上日期，拿不到只写“家庭安排”。
+517:        if let f = facts.first(where: { $0.role == "scheduled" }), !f.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "家庭安排（计划 \(f.value)）" }
+518:        return "家庭安排"
+1505:                    // 家庭安排是家长自己的计划，不是老师要求：单独一行带小标签，不并进上面的要求段落。
+2191:                    // 家庭安排单独成节，放在老师的要求之后：家长自己的计划，不当作一条要求。
+3850:            return item.planLabel.replacingOccurrences(of: "家庭安排", with: "家里的安排")
+
+### WorkspaceAPI 里的 plan_lines 解码角色
+/tmp/rel-323/packaging/macos/Sources/WorkspaceAPI.swift:80:    /// 家庭安排（服务端 plan_lines，从老师要求里拆出来的家长自己的计划）。较早后台不带这个键时为 nil，不当作解码失败。
+/tmp/rel-323/packaging/macos/Sources/WorkspaceAPI.swift:81:    let plan_lines: [String]?
+/tmp/rel-323/packaging/macos/Sources/Workspace.swift:511:    /// 家庭安排（服务端 plan_lines）：家长自己的计划，不是老师的要求；单独一段，不并进要求正文。旧后台没有这个键时为空。
+/tmp/rel-323/packaging/macos/Sources/Workspace.swift:512:    var planLines: [String] { plan_lines ?? [] }
+/tmp/rel-323/packaging/macos/Sources/Workspace.swift:514:    var planWords: String { planLines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
+/tmp/rel-323/packaging/macos/Sources/Workspace.swift:1504:                if !item.planLines.isEmpty {
+/tmp/rel-323/packaging/macos/Sources/Workspace.swift:2190:                if !item.planLines.isEmpty {
+/tmp/rel-323/packaging/macos/Sources/Workspace.swift:2193:                        ForEach(Array(item.planLines.enumerated()), id: \.offset) { index, line in
+
+### 原生渲染：DayFollowUp 类型符号
+### surface 用 DayFollowUp 类型 + follow_ups 解码；Swift -O 会池化中文字符串，不能靠中文 grep，故查类型名符号。
+nm -a | grep -c DayFollowUp:
+296
+nm -a | grep DayFollowUp（前 10 行）:
+0000000100024b30 t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLO11stringValueAFSgSS_tcfCTf4nd_n
+00000001002a36c0 b _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFSQAAWL
+000000010003af50 t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFSQAAWl
+000000010029f360 b _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs0F3KeyAAWL
+0000000100038cac t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs0F3KeyAAWl
+00000001002a54b8 b _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs23CustomStringConvertibleAAWL
+000000010003b89c t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs23CustomStringConvertibleAAWl
+00000001002a54b0 b _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs28CustomDebugStringConvertibleAAWL
+000000010003b858 t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs28CustomDebugStringConvertibleAAWl
+000000010025de64 s _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOMF
+strings -a | grep -c DayFollowUp（类型名为 ASCII，可作兜底）:
+1
+
+### WorkspaceAPI.swift 里 DayFollowUp / follow_ups 的行号
+82:    /// 后到原文（服务端 follow_ups：更正/补充/取消/提醒，各带发送时间与原文）。较早后台不带这个键时为 nil，不当作解码失败。
+83:    let follow_ups: [DayFollowUp]?
+106:struct DayFollowUp: Decodable, Hashable { let label: String?; let time: String?; let text: String? }

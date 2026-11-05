@@ -1,0 +1,10 @@
+重建完成: 2026-11-04T08:08:05Z
+REPO HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51 (58973a6)
+构建号: 308
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+App 二进制 sha1: 1befa315bc4103bf37d3dbcb65e4a6d498d35867
+fix.patch: 66437 字节
+二进制含「家庭安排」: 1 处
+--check: 通过（端口 8770）
+api-day: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-修复后.json
+家庭安排块 DOM 断言: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/家庭安排块DOM断言-308.txt（退出码 0）

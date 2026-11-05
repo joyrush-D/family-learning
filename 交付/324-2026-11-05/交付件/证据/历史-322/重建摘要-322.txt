@@ -1,0 +1,13 @@
+重建完成: 2026-11-05T15:04:16Z
+构建源: commit worktree /tmp/rel-322 @ 9a5d4d731035b93a136dba680d5915271f121b00
+构建号: 322
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+App 二进制 sha1: 32b053e8200363b80a8f81df341592a231e08c65（8,476,960 字节）
+fix.patch: 不适用（十个输入全部来自 commit 9a5d4d7 的干净 worktree，见 源码版本-322.txt / git-status-322.txt）
+二进制含「家庭安排」: 1 处；DayFollowUp 符号: 296 处
+真模型播种自检: 0（证据 真模型播种输出-322.txt）
+--check: 通过（端口 8770，默认 7 条：today=5 later=2 open=7 closed=1 undated=1 upcoming=0）
+api-day: 证据/api-day-修复后-322.json（真模型: 证据/api-day-真模型-322.json）
+十八渠道自检: 0（虽曾因快照被误写为 10 行失败，清理后重跑通过；证据 十八渠道自检-输出-322.txt + 快照数据更正-322.txt）
+网页证据: 证据/screens-322/深链接/ 六宽度 12 张 + metrics.json（failures []）；量数 网页322截图-量数-322.txt
+十八渠道 UI 断言: 本版未跑 surface assert（新快照 UI 与 315 同族；G4 证据沿用历史-315/RAW-315 并在文档注明）

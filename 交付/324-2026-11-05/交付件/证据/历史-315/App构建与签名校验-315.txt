@@ -1,0 +1,74 @@
+记录时间: 2026-11-05T05:51:23Z
+构建号: 315
+HEAD: cbb78689b6d066d1991748ab273af0b43c8e9904
+
+### codesign --verify --deep --strict --verbose=2
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app: valid on disk
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app: satisfies its Designated Requirement
+verify 退出码: 0
+
+### codesign -dv
+Executable=/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang
+Identifier=local.yiqichengzhang.desktop
+Format=app bundle with Mach-O thin (arm64)
+CodeDirectory v=20400 size=16501 flags=0x2(adhoc) hashes=509+3 location=embedded
+Signature=adhoc
+Info.plist entries=13
+TeamIdentifier=not set
+Sealed Resources version=2 rules=13 files=1
+Internal requirements count=0 size=12
+
+### plutil -p Contents/Info.plist
+{
+  "CFBundleDevelopmentRegion" => "zh_CN"
+  "CFBundleDisplayName" => "一起成长"
+  "CFBundleExecutable" => "YiqiChengzhang"
+  "CFBundleIconFile" => "AppIcon.icns"
+  "CFBundleIdentifier" => "local.yiqichengzhang.desktop"
+  "CFBundleInfoDictionaryVersion" => "6.0"
+  "CFBundleName" => "一起成长"
+  "CFBundlePackageType" => "APPL"
+  "CFBundleShortVersionString" => "0.2.0"
+  "CFBundleVersion" => "315"
+  "LSMinimumSystemVersion" => "13.0"
+  "NSHighResolutionCapable" => true
+  "NSMicrophoneUsageDescription" => "只在你于原入口开始录音补录时使用；拒绝后仍可用文字补录。"
+}
+
+### 断言 CFBundleVersion=315
+通过：CFBundleVersion=315
+
+### file / lipo
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang: Mach-O 64-bit executable arm64
+Non-fat file: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang is architecture: arm64
+
+### otool -L（应只依赖 /System 与 /usr/lib）
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang:
+	/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit (compatibility version 45.0.0, current version 2775.20.133)
+	/System/Library/Frameworks/WebKit.framework/Versions/A/WebKit (compatibility version 1.0.0, current version 625.2.8)
+	/System/Library/Frameworks/SwiftUI.framework/Versions/A/SwiftUI (compatibility version 1.0.0, current version 8.1.13)
+	/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1359.40.3)
+	/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork (compatibility version 1.0.0, current version 3896.200.61)
+	/System/Library/Frameworks/Combine.framework/Versions/A/Combine (compatibility version 1.0.0, current version 3023.0.0)
+	/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation (compatibility version 150.0.0, current version 5027.1.8)
+	/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics (compatibility version 64.0.0, current version 2050.1.6)
+	/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation (compatibility version 300.0.0, current version 5027.1.8)
+	/usr/lib/libobjc.A.dylib (compatibility version 1.0.0, current version 228.0.0)
+	/usr/lib/swift/libswiftCore.dylib (compatibility version 0.0.0, current version 0.0.0)
+	/usr/lib/swift/libswiftCoreAudio.dylib (compatibility version 1.0.0, current version 482.208.0, weak)
+	/usr/lib/swift/libswiftCoreFoundation.dylib (compatibility version 1.0.0, current version 120.100.0)
+	/usr/lib/swift/libswiftCoreImage.dylib (compatibility version 1.0.0, current version 3.0.0, weak)
+	/usr/lib/swift/libswiftDarwin.dylib (compatibility version 1.0.0, current version 428.40.1)
+	/usr/lib/swift/libswiftDispatch.dylib (compatibility version 1.0.0, current version 1605.40.4)
+	/usr/lib/swift/libswiftIOKit.dylib (compatibility version 1.0.0, current version 1.0.0, weak)
+	/usr/lib/swift/libswiftMetal.dylib (compatibility version 1.0.0, current version 383.1.0, weak)
+	/usr/lib/swift/libswiftOSLog.dylib (compatibility version 1.0.0, current version 10.0.0, weak)
+	/usr/lib/swift/libswiftObjectiveC.dylib (compatibility version 1.0.0, current version 973.1.0)
+	/usr/lib/swift/libswiftQuartzCore.dylib (compatibility version 1.0.0, current version 5.0.0, weak)
+	/usr/lib/swift/libswiftSpatial.dylib (compatibility version 1.0.0, current version 1.0.0, weak)
+	/usr/lib/swift/libswiftUniformTypeIdentifiers.dylib (compatibility version 1.0.0, current version 917.1.12)
+	/usr/lib/swift/libswiftXPC.dylib (compatibility version 1.0.0, current version 167.0.2, weak)
+	/usr/lib/swift/libswift_Concurrency.dylib (compatibility version 0.0.0, current version 0.0.0)
+	/usr/lib/swift/libswiftos.dylib (compatibility version 1.0.0, current version 1090.40.3)
+	/usr/lib/swift/libswiftsimd.dylib (compatibility version 1.0.0, current version 25.0.0, weak)
+	/usr/lib/swift/libswiftWebKit.dylib (compatibility version 1.0.0, current version 625.2.8)

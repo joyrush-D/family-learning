@@ -1,0 +1,33 @@
+# Build 324 构建输入（记录时间 2026-11-05T15:42:02Z）
+
+构建方式：git worktree add /tmp/rel-324 <HEAD>，全部输入取自 commit，不使用主工作区文件。
+HEAD: 34761550c27e34da7bd5ce63a6979ef48d36f10f
+HEAD 提交说明: Native: show checkup progress on day cards and in the detail panel
+
+## 10 个输入 sha1（副本内实测）
+packaging/macos/Sources/Workspace.swift              58c1ca852e4e2a8a86342de7ff6f7dfc927e05ad  5760 行
+packaging/macos/Sources/WorkspaceAPI.swift           6623929e1529d5226af4fbce06ac28dc2d76afe7  500 行
+calendar.js                                          e207d86f0cf33801ee8649bd05f68e9ce4e8a58b  1470 行
+workbench.css                                        5c45e6321e708b9bf32858f9e77c7f889a546748  1382 行
+app.js                                               4c17738bb0917e0eee4c098214502ddbc363b333  2564 行
+family_agent.py                                      577ee658a184c5a1c79fd60971dcac1d64e76069  10976 行
+family_agenda.py                                     234a99794c4e2a22d631ed1520b44b7dd81f3d50  2445 行
+family_llm.py                                        bf2c974be34b6460d980d18b8e2ffc1498611be1  3371 行
+test_daily_list_expression.py                        58cc5a28683a207be3baa9f8202a25b0908a3704  690 行
+test_school_fold_visibility.py                       1ed4ade54f781de969ca0afe035be04c26617714  448 行
+
+另：test_native_workspace.cjs 43f18a4235a36b6267a110ccdbd3cb41979304c3（202 行，无改动）。
+
+## 与 lead 冻结值对照
+lead 冻结: HEAD ��calendar.js e207d86f；workbench.css 5c45e632；Workspace.swift 58c1ca85 → 全部一致。
+family_agent.py 取 commit 版本（��，主工作区里正在被 merge18 修改的 app.py / family_agent.py **未进入** 本次构建。
+
+## 本地补丁
+无。源码即 commit，无 fix.patch（重建脚本自动生成的 fix.patch-324 取自主工作区未提交的 merge18 草稿，与本包无关，已删除）。
+
+## 产物
+App 二进制: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang
+字节数: 8648960
+sha1: a62705f5782d9f59df33009eb0e7da49f6672d11
+CFBundleVersion: 324
+构建时间: 2026-11-05T15:39:46Z → 2026-11-05T15:40:48Z

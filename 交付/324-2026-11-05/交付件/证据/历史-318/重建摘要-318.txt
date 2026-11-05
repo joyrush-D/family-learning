@@ -1,0 +1,13 @@
+重建完成: 2026-11-05T11:07:40Z
+REPO HEAD: 04b83c81df6af56e8c3403350fa3e115d151b043 (04b83c8)
+构建号: 318
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+App 二进制 sha1: 9087f6c276841a6acbb50b5ba228b531575fd594
+fix.patch: 190177 字节（sha1 35bddb8bfdd6234dc8eab68842eff0ba5a205180）
+二进制含「家庭安排」: 1 处
+真模型播种自检: 0（证据 真模型播种输出-318.txt）
+--check: 通过（端口 8770）
+api-day: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-修复后-318.json（真模型: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-真模型-318.json）
+网页六宽度证据: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/网页六宽度-318.txt（rc 未跑）
+十八渠道自检: 0（证据 十八渠道自检-输出-318.txt）
+十八渠道 UI 断言: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/十八渠道UI断言-318.txt（surface rc=未跑，G4 rc=未跑）

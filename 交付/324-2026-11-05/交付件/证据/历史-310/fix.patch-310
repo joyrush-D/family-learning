@@ -1,0 +1,1151 @@
+diff --git a/app.js b/app.js
+index 79eed5b..5bcd846 100644
+--- a/app.js
++++ b/app.js
+@@ -124,6 +124,9 @@ function taskReviewDue(t){if(taskClosed(t))return false;const f=taskFocus(t);ret
+ // line in the title's own words and a 提交要求 that restates its previous line; any other wording, line or condition stays below it.
+ function taskActionHTML(t,compact=false){const f=taskFocus(t),advice=f.next_action||t.advice||'',goal=t.action?.startsWith('请核对这条通知是否适用')?'':t.action,lines=goal?taskActionLines(t,goal):[];return `${!lines.length?goal?'':'<p class="task-needs-action">完成目标待明确</p>':compact?requirementHTML(lines):`<div class="task-goal"><span class="small muted">要做什么</span><p class="task-requirement">${esc(lines.join('\n'))}</p></div>`}${advice&&!compact?`<div class="task-next"><span>操作建议</span><p>${esc(advice)}</p></div>`:''}${f.mode==='waiting'?`<p class="task-waiting">等待：${esc(f.waiting_for)}${f.review_on?' · '+esc(f.review_on)+' 回看':''}</p>`:f.mode==='later'?`<p class="task-waiting">${f.review_on?'改天回看：'+esc(f.review_on):'以后再说 · 尚未约定回看日期'}</p>`:''}${taskReviewDue(t)?'<p class="task-review-due">到了回看日期，确认现在能否推进。</p>':''}`}
+ function taskActionLines(t,goal){return Array.isArray(t.action_lines)?t.action_lines:String(goal).trim()===String(t.title||'').trim()?[]:String(goal).split(/\r?\n/).map(x=>x.trim()).filter(Boolean)}
++// 家庭安排（/api/day 的 plan_lines）是家长自己的安排，不是老师的要求：单独一块、带自己的小标签，不并进上面的要求正文。
++// 旧后台不带 plan_lines 时这里为空，卡片与原来一致。
++function taskPlanHTML(t){const plan=(Array.isArray(t?.plan_lines)?t.plan_lines:[]).map(x=>String(x??'').trim()).filter(Boolean);if(!plan.length)return '';const f=(Array.isArray(t?.facts)?t.facts:[]).find(x=>x&&x.role==='scheduled');const v=f?String(f.value??'').trim():'';const label=v?`家庭安排（计划 ${v}）`:'家庭安排';return `<div class="task-goal" data-task-plan-lines><span class="small muted">${esc(label)}</span><p class="task-requirement">${esc(plan.join('\n'))}</p></div>`}
+ 
+ // Saved evidence of this same task only: its feedback, linked wrong records, current-basis clues (not mastery) and independent new attempts.
+ // One verified same affair counts every member's own saved progress (records stay with their tasks).
+@@ -138,7 +141,7 @@ function taskHTML(t,options={}){
+  // ponytail: scan the family-sized record list here; index by task if rendering ever becomes measurably slow.
+  const hasFeedback=data.records.some(r=>r.child===t.child&&(r.source==='事项:'+t.id||r.linked_task_id===t.id));
+  const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open&&t.focus?.box!=='wish'&&t.agenda?.category==='homework'?`<button class="primary" data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:open&&t.title.includes('打印')?'<button class="primary" data-page="print">准备打印</button>':'';
+- return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':reportPending?'<span class="task-dismiss-icon" aria-label="作业要求待核对，暂不能确认完成">?</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody">${affair?`<p class="small same-affair-note" role="note">${esc(affair.note)}</p>`:''}<div class="task-meta"><strong class="task-owner">${esc(t.child)}</strong>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div><h3>${esc(t.title)}</h3>${taskActionHTML(t,compact)}${agendaDateHTML(t.agenda||{},data.today,taskFamilyEntry(t),!t.agenda?.due_on&&t.due==='无明确截止')}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${taskProgressHTML(t)}<div class="task-actions"><div class="tasktools">${primary}${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">打印题目 / 参考</button>`:''}${reportPending?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:''}${!primary||t.agenda?.category!=='homework'?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'反馈进展'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:''}</div>${open?originals:''}<details class="task-reference task-more"><summary>详情与原通知</summary>${compact&&(taskFocus(t).next_action||t.advice)?`<div class="task-next"><span>操作建议</span><p>${esc(taskFocus(t).next_action||t.advice)}</p></div>`:''}<div class="tasktools">${open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}${open&&t.agenda?.category==='homework'?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${open?'':originals}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></div></article>`;
++ return `<article class="task ${done?'done':''}" data-query-target="task:${esc(t.id)}" aria-busy="${pending}" ${compact?`data-today-task="${esc(t.id)}"`:''} tabindex="-1"><div class="checkrow">${dismissed?'<span class="task-dismiss-icon" aria-hidden="true">−</span>':reportPending?'<span class="task-dismiss-icon" aria-label="作业要求待核对，暂不能确认完成">?</span>':`<label class="checkhit"><input type="checkbox" data-check="${esc(t.id)}" ${(pending?pendingTask.checked:done)?'checked':''} ${pendingTask?'aria-disabled="true"':''} aria-label="${done?'撤销完成':'确认完成'}：${esc(t.title)}"><span class="sr-only">${done?'撤销完成':'确认完成'}</span></label>`}<div class="taskbody">${affair?`<p class="small same-affair-note" role="note">${esc(affair.note)}</p>`:''}<div class="task-meta"><strong class="task-owner">${esc(t.child)}</strong>${status(t)!=='待跟进'||pending?`<span class="chip">${pending?'<span role="status">正在保存…</span>':esc(taskStatusLabel(status(t)))}</span>`:''}${options.when?`<span>${esc(options.when)}</span>`:''}</div><h3>${esc(t.title)}</h3>${taskActionHTML(t,compact)}${taskPlanHTML(t)}${agendaDateHTML(t.agenda||{},data.today,taskFamilyEntry(t),!t.agenda?.due_on&&t.due==='无明确截止')}${!t.agenda?.due_on&&t.due?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${taskProgressHTML(t)}<div class="task-actions"><div class="tasktools">${primary}${open&&t.agenda?.category==='homework'?`<button data-homework-print="${esc(t.id)}">打印题目 / 参考</button>`:''}${reportPending?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'提交作业反馈'}</button>`:''}${!primary||t.agenda?.category!=='homework'?`<button data-task="${esc(t.id)}">${hasFeedback?'查看/补充反馈':'反馈进展'}</button>`:''}${dismissed?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:''}</div>${open?originals:''}<details class="task-reference task-more"><summary>详情与原通知</summary>${compact&&(taskFocus(t).next_action||t.advice)?`<div class="task-next"><span>操作建议</span><p>${esc(taskFocus(t).next_action||t.advice)}</p></div>`:''}<div class="tasktools">${open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button>`:''}${open?`<button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:''}${open&&t.agenda?.category==='homework'?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:''}<button data-school-record-task="${esc(t.id)}">留作学习记录</button>${/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:''}</div>${open?'':originals}<div class="source">${t.original_title?esc('原标题：'+t.original_title)+'<br>':''}${t.original_action?esc('原要求：'+t.original_action)+'<br>':''}${esc(t.source)}<br>整理状态：${esc(t.original_status)}</div>${(t.history||[]).map(h=>`<p class="history"><time>${esc(h.updated.slice(0,16).replace('T',' '))}</time> · ${esc(taskStatusLabel(h.status))}<br>${esc(h.note||'已更新状态')}</p>`).join('')}</details></div></div></div></article>`;
+ }
+ async function postTask(obj){
+  const r=await apiFetch('/api/task',{method:'POST',signal:AbortSignal.timeout(15000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify({...obj,expected_updated:obj.expected_updated??data.tasks.find(t=>t.id===obj.id)?.update?.updated??''})});
+diff --git a/calendar.js b/calendar.js
+index b495ace..da7869e 100644
+--- a/calendar.js
++++ b/calendar.js
+@@ -289,14 +289,116 @@ function groveGroupCount(g){const u=g.undated??g.items.filter(r=>r.when==='unkno
+ // every original stays in the school information page.
+ function groveMaterialLineHTML(view){const m=view.materials||[];return m.length?`<p class="grove-upcoming small muted" data-grove-materials>学校资料待整理，不算当天要做：${m.map(g=>`${esc(g.subject)} ${g.items.length} 条`).join('；')}。<button type="button" data-page="agent">查看原消息与整理状态</button></p>`:''}
+ function groveUpcomingHTML(view){const u=view.upcoming||[];return u.length?`<p class="grove-upcoming small muted" data-grove-upcoming>即将/待补：${u.map(x=>`${esc(x.day.slice(5))} ${esc(x.title)}${x.pending_review?'（待补）':''}${x.change?'（'+esc(x.change)+'）':''}`).join('；')}</p>`:''}
++// The shared read-only projection (family_agenda.action_lines) already hands over a card body as complete short
++// sentences, one per line. Keep one sentence per line instead of gluing them with '；' — a sentence that already ends
++// with '。' or '；' would otherwise read as the mechanical "。；" / "；；" string.
++function groveSentenceHTML(lines,cls='grove-lines'){
++ const list=(Array.isArray(lines)?lines:[]).map(x=>String(x??'').trim()).filter(Boolean);
++ return `<span class="${cls}">${list.length?list.map(esc).join('<br>'):'<em>完成标准未提供，待补充</em>'}</span>`;
++}
++// Family arrangements (server plan_lines) are the parent's own plan, not the teacher's requirement: keep them in
++// their own labelled block, never inside the requirement paragraph. An older server sends no plan_lines, so this is empty.
++function grovePlanLines(r){return (Array.isArray(r?.plan_lines)?r.plan_lines:[]).map(x=>String(x??'').trim()).filter(Boolean)}
++// 家庭安排小标签：能拿到计划日（服务端 facts 里 role=scheduled）就带上，拿不到只写“家庭安排”。
++function grovePlanLabel(r){const f=(Array.isArray(r?.facts)?r.facts:[]).find(x=>x&&x.role==='scheduled');const v=f?String(f.value??'').trim():'';return v?`家庭安排（计划 ${v}）`:'家庭安排'}
++// —— 清单卡片：科目色条 + 去科目前缀的标题 + 最多两条完整要点 + 关键约束徽章 + 独立浅色「我家安排」块 ——
++// 一行要点是共享投影给出的完整短句，句子本身怎么结束就怎么显示，不在句尾补分隔符。徽章只从原文已有的字面约束
++// （lines / complete_words / facts）里提取；原文没说就不显示，不补写、不猜。
++const groveSubjectClasses={语文:'chinese',数学:'math',英语:'english'};
++function groveSubjectClass(r){return groveSubjectClasses[String(r?.subject||'').trim()]||'general'}
++function groveTitleText(r){
++ let t=String(r?.title||'').trim();const sub=String(r?.subject||'').trim();
++ if(sub&&(t.startsWith(sub+'：')||t.startsWith(sub+':')))t=t.slice(sub.length+1);
++ else t=t.replace(/^(语文|数学|英语|科学|道德与法治|道法|综合事务|全科|科目待定)\s*[：:]\s*/,'');
++ return t.trim();
++}
++function groveDayDiff(value,today){const a=Date.parse(String(value||'')+'T12:00:00'),b=Date.parse(String(today||'')+'T12:00:00');return Number.isFinite(a)&&Number.isFinite(b)?Math.round((a-b)/86400000):null}
++function groveRelativeDay(value,today){const n=groveDayDiff(value,today);if(n===null)return '';if(n===0)return '今天';if(n===1)return '明天';if(n===2)return '后天';return '周'+'日一二三四五六'[new Date(String(value)+'T12:00:00').getDay()]}
++// 卡片正文第一行常把标题原样再说一遍：只裁「整段标题原文」前缀（前面允许今晚/今天/明早这类时间词），
++// 裁完为空或裁不到就原样显示，不做相似度匹配、不改写正文。
++const groveTimeLead=/^(?:今晚|今天|明早|明天|今早|本周末|周末)?\s*/;
++function groveStripTitlePrefix(line,title){
++ const text=String(line||'').trim(),t=String(title||'').trim();if(!text||!t)return text;
++ const lead=(text.match(groveTimeLead)||[''])[0];
++ for(const head of [lead,lead.replace(/\s+$/,'')]){
++  if(head&&text.startsWith(head)){
++   const rest=text.slice(head.length);
++   if(rest.startsWith(t)){const out=rest.slice(t.length).replace(/^[\s，,。.；;：:、]+/,'');if(out)return out}
++  }
++ }
++ if(text.startsWith(t)){const out=text.slice(t.length).replace(/^[\s，,。.；;：:、]+/,'');if(out)return out}
++ return text.replace(/^[一二三四五六七八九十]+、\s*/,'');
++}
++// 卡片最多两条步骤；第 3 条起折成一行「还有 N 条 · 查看详情」，完整要求在详情页。
++function grovePoints(r){
++ const lines=(Array.isArray(r?.lines)?r.lines:[]).map(x=>String(x??'').trim()).filter(Boolean);
++ const title=groveTitleText(r),shown=lines.slice(0,2).map(x=>groveStripTitlePrefix(x,title));
++ return {points:shown,rest:Math.max(0,lines.length-2),all:lines};
++}
++// 徽章只从原文已有的字面约束里提取，每条 ≤6 字；一屏最多 4 条，多的收成 +N。长句留在详情页。
++function groveBadges(r){
++ const text=[...(r?.lines||[]),r?.complete_words||'',...(r?.facts||[]).map(f=>[f.label,f.value].filter(Boolean).join(' '))].join('\n');
++ const out=[],add=(kind,label)=>{if(label&&!out.some(b=>b.kind===kind&&b.label===label))out.push({kind,label})};
++ if(/家长签字|需签名|请签名/.test(text))add('sign','需签字');
++ const hand=/周五交给|周五交回|周五前交|周五交/.test(text)?'周五交':/明天(?:带去|带到|带来|带)/.test(text)?'明天带':/明早(?:交|带去|带到|带来|带)/.test(text)?'明早交':/后天(?:交|带)/.test(text)?'后天交':'';
++ if(hand)add('bring',hand);
++ if(/听写/.test(text))add('due','课堂听写');
++ else if(/明早交|明早我抽听|明早抽听/.test(text))add('due','明早交');
++ if(/不(?:用|需要|需)录音|无需录音/.test(text))add('quiet','不用录音');
++ if(/不用抄写/.test(text))add('quiet','不用抄写');
++ if(/不(?:用|需要)上传/.test(text))add('quiet','不用上传');
++ if(/不用在群里发|不用发照片|不用拍照/.test(text))add('quiet','不用发照片');
++ if(/读给家长听|读给家长/.test(text))add('quiet','读给家长');
++ if(/在校完成|在学校完成/.test(text))add('quiet','在校完成');
++ return {shown:out.slice(0,4),extra:Math.max(0,out.length-4)};
++}
++// 行内日期事实：相对词、≤6 字；今天到期的截止不当灰色 chip 挂（状态点已说“今天做”），绝对日期只在详情页。
++function groveRowFactWords(f,today){
++ if(f.state==='next_morning')return '明天交';
++ if(f.state==='overdue'){const n=groveDayDiff(f.value,today);return n!==null&&n<0?`已过期 ${-n} 天`:'已过期'}
++ if(!f.known)return `${f.label} 日期未写明`;
++ const rel=groveRelativeDay(f.value,today);
++ if(f.role==='check')return rel?rel+'核对':'需核对';
++ if(f.role==='submit')return rel?rel+'交':'交回日期未定';
++ if(f.role==='complete')return rel?rel+'完成':'完成日期未定';
++ if(rel==='今天')return '';
++ return rel?rel+'截止':'截止日期未定';
++}
++function groveStatusHTML(r){
++ const when=r?.when||'today';
++ if((r?.facts||[]).some(f=>f.state==='next_morning'))return '<span class="grove-status is-due"><i></i>明早交</span>';
++ if(when==='today')return '<span class="grove-status is-today"><i></i>今天做</span>';
++ if(when==='unknown')return '<span class="grove-status is-undated"><i></i>未定</span>';
++ if(when==='overdue')return '<span class="grove-status is-overdue"><i></i>已逾期</span>';
++ return `<span class="grove-status is-later"><i></i>${esc(groveWhen[when]||'以后')}</span>`;
++}
++// 家庭安排是家长自己的计划，不是老师的要求：独立浅色块，标签沿用「我家安排（计划 日期）」。
++function grovePlanHTML(r){
++ const plan=grovePlanLines(r);if(!plan.length)return '';
++ const label=grovePlanLabel(r);
++ return `<span class="grove-plan"><span class="grove-plan-head" data-grove-plan="1">${esc(label)}</span><span class="grove-plan-lines" data-grove-plan-lines>${plan.map(esc).join('<br>')}</span></span>`;
++}
+ function groveRowHTML(r){
+  const on=r.id===groveSelected,meta=[groveSource(r),groveProgressWords(r.progress)].filter(Boolean).join(' · ');
+  const task=r.task_id?` data-today-task="${esc(r.task_id)}" data-query-target="task:${esc(r.task_id)}"`:'';
+- return `<article class="grove-row${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
++ const pts=grovePoints(r),badges=groveBadges(r),steps=['①','②'],today=groveDay||data.today;
++ const times=(r.times||[]).map(t=>`<span class="grove-chip is-leaf" data-plan-time="${esc(t.id)}">日程 ${esc(groveClock(t))}</span>`).join('');
++ // 行内日期事实：[data-fact] 保留（读屏与既有测试都读），文字是相对词，今天到期的截止不挂。
++ const extra=(r.facts||[]).filter(f=>['due','submit','check','complete'].includes(f.role))
++  .map(f=>({f,text:groveRowFactWords(f,today)})).filter(x=>x.text)
++  .map(({f,text})=>`<span class="grove-chip is-fact${f.state==='next_morning'||f.state==='overdue'?' is-coral':''}" data-fact="${esc(f.role)}">${esc(text)}</span>`).join('');
++ const more=pts.rest?`<span class="grove-point-more">还有 ${pts.rest} 条 · 查看详情 ›</span>`:'';
++ return `<article class="grove-row subj-${groveSubjectClass(r)}${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
+   +`${groveCheckHTML(r)}<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
+-  +`<span class="grove-title">${esc(r.title)}</span><span class="grove-lines">${r.lines?.length?esc(r.lines.join('；')):'<em>完成标准未提供，待补充</em>'}</span>`
+-  +`${r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:''}${groveVersionLine(r.version)}`
+-  +`<span class="grove-chips">${groveChipsHTML(r)}</span>${meta?`<span class="grove-meta">${esc(meta)}</span>`:''}</button></article>`;
++  +`<span class="grove-card-head"><span class="grove-title">${esc(groveTitleText(r))}</span>${r.closed?'<span class="grove-status is-done"><i></i>已办</span>':groveStatusHTML(r)}</span>`
++  +(pts.points.length?`<span class="grove-points">${pts.points.map((p,i)=>`<span class="grove-point">${pts.points.length>1?steps[i]+' ':''}${esc(p)}</span>`).join('')}${more}</span>`:'')
++  +(badges.shown.length?`<span class="grove-badges">${badges.shown.map(b=>`<span class="grove-badge is-${b.kind}">${esc(b.label)}</span>`).join('')}${badges.extra?`<span class="grove-badge is-more">+${badges.extra}</span>`:''}</span>`:'')
++  +grovePlanHTML(r)
++  +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:'')
++  +groveVersionLine(r.version)
++  +((times||extra||r.pending_review)?`<span class="grove-chips">${times}${extra}${r.pending_review?'<span class="grove-chip is-coral">待核对</span>':''}</span>`:'')
++  +(meta?`<span class="grove-meta">${esc(meta)}</span>`:'')
++  +'</button></article>';
+ }
+ function groveMaterialHTML(f){
+  const tone=f.state==='ready'?' is-leaf':['unread','error'].includes(f.state)?' is-coral':'';
+@@ -315,7 +417,7 @@ function groveMaterialsHTML(id){
+  if(!m||m.loading)return '<h3>资料</h3><p class="small muted" role="status">正在读取资料…</p>';
+  if(m.error)return `<h3>资料</h3><p class="error" role="alert">${esc(m.error)}</p><button type="button" data-grove-materials-retry="${esc(id)}">重新读取资料</button>`;
+  const files=m.files||[],unread=files.filter(f=>['unread','error','partial'].includes(f.state)).length;
+- return `<h3>资料 · ${files.length} 份${unread?`（${unread} 份尚未读清）`:''}</h3>${files.map(groveMaterialHTML).join('')||'<p class="small muted">这一项没有已保存的原件。</p>'}${m.school_error?`<p class="grove-unclear">${esc(m.school_error)}</p>`:''}`;
++ return `<h3>资料 · ${files.length} 份${unread?`（${unread} 份尚未读清）`:''}</h3>${files.map(groveMaterialHTML).join('')||'<p class="small muted grove-empty-line">这一项没有已保存的原件。</p>'}${m.school_error?`<p class="grove-unclear">${esc(m.school_error)}</p>`:''}`;
+ }
+ async function groveLoadMaterials(id,force=false){
+  if(!force&&groveMaterials.has(id))return;groveMaterials.set(id,{loading:true});
+@@ -353,17 +455,29 @@ function groveDetailHTML(r){
+   +(open&&homework?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:'')+`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`
+   +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(!uncertain&&taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
+  const standards=r.lines?.length?`<ul class="grove-standards">${r.lines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
+- return back+head(originals||pendingOriginals?`<span class="grove-originals">${originals}${pendingOriginals}</span>`:'')
++ const plan=grovePlanLines(r);
++ const d=groveDay||data.today,wd='日一二三四五六'[new Date(d+'T12:00:00').getDay()],dateLabel=groveShort(d)+' 周'+wd;
++ const sourceRefs=(originals||pendingOriginals)?`<span class="grove-detail-refs">${originals}${pendingOriginals}</span>`:'';
++ const completeBits=[r.complete_words?`<p>${esc(r.complete_words)}</p>`:'',
++  (!t.agenda?.due_on&&t.due&&t.due!=='无明确截止')?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:'',
++  t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''].filter(Boolean).join('');
++ return back
++  +`<div class="grove-detail-top"><span class="grove-tag">${esc(r.subject)}</span><span class="grove-detail-date">${esc(dateLabel)}</span>${sourceRefs}</div>`
++  +`<h2 class="grove-h grove-detail-title">${esc(groveTitleText(r))}</h2>`
++  +((groveSource(r)||r.origin_label)?`<p class="grove-detail-source">${esc([groveSource(r)&&groveSource(r)+' 发布',r.origin_label].filter(Boolean).join(' · '))}</p>`:'')
++  +(facts?`<div class="grove-facts grove-detail-badges">${facts}</div>`:'')
+   +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
+-  +`<section class="grove-card"><h3>要做什么与完成标准</h3>${standards}${r.complete_words?`<p class="small muted">完成要求：${esc(r.complete_words)}</p>`:''}${!t.agenda?.due_on&&t.due&&t.due!=='无明确截止'?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}</section>`
++  +`<section class="grove-card grove-detail-steps"><h3>要做什么</h3>${standards}</section>`
++  +(completeBits?`<section class="grove-card grove-detail-standard"><h3>完成标准</h3>${completeBits}</section>`:'')
++  +(plan.length?`<section class="grove-card grove-plan-card" data-grove-plan-lines><h3>${esc(grovePlanLabel(r))}</h3><ul class="grove-standards">${plan.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></section>`:'')
+   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
+   +groveVersionHTML(r.version)
+-  +`<div class="grove-facts">${facts}</div>`
+   +`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section>`
+   +(homework?`<div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
+-  +`<section class="grove-card"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted">还没有反馈。照片可以不交，只写几句文字也行；没有反馈不等于没做。</p>'}<div class="grove-actions">${primary}</div></section>`
++  +`<section class="grove-card grove-detail-feedback"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted grove-empty-line">还没有反馈；照片可以不交，写几句文字也成。</p>'}<div class="grove-actions grove-detail-actions">${primary}</div></section>`
+   +`<details class="grove-more"><summary>更多操作</summary><div class="tasktools">${more}</div></details>`;
+ }
++
+ function groveSelect(id,user){
+  groveSelected=id;groveScope=groveScopeOf(groveView(),id);
+  if(!groveWide()){groveDetailOpen=true;if(user&&!history.state?.grove)history.pushState({grove:id},'',location.pathname+location.search)}
+@@ -402,10 +516,20 @@ function todayTasksHTML(){
+  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
+  const originalGap=sources.some(s=>s.unread_count>0);
+  const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['passed','已过'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
+- const groups=(view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2>`
+-  +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
+-  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
+- const closed=(view.closed||[]).flatMap(g=>g.items||[]);
++ const closedGroups=view.closed||[],closedItems=closedGroups.flatMap(g=>g.items||[]);
++ // 已办的行按科目并到该科目分组末尾（压灰打勾），不在清单外另起一段；scope=已办 仍用下面的完整列表。
++ const closedBySubject=new Map();
++ for(const g of closedGroups)closedBySubject.set(g.subject,[...(closedBySubject.get(g.subject)||[]),...(g.items||[])]);
++ const groups=[];
++ for(const g of view.groups||[]){
++  const items=[...(g.items||[]),...(closedBySubject.get(g.subject)||[])];closedBySubject.delete(g.subject);
++  if(!items.length)continue;
++  groups.push(`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount({...g,items}))}</span></h2>`
++   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${items.map(groveRowHTML).join('')}</div></section>`);
++ }
++ for(const [subject,items] of closedBySubject)groups.push(`<section class="grove-subject subject-group" data-subject="${esc(subject)}" id="${esc(taskSubjectID(subject))}" tabindex="-1"><h2 class="grove-tag">${esc(subject)}<span>${esc(items.length+' 项')}</span></h2><div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${items.map(groveRowHTML).join('')}</div></section>`);
++ const groupsHTML=(groups.join('')||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
++ const closed=closedItems;
+  // Actions with no exact date (server view.undated) and this day's done rows are the day's other two parts, each its own list
+  // with the same rows, ids and detail; a direct switch (待办 / 日期未定 N / 已办 N) shows one, never a fold. They are not this day's count.
+  const undated=view.undated||[],undatedN=undated.reduce((a,g)=>a+(g.items||[]).length,0);
+@@ -414,18 +538,25 @@ function todayTasksHTML(){
+  const undatedHTML=undatedN?`<div class="today-task-groups grove-undated" data-grove-undated data-grove-scope-list="undated"${scope==='undated'?'':' hidden'}><p class="small muted">日期未定/待安排 ${undatedN} 项 · 不算这一天</p>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</div>`:'';
+  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
+  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
++ // 顶部压紧：孩子与日期一行、进度一条、下一步按钮一行；孩子切换留在顶部，不随页面滚动浮在卡片上。
++ const doneN=c.closed||0,totalN=((c.today||0)+doneN)||rows.length,pct=totalN?Math.round(doneN*100/totalN):0;
++ const weekday='日一二三四五六'[new Date(day+'T12:00:00').getDay()],heroDate=groveShort(day)+' 周'+weekday;
++ const hero=`<header class="grove-list-head grove-hero"><div class="grove-hero-top"><div class="today-controls">${filters()}</div><span class="grove-hero-date">${esc(heroDate)}</span></div>`
++  +`<div class="grove-hero-main"><h1 id="groveListTitle" class="grove-hero-title">${day===data.today?'今天':'这天'} <strong>${totalN}</strong> 件事</h1><div class="grove-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${Math.max(totalN,1)}" aria-valuenow="${doneN}" aria-label="一天的完成进度"><i style="width:${pct}%"></i></div><span class="grove-progress-words">已完成 ${doneN} · 还剩 ${Math.max(0,totalN-doneN)}</span></div>`
++  +`<div class="grove-hero-actions">${add}${day===data.today?`<button type="button" class="grove-quiet" data-grove-day="${esc(calendarAdd(day,1))}">看明天 ›</button>`:`<button type="button" class="grove-quiet" data-grove-day="${esc(data.today)}">回到今天</button><button type="button" class="grove-quiet" data-grove-day="${esc(calendarAdd(day,1))}">看下一天 ›</button>`}</div></header>`;
++ const hasSchedule=!!(view.schedule&&(view.schedule.lessons?.length||view.schedule.plans?.length))||!!view.schedule_error;
+  return `<div class="grove" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}" data-tab="${esc(groveTab)}"><section class="grove-list" aria-labelledby="groveListTitle">`
+-  +`<div class="today-controls">${filters()}</div>${groveTabsHTML(view)}`
++  +`<div class="grove-hero-wrap">${hero}${groveTabsHTML(view)}</div>`
+   +(groveTab==='wrong'?`<header class="grove-list-head"><div><h1 id="groveListTitle">错题本</h1><p class="grove-summary">该孩子全部错题，按科目；订正后仍保留原题与原作业。</p></div></header><div class="grove-wrongbook">${groveWrongHTML(view)}</div></section></div>`
+    :groveTab==='learning'?`<header class="grove-list-head"><div><h1 id="groveListTitle">学习进展</h1><p class="grove-summary">按科目看原错题、知识点线索与再试；线索不等于掌握。</p></div></header><div class="grove-learning-list">${groveLearningHTML(view)}</div></section></div>`
+-   :groveWeekHTML(view,day)
+-  +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[day===data.today?day+' 今天':day,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${day===data.today?add:`<button type="button" data-grove-day="${esc(data.today)}">回到今天</button>`}</header>`
+-  +`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
+-  +groveScheduleHTML(view)
+-  +scopeHTML+`<div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${scope==='open'?'':' hidden'}>${groups}</div>`+undatedHTML
+-  +(closed.length?`<div class="grove-closed" data-grove-scope-list="closed"${scope==='closed'?'':' hidden'}><p class="small muted">这一天已办 ${closed.length} 项</p><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></div>`:'')
+-  +`</section><section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`);
++   :`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
++    +(hasSchedule?groveScheduleHTML(view):'')
++    +`<div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${scope==='open'?'':' hidden'}>${groupsHTML}</div>`+undatedHTML+scopeHTML
++    +(closed.length?`<div class="grove-closed" data-grove-scope-list="closed"${scope==='closed'?'':' hidden'}><p class="small muted">这一天已办 ${closed.length} 项</p><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></div>`:'')
++    +`<div class="grove-week-wrap">${groveWeekHTML(view,day)}</div>`)
++  +`</section><section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`;
+ }
++
+ function todayTasksLegacyHTML(){
+  const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
+  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);
+diff --git a/family_agenda.py b/family_agenda.py
+index 17445fb..4db3de9 100644
+--- a/family_agenda.py
++++ b/family_agenda.py
+@@ -1,8 +1,10 @@
+ """Calendar views of existing tasks, school inbox and study sessions; no copied tasks."""
++import collections
+ import datetime as dt
+ import functools
+ import json
+ import re
++import unicodedata
+ import family_agent
+ import family_calendar
+ import family_study
+@@ -999,15 +1001,164 @@ def _stated_clauses(text):
+     return {re.sub(r'^请','',c) for c in clauses}
+ 
+ 
++_CLAUSE_MARKS='，,；;。！!？?'
++_LABEL_LINE=re.compile(r'^(提交要求|补充要求|补充说明|正文)[：:]\s*')
++_PLAN_LINE=re.compile(r'^家庭安排（计划\s*[^）]*）[：:]\s*(.*)$')
++# Helpers that only fill a gap in wording, never carry a fact of their own (C2 fold equivalence).
++_FOLD_CHARS='的了着里吧呢啊呀哦嘛和与及而'
++_NUM=re.compile(r'第?\d+(?:[至到\-—~]\d+)?\s*[页题课节遍张本号点分个次行段字天周月]?')
++_NEG=('不','没','别','勿','禁止','取消','免')
++_NEG_RE=re.compile('|'.join(_NEG))
++_OBJ=re.compile(r'《[^》]*》')
++_TIME=re.compile(r'(今天|今晚|明天|明早|后天|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|\d{1,2}[点时])')
++
++
++def _plain(text):
++    """The words of a line for comparison only: width, case, blanks and punctuation do not make a repeat; never shown."""
++    text=unicodedata.normalize('NFKC',str(text or '')).lower()
++    return ''.join(ch for ch in text if not ch.isspace() and not unicodedata.category(ch).startswith('P'))
++
++
++def _fold_key(text):
++    """A plain line without the particles that change no fact (里/的/了/和…), so only wording differs."""
++    return ''.join(ch for ch in str(text or '') if ch not in _FOLD_CHARS)
++
++
++def _same_content(a,b):
++    """Two plain texts say the same thing: equal, one a continuous part of the other, or only particles apart."""
++    if not a or not b:return False
++    if a==b or a in b or b in a:return True
++    ka,kb=_fold_key(a),_fold_key(b)
++    return bool(ka) and ka==kb
++
++
++def _covered_by(whole,part):
++    """C2/C3: part adds nothing over whole: same content, or part is a continuous piece of whole (direction matters
++    for lines: a longer line carrying new words is never 'covered')."""
++    if not whole or not part:return False
++    if part==whole or part in whole:return True
++    return _fold_key(part)==_fold_key(whole) and bool(_fold_key(part))
++
++
++def _tokens(text):
++    """Facts a title-cut may not make vanish: numbers/pages/items, 《》 objects, times and negations."""
++    text=str(text or '')
++    return set(_NUM.findall(text))|set(_OBJ.findall(text))|set(_TIME.findall(text))|{n for n in _NEG if n in text}
++
++
++def _multiset_le(part,whole):
++    """Every character of part is available in whole, counting each one only as often as whole has it."""
++    left=collections.Counter(whole)
++    for ch in part:
++        if not left.get(ch,0):return False
++        left[ch]-=1
++    return True
++
++
++def _title_prefix_removed(line,title):
++    """C4: an opening of a line that only retells the title reads once, in the title.
++
++    A prefix is taken only at a spoken punctuation mark (：，；。) and only when every one of its words is in the title
++    (multiset), no number/page/item, 《》 object, time or negation of the prefix is absent from the title, and it is at
++    least 60% of the title. Otherwise the whole line stays: a new 题号 (第1、2题 over 第1题) or a swapped page/item
++    (第3页第2题 over 第2页第3题) is never cut away. Returns (rest, taken); empty rest means the line only retold the
++    title and is left out."""
++    tp=_plain(title)
++    if not tp:return line,False
++    label=_TITLE_LABEL.match(title);bare=_plain(title[label.end():] if label else title)
++    cuts=sorted({n for n,ch in enumerate(line) if ch in '：:，,；;。.'}|{len(line)},reverse=True)
++    for cut in cuts:
++        prefix=line[:cut].strip();rest=line[cut+1:].strip() if cut<len(line) else ''
++        pp=_plain(prefix)
++        if not pp or len(pp)<max(2,int(0.6*len(tp))):continue
++        if not _multiset_le(pp,tp):continue
++        # A negation that the title words carry must not be moved or dropped: when both the heading and this
++        # line speak a negation, the line reads as itself (A5a: 不用抄写/不用朗读 swap).
++        if _NEG_RE.search(title) and _NEG_RE.search(line) and pp!=tp:continue
++        if _tokens(prefix)-_tokens(title):continue
++        # A first clause that is exactly the heading's own words (朗读课本第20页对话三遍 after 英语：) keeps its own
++        # line: the words are the title's, but the line itself carries the requirement that follows, and the parent
++        # reads both halves in the body. Only a rest that is nothing but the title is left out.
++        if rest and pp==bare:continue
++        if rest:return rest,True
++        return '',True
++    return line,False
++
++
++def _whole_title_repeat(line,title):
++    """C3: a whole line that only retells the title is left out; its numbers, objects, times and negations read.
++
++    A title's range (第1—3题) and a line's single item (第13题) both flatten to 第13题 under _plain; the token guard
++    keeps them apart, as _title_prefix_removed already does for a line opening."""
++    a,b=_plain(title),_plain(line)
++    if not b:return False
++    if _tokens(line)-_tokens(title):return False
++    if _NEG_RE.search(line) and a!=b:return False
++    return _covered_by(a,b)
++
++
++def _clause_parts(line):
++    """A line's own clauses with their punctuation (top-level commas and sentence marks)."""
++    return [part for part in _sentences(line,_CLAUSE_MARKS) if _plain(part)]
++
++
++def _clause_covered(part,shown_clauses):
++    """C2: this clause adds nothing over one already shown."""
++    return any(_covered_by(whole,part) for whole in shown_clauses)
++
++
++def _without_repeats(line,shown):
++    """C2: every clause reads once in this card; C6 keeps every word that is not a repeat.
++
++    Only equal or continuous-part clauses go (_same_content), never a clause with a new number/object/negation. The
++    remaining clauses keep their own punctuation, and a dropped final clause hands its closing mark to the line so
++    (读第3课，读第3课。 reads 读第3课。). A line that repeats nothing is returned untouched."""
++    shown_clauses=[x for whole in shown for x in (_plain(part) for part in _clause_parts(whole)) if x]
++    kept,local,changed,last_marks=[],[],False,''
++    for chunk in _clause_parts(line):
++        part=_plain(chunk)
++        if part in local or _clause_covered(part,shown_clauses+local):
++            changed=True
++            last_marks=chunk[len(chunk.rstrip(_CLAUSE_MARKS)):]
++            continue
++        local.append(part);kept.append(chunk);last_marks=''
++    if not changed:return line,False
++    if last_marks and kept:kept[-1]=kept[-1].rstrip(_CLAUSE_MARKS)+last_marks
++    return ''.join(kept).strip(),True
++
++
++def _label_line(content,shown):
++    """C1/C6: a labelled line (提交要求：…) without its label.
++
++    Its whole content reads once when the card already shows every clause (_stated_clauses keeps 这一页 tied to its own
++    第N页). A content that extends the previous line's last clause folds into that line by replacing that very clause
++    (never inserting into the middle of a sentence, so the saved order cannot read scrambled). Otherwise its new words
++    are returned as an independent line."""
++    if not content:return '',set()
++    if shown and _stated_clauses(content)<=set().union(*map(_stated_clauses,shown)):return '',set()
++    if shown:
++        previous=shown[-1].rstrip(_LINE_END);clause=re.split(r'[，,；;]',previous)[-1].strip()
++        core=content.rstrip(_LINE_END).strip()
++        if clause and core.startswith(clause):
++            at=shown[-1].rfind(clause)
++            if at>=0:
++                shown[-1]=shown[-1][:at]+core+shown[-1][at+len(clause):]
++                return '',{len(shown)-1}
++    return content,set()
++
++
+ def action_lines(title,action,words=None):
+     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
+ 
+-    Each saved line reads as its own sentences. Only words the card would repeat are left out: a first sentence that is
+-    the title's own words (with or without its leading label such as 语文：), else the title's exact label opening it,
+-    and a 提交要求 line whose words begin with the previous line's last clause, which then reads once in that line.
+-    Every other word stays, in its saved order; partial overlaps stay. The own completion words (completion_words) the
+-    item's agenda carries head the one saved line opening with the same work words. Only after every repeat is read
+-    against whole lines (这一页 needs its line's 第N页) does each shown line read as its own top-level ； parts (_steps)."""
++    Only words the card would repeat are left out: the title's own label (语文：) opens no line; a label such as
++    提交要求： is never shown, while the requirement after it stays (C1/C6); an opening that only retells the title
++    gives way to the title (C4) with numbers, pages, items, 《》 objects, times and negations protected; a whole line
++    that only retells the title goes (C3); and every clause reads once across the card (C2): equal or continuous-part
++    clauses go, only-particle wording folds. A labelled line never inserts into the middle of a shown sentence; it
++    folds into the previous line only when it extends that line's last clause, else it keeps its own line. Everything
++    else keeps its saved order and punctuation. The own completion words (completion_words) the item's agenda carries
++    head the one saved line opening with the same work words. Each shown line then reads as its own top-level ； parts
++    (_steps); only a line this reading changed loses a dangling ； (C8), never a closing 。！？."""
+     saved=[x.strip() for x in str(action or '').splitlines()]
+     if words:saved=[words['lead']+x if x.startswith(words['work']) else x for x in saved]
+     lines=[x for line in saved if line for x in _sentences(line)]
+@@ -1017,20 +1168,36 @@ def action_lines(title,action,words=None):
+     elif lines and label:
+         own=heading[:label.end()].rstrip()  # the heading already shows this exact label (英语：)
+         if lines[0].startswith(own) and lines[0][len(own):].strip():lines[0]=lines[0][len(own):].strip()
+-    shown=[]
++    shown,edited=[],set()
++    heading_plain=_plain(heading)
+     for line in lines:
+-        restated=re.fullmatch(r'提交要求[：:]\s*(.+?)[。.；;！!\s]*',line)
+-        if restated and shown:
+-            previous=shown[-1].rstrip(_LINE_END);clause=re.split(r'[，,；;]',previous)[-1].strip()
+-            if clause and restated[1].startswith(clause):
+-                shown[-1]=previous[:len(previous)-len(clause)]+restated[1]+shown[-1][len(previous):]
+-                continue
+-            # Every clause it restates is one the card already shows (家长听完后在第20页签字 for 请家长听完后在这一页签字 of
+-            # the one 第20页 line): read once. Another page, place, object or any added clause keeps the line.
+-            if _stated_clauses(restated[1])<=set().union(*map(_stated_clauses,shown)):continue
++        labelled=_LABEL_LINE.match(line)
++        if labelled:
++            content=line[labelled.end():].strip()
++            if not _plain(content):continue
++            content,taken=_title_prefix_removed(content,heading)
++            if taken and not _plain(content):continue
++            cp=_plain(content)
++            if _covered_by(heading_plain,cp):continue
++            if any(_covered_by(_plain(whole),cp) for whole in shown):continue
++            content,touched=_label_line(content,shown)
++            if not _plain(content):continue
++            edited.update(touched);edited.add(len(shown));shown.append(content)
++            continue
++        line,taken=_title_prefix_removed(line,heading)
++        if taken and not _plain(line):continue
++        if _whole_title_repeat(line,heading):continue
++        if any(_covered_by(_plain(whole),_plain(line)) for whole in shown):continue
++        line,repeated=_without_repeats(line,shown)
++        if not _plain(line):continue
++        if taken or repeated:edited.add(len(shown))
+         shown.append(line)
+-    return [x for line in shown for x in _steps(line)]
+-
++    out=[]
++    for i,line in enumerate(shown):
++        parts=_steps(line)
++        if i in edited:parts=[part.strip().strip('；;，,') for part in parts]
++        out.extend(part for part in parts if _plain(part))
++    return out
+ 
+ def _cited_by(c):
+     """Every live school item's own stored words by the child and original it cites, read once per listing."""
+@@ -2020,9 +2187,17 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
+                         pubs = pubs + [dict(p, pending=True, role='pending_reminder', label='待核提醒（未采用）', time=n.get('published_at', ''))]
+         # An oral item with no written action shows its saved manual record's own words, with their provenance; nothing guessed.
+         if oral and not lines and str((task or {}).get('title') or '').strip(): lines = ['孩子口述、家长记录：' + task['title'].strip()]
+-        # The parent's own arrangement of this same item, as the family's, on its plan day; the school's words and dates stay.
++        # The parent's own arrangement of this same item, as the family's, on its plan day; the school's words and dates
++        # stay in lines, the family's arrange reads in plan_lines (C7: the two are never one breath).
+         arranged = str(((task or {}).get('focus') or {}).get('next_action') or '').strip()
++        plan_lines = []
+         if arranged: lines = list(lines) + ['家庭安排（计划 ' + (exact_day(a.get('scheduled_on')) or '日期未定') + '）：' + arranged]
++        kept = []
++        for line in lines:
++            family = _PLAN_LINE.match(str(line))
++            if family: plan_lines.extend(x.strip() for x in family[1].splitlines() if x.strip())
++            else: kept.append(line)
++        lines = kept
+         # A past lesson or arranged day the parent keeps open with its own review due now (等学校回复, review_on) is an earlier
+         # arrangement still open (之前安排), listed with its original facts; the review day is never a school date.
+         when = day_role(a, day)
+@@ -2034,7 +2209,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
+                     **({'material': True} if x.get('school_material') else {}),
+                     origin='school' if school else 'oral' if oral else 'family',
+                     origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
+-                    lines=lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
++                    lines=lines, plan_lines=plan_lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
+                     today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')),
+                     when=when, publications=pubs, published_at=str(a.get('published_at') or ''),
+                     publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),
+diff --git a/packaging/macos/Sources/Workspace.swift b/packaging/macos/Sources/Workspace.swift
+index a59f3b6..8c65c0c 100644
+--- a/packaging/macos/Sources/Workspace.swift
++++ b/packaging/macos/Sources/Workspace.swift
+@@ -409,6 +409,15 @@ extension DayItem {
+     var sourceRefs: [Publication] { var seen = Set<String>(); return (publications ?? []).filter { seen.insert($0.ref).inserted } }
+     /// 行内完整标准：各句照原文接起来，句末已有标点的不再补“；”（不出现“。；”）。
+     var standardWords: String { lines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
++    /// 家庭安排（服务端 plan_lines）：家长自己的计划，不是老师的要求；单独一段，不并进要求正文。旧后台没有这个键时为空。
++    var planLines: [String] { plan_lines ?? [] }
++    /// 家庭安排各句照原文接起来，与 standardWords 同一规则：句末已有标点的不再补“；”，不出现“。；”。
++    var planWords: String { planLines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
++    /// 家庭安排小标签：能拿到计划日（facts 里 role=scheduled）就带上日期，拿不到只写“家庭安排”。
++    var planLabel: String {
++        if let f = facts.first(where: { $0.role == "scheduled" }), !f.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "家庭安排（计划 \(f.value)）" }
++        return "家庭安排"
++    }
+     var sourceWords: String { sourceRefs.count > 1 ? "来源消息\(sourceRefs.count)条" : "" }
+     /// 老师与完整发布时间：有发布事实就照写它的原值（未知照写它的原话，如“发布 待核对”）；没有时用原始发布时间的完整日期与时刻。
+     var publishWords: String? {
+@@ -950,6 +959,11 @@ struct ItemRow: View {
+                         Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version-" + item.id, text: words)
+                     }
+                 } else { Text("完成标准未提供，待补充").font(Palette.body).foregroundStyle(Palette.coralInk) }
++                if !item.planLines.isEmpty {
++                    // 家庭安排是家长自己的计划，不是老师要求：单独一行带小标签，不并进上面的要求段落。
++                    Text(item.planLabel + "：" + item.planWords).font(Palette.body).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(nil)
++                        .fixedSize(horizontal: false, vertical: true).probe("row-plan-" + item.id, text: item.planWords)
++                }
+                 FlowRow(spacing: 6, lineSpacing: 4) {
+                     if item.showsWhen { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
+                     ForEach(item.dayRoles, id: \.self) { f in
+@@ -1600,6 +1614,18 @@ struct Inspector: View {
+                         Text(hint).font(Palette.small).foregroundStyle(Palette.coralInk).probe("detail-pending-" + item.id, text: hint)
+                     }
+                 }
++                if !item.planLines.isEmpty {
++                    // 家庭安排单独成节，放在老师的要求之后：家长自己的计划，不当作一条要求。
++                    section(item.planLabel, "calendar") {
++                        ForEach(Array(item.planLines.enumerated()), id: \.offset) { index, line in
++                            HStack(alignment: .firstTextBaseline, spacing: 10) {
++                                Image(systemName: "person.2.fill").font(.system(size: 11)).foregroundStyle(Palette.leaf400).accessibilityHidden(true)
++                                Text(line).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
++                                    .probe("detail-plan-\(item.id)-\(index)", text: line)
++                            }
++                        }
++                    }
++                }
+                 if !item.sourceRefs.isEmpty { sources(item) }
+                 if !item.task_id.isEmpty { materials(item) }
+                 feedback(item)
+diff --git a/packaging/macos/Sources/WorkspaceAPI.swift b/packaging/macos/Sources/WorkspaceAPI.swift
+index bc3f712..9808e09 100644
+--- a/packaging/macos/Sources/WorkspaceAPI.swift
++++ b/packaging/macos/Sources/WorkspaceAPI.swift
+@@ -68,6 +68,8 @@ struct DayItem: Decodable, Hashable, Identifiable {
+     let origin: String
+     let origin_label: String
+     let lines: [String]
++    /// 家庭安排（服务端 plan_lines，从老师要求里拆出来的家长自己的计划）。较早后台不带这个键时为 nil，不当作解码失败。
++    let plan_lines: [String]?
+     let complete_words: String
+     let facts: [DayFact]
+     let today: Bool
+diff --git a/test_school_completion_today.py b/test_school_completion_today.py
+index acd4dd6..8a086fa 100644
+--- a/test_school_completion_today.py
++++ b/test_school_completion_today.py
+@@ -779,7 +779,9 @@ class ActionLinesTests(unittest.TestCase):
+                 ('语文：A', '读B！！今晚完成', ['读B！！', '今晚完成']),
+                 ('英语：跟读', '英语听录音。今晚完成。', ['英语听录音。', '今晚完成。']),
+                 ('语文：A', '英语：读B。今晚完成。', ['英语：读B。', '今晚完成。']),
+-                ('英语：跟读', '英语：', ['英语：']),
++                # C3 (display contract): a line that is only the title's own words (英语：) reads once in the title, so no
++                # body line is left to show.
++                ('英语：跟读', '英语：', []),
+                 ('读三段并回答', '读三段并回答。每题写出依据。', ['每题写出依据。'])]:
+             with self.subTest(title=title, action=action):
+                 self.assertEqual(family_agenda.action_lines(title, action), shown)
+@@ -789,15 +791,19 @@ class ActionLinesTests(unittest.TestCase):
+     def test_only_the_title_s_own_line_and_a_restated_handback_clause_are_left_out(self):
+         for title, action, shown in [
+                 ('读三段并回答', '读三段并回答', []),
+-                ('读三段并回答', '读三段并回答。\n每题写出依据，不少于20字\n提交要求：交纸质稿', ['每题写出依据，不少于20字', '提交要求：交纸质稿']),
++                ('读三段并回答', '读三段并回答。\n每题写出依据，不少于20字\n提交要求：交纸质稿', ['每题写出依据，不少于20字', '交纸质稿']),
+                 # A partial overlap with the title is never left out; its own ； parts read as its steps (every word kept).
+                 ('写生词', '写生词10个，每个3遍；家长签字', ['写生词10个，每个3遍；', '家长签字']),
+-                ('数学：完成同步练习第3课', '完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业', ['完成同步练习第3课，周四交', '提交要求：交同步练习第3课作业']),
++                # C1 (display contract): the 提交要求： label never reads in the body; the requirement after it stays, so
++                # every saved word is still read here. The first line is untouched (its opening is the heading's words).
++                ('数学：完成同步练习第3课', '完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业', ['完成同步练习第3课，周四交', '交同步练习第3课作业']),
+                 ('科学：带一个空透明塑料瓶', '明天来校带一个空透明塑料瓶，科学课用。', ['明天来校带一个空透明塑料瓶，科学课用。']),
+                 ('英语：跟读Unit 4两遍并家长签字', '听录音跟读 Unit 4 A day at the lake 两遍。', ['听录音跟读 Unit 4 A day at the lake 两遍。']),
+                 ('语文：A', '今晚完成，明天交。\n提交要求：明天交。', ['今晚完成，明天交。']),
+-                ('语文：A', '今晚完成，不用明天交。\n提交要求：明天交练习册。', ['今晚完成，不用明天交。', '提交要求：明天交练习册。']),
+-                ('语文：A', '提交要求：明天交练习册。', ['提交要求：明天交练习册。'])]:
++                # C1 (display contract): a 提交要求： label never reads in the body; a restated clause is still dropped.
++                ('语文：A', '今晚完成，不用明天交。\n提交要求：明天交练习册。', ['今晚完成，不用明天交。', '明天交练习册。']),
++                # C1/C6 (display contract): with nothing shown before it, the label line keeps its whole new requirement.
++                ('语文：A', '提交要求：明天交练习册。', ['明天交练习册。'])]:
+             with self.subTest(title=title, action=action):
+                 self.assertEqual(family_agenda.action_lines(title, action), shown)
+ 
+@@ -1499,21 +1505,28 @@ class ClearStandardsTests(unittest.TestCase):
+         shown = family_agenda.action_lines('英语：朗读课本第20页对话三遍', action)
+         self.assertEqual(shown, STEP_CARD_LINES['第20页'])
+         self.assertEqual(''.join(shown), CLEAR_EN_GOAL)
+-        for action in [
++        for action, kept in [
+                 # Two pages: 这一页 has no single antecedent in its instruction.
+-                '今晚朗读课本第20页和第21页的对话；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。',
++                ('今晚朗读课本第20页和第21页的对话；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。',
++                 '家长听完后在第20页签字'),
+                 # Another place on the same page is another signature (N02).
+-                '完成第20页后，请家长在本页右上角签字，并在本页下方家长栏再签一次。\n提交要求：家长在第20页签字。',
++                ('完成第20页后，请家长在本页右上角签字，并在本页下方家长栏再签一次。\n提交要求：家长在第20页签字。',
++                 '家长在第20页签字'),
+                 # Another signed object (N01).
+-                '今晚朗读课本第20页三遍，家长听完后在第20页签字。\n提交要求：请家长在《朗读活动确认单》上签字，明早交给老师。',
++                ('今晚朗读课本第20页三遍，家长听完后在第20页签字。\n提交要求：请家长在《朗读活动确认单》上签字，明早交给老师。',
++                 '《朗读活动确认单》上签字'),
+                 # A restated line with a requirement of its own.
+-                CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。',
++                (CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。', '带回课本'),
+                 # Root's exact counter-proof on 941547c: 本页 names another material's page (听写本), never 课本第20页.
+-                '朗读课本第20页；家长在听写本本页签字。\n提交要求：家长在听写本第20页签字。',
++                ('朗读课本第20页；家长在听写本本页签字。\n提交要求：家长在听写本第20页签字。', '家长在听写本第20页签字'),
+                 # Root's frozen guard (static before this run): another material taken out between the page and 本页.
+-                '朗读课本第20页；取出听写本；家长在本页签字。\n提交要求：家长在第20页签字。']:
++                ('朗读课本第20页；取出听写本；家长在本页签字。\n提交要求：家长在第20页签字。', '家长在第20页签字')]:
+             with self.subTest(action=action):
+-                self.assertTrue(any(x.startswith('提交要求') for x in family_agenda.action_lines('英语：朗读', action)))
++                shown = family_agenda.action_lines('英语：朗读', action)
++                # C1 (display contract): the 提交要求： label never reads in the body, but a label line's own new words must
++                # survive every restatement guard: they no longer carry the label that used to mark them.
++                self.assertFalse(any(x.startswith(('提交要求', '补充要求', '补充说明', '正文')) for x in shown), shown)
++                self.assertTrue(any(kept in x for x in shown), (kept, shown))
+ 
+     def test_only_the_item_s_own_check_words_make_its_day_a_check(self):
+         sent = '2026-10-21'
+@@ -1624,6 +1637,8 @@ class RequirementStepTests(unittest.TestCase):
+                 ('英语：A', 'Read page 20; ask a parent to sign.', ['Read page 20; ask a parent to sign.']),
+                 # A negation, a quantity and a part in the title's own words all stay: no new omission.
+                 ('语文：A', '不用抄写课文；只读第2段两遍。', ['不用抄写课文；', '只读第2段两遍。']),
++                # Unchanged: the line's first clause is the heading's own words, so it is not cut away — the body reads
++                # the whole requirement, both the work and the signature that follows it (no information disappears).
+                 ('英语：朗读课本第20页对话三遍', '朗读课本第20页对话三遍；家长签字。', ['朗读课本第20页对话三遍；', '家长签字。']),
+                 # Marks alone never make a line.
+                 ('语文：A', '读第1段；。', ['读第1段；。']),
+diff --git a/workbench.css b/workbench.css
+index 84527ab..f3087ec 100644
+--- a/workbench.css
++++ b/workbench.css
+@@ -215,3 +215,158 @@ dialog.record-topic{width:min(760px,94vw)}.record-topic-head h2{margin:4px 0 6px
+ /* The day list's direct part switch (待办 / 日期未定 / 已办): plain 44px buttons, the chosen one marked; a hidden part stays hidden. */
+ .grove-scope{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}.grove-scope button{min-height:44px}.grove-scope button[aria-pressed="true"]{font-weight:700;border-color:currentColor}
+ .grove [data-grove-scope-list][hidden]{display:none}
++
++/* —— 清单重设计：顶部压缩成「谁 · 今天几件 · 进度 · 下一步」，卡片按科目上色、一行要点、关键约束徽章、我家安排独立浅色块。 —— */
++.grove-hero-wrap{display:block}
++.grove-hero{display:flex;flex-direction:column;gap:6px;margin:0 0 8px;align-items:stretch}
++.grove-hero-top{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:34px}
++.grove .today-controls{position:static;margin:0;padding:0;background:none;border:0;display:flex;align-items:center;gap:6px;min-height:0}
++.grove .today-controls>.small,.grove .today-controls>.muted{display:none}
++.grove .child-filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
++.grove .child-filters button{min-height:32px;padding:2px 12px;border-radius:999px;font-size:14px;border-bottom-width:1px}
++.grove-hero-date{font-size:13px;color:var(--ink-2);white-space:nowrap}
++.grove-hero-main{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
++.grove-hero-title{margin:0;font-size:23px;line-height:1.2;white-space:nowrap}
++.grove-hero-title strong{font-size:27px}
++.grove-progress{flex:1 1 96px;height:6px;border-radius:999px;background:var(--wood-100);overflow:hidden;min-width:64px}
++.grove-progress i{display:block;height:100%;background:#5E9A3A;border-radius:999px}
++.grove-progress-words{font-size:12.5px;color:var(--ink-2);white-space:nowrap}
++.grove-hero-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
++.grove-hero-actions button{min-height:36px;padding:4px 12px;font-size:14px;border-bottom-width:2px}
++.grove-quiet{background:transparent;box-shadow:none;color:var(--ink-2)}
++.grove-hero-wrap .grove-tabs{margin:0 0 10px}
++/* 卡片：左侧科目色条；已完成压灰 + 勾 + 删除线，排在该科目末尾。 */
++.grove-row{border-left-width:4px;border-left-style:solid;border-left-color:#a8743f;border-radius:14px;padding:11px 12px}
++.grove-row.subj-chinese{border-left-color:#7a9a4e}
++.grove-row.subj-math{border-left-color:#5a7ea8}
++.grove-row.subj-english{border-left-color:#c98b3a}
++.grove-row.subj-general{border-left-color:#a8743f}
++.grove-row.is-done{background:#f3f7ee;border-left-color:#86BE57}
++.grove-row.is-done .grove-title{color:#8b8172;text-decoration:line-through}
++.grove-row.is-done .grove-points,.grove-row.is-done .grove-meta{color:#9a9384}
++.grove-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
++.grove-title{font-size:18px;line-height:1.35}
++.grove-status{flex:none;display:inline-flex;align-items:center;gap:4px;font-size:12px;font-weight:600;color:var(--ink-2);white-space:nowrap;padding-top:3px}
++.grove-status i{width:7px;height:7px;border-radius:50%;background:#8b8172}
++.grove-status.is-today i{background:#5E9A3A}
++.grove-status.is-due i,.grove-status.is-overdue i{background:#b0553f}
++.grove-status.is-later i,.grove-status.is-undated i{background:#b9ab90}
++.grove-status.is-done{color:#4f7a44}
++.grove-status.is-done i{background:#5E9A3A}
++.grove-points{display:flex;flex-direction:column;gap:3px;color:var(--ink-2);font-size:15px;line-height:1.45;overflow-wrap:anywhere}
++.grove-badges{display:flex;flex-wrap:wrap;gap:6px;margin-top:2px}
++.grove-badge{display:inline-flex;align-items:center;font-size:12.5px;font-weight:600;padding:3px 9px;border-radius:999px;line-height:1.25}
++.grove-badge.is-quiet{background:#eaf2e3;color:#4f7a44}
++.grove-badge.is-bring{background:#e8f0f6;color:#3d6b8f}
++.grove-badge.is-sign{background:#fbeae4;color:#b0553f}
++.grove-badge.is-due{background:#fdf2dc;color:#8a6418}
++/* 我家安排：家长自己的计划，独立浅黄块，绝不混进老师要求那一行。 */
++.grove-plan{display:flex;flex-direction:column;gap:1px;margin-top:4px;background:#fdf2dc;border:1px solid #f0dfb8;border-left:3px solid #d9a94e;border-radius:9px;padding:6px 10px}
++.grove-plan-head{font-size:12px;font-weight:700;color:#a9701f}
++.grove-plan-lines{font-size:14px;line-height:1.45;color:#5c4a26}
++.grove-plan .grove-plan-lines{color:#5c4a26}
++/* 本周条挪到清单末尾：手机上先看今天的卡，再翻这一周。 */
++.grove-week-wrap{margin:14px 0 4px}
++.grove-week-wrap .grove-week{margin:0}
++.grove-week-wrap .grove-week-head strong{font-size:14px}
++.grove-week-wrap .grove-week-head button{min-width:44px;min-height:44px}
++.grove-week-wrap .grove-day{min-height:48px}
++@media (max-width:899px){
++ .grove-list-head{flex-wrap:nowrap}
++ .grove-hero-title{font-size:22px}
++ .grove-hero-actions button{min-height:36px}
++ .grove-row{padding:10px}
++ .grove-title{font-size:17px}
++}
++
++/* 手机上把顶部再压紧：首页不显示品牌行，孩子与日期就是第一行；范围切换放到清单之后；本周条最后。 */
++@media (max-width:899px){
++ body[data-page="home"] .brand{display:none}
++ body[data-page="home"] aside{padding-top:8px}
++ .grove .child-filters>.small,.grove .child-filters>.muted{display:none}
++ .grove-hero{gap:5px;margin:0 0 6px}
++ .grove-hero-top{min-height:32px}
++ .grove-hero-title{font-size:21px;line-height:1.15}
++ .grove-hero-title strong{font-size:25px}
++ .grove-hero-main{flex-wrap:nowrap;gap:8px}
++ .grove-progress{flex:1 1 40px;min-width:40px}
++ .grove-progress-words{display:none}
++ .grove-hero-actions button{min-height:34px;padding:3px 10px;font-size:13.5px}
++ .grove-scope{margin:10px 0 0}
++ .grove-scope button{min-height:34px;padding:2px 10px;font-size:13.5px}
++ .grove-subject{margin-top:12px}
++}
++@media (max-width:560px){.grove-hero-date{font-size:12.5px}}
++
++/* UI2 详情页：面包屑 → 大标题 → 来源行 → 一行徽章 → 编号步骤 → 完成标准 → 我家安排 → 资料/来源 → 反馈。 */
++#groveDetail{max-width:760px}
++.grove-detail-top{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:2px 0 4px}
++.grove-detail-top .grove-tag{font-size:13px}
++.grove-detail-date{font-size:13px;color:#8b8172}
++.grove-detail-refs{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
++.grove-detail-refs button{min-height:32px;padding:2px 10px;font-size:12.5px;border-radius:999px}
++.grove-h.grove-detail-title{font-size:25px;line-height:1.28;margin:0 0 6px;color:#2e2a24}
++.grove-detail-source{font-size:13px;color:#8b8172;margin:0 0 10px}
++.grove-detail-badges{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 12px}
++.grove-detail .grove-fact{display:inline-flex;align-items:baseline;gap:6px;padding:5px 11px;border:1px solid #ece4d6;border-radius:999px;background:#fff;font-size:13px;line-height:1.2}
++.grove-detail .grove-fact span{color:#8b8172}
++.grove-detail .grove-fact strong{font-size:14px;font-weight:600;color:#2e2a24}
++.grove-detail .grove-fact em{font-style:normal;font-size:12px;color:#a9701f}
++.grove-detail .grove-fact.is-coral{border-color:#f0c9ba;background:#fbeae4}
++.grove-detail .grove-card{border:1px solid #ece4d6;border-radius:16px;background:#fff;padding:14px 16px;margin:0 0 10px}
++.grove-detail .grove-card>h3{font-size:13px;letter-spacing:.02em;color:#8b8172;font-weight:600;margin:0 0 9px}
++.grove-detail-steps .grove-standards{list-style:none;counter-reset:step;margin:0;padding:0}
++.grove-detail-steps .grove-standards li{counter-increment:step;position:relative;padding:0 0 11px 38px;font-size:16px;line-height:1.5;color:#2e2a24}
++.grove-detail-steps .grove-standards li:last-child{padding-bottom:0}
++.grove-detail-steps .grove-standards li::before{content:counter(step);position:absolute;left:0;top:1px;width:24px;height:24px;border-radius:50%;background:#eaf2e3;color:#4f7a44;font-size:13px;font-weight:700;display:flex;align-items:center;justify-content:center}
++.grove-detail-standard p{margin:0 0 6px;font-size:15px;line-height:1.55}
++.grove-detail-standard p:last-child{margin-bottom:0}
++.grove-detail .grove-when{margin:0 0 10px;font-size:13px;color:#8b8172}
++/* 我家安排：浅黄独立卡，与老师要求分开。 */
++.grove-detail .grove-plan-card{background:#fdf2dc;border-color:#f0dfb8;border-left:4px solid #d9a94e}
++.grove-detail .grove-plan-card>h3{color:#a9701f}
++.grove-detail .grove-plan-card .grove-standards{margin:0;padding-left:18px;line-height:1.55;color:#5c4a26}
++/* 资料、来源与反馈收成普通卡。 */
++.grove-detail .grove-materials>.grove-material{background:#faf6ec;border:1px solid #ece4d6;border-radius:10px}
++.grove-detail .grove-material+.grove-material{margin-top:8px}
++.grove-detail .grove-print{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 10px}
++.grove-detail .grove-print p{flex:1 1 100%;margin:0}
++.grove-detail .grove-detail-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
++.grove-detail .grove-detail-actions .primary{min-height:46px;padding:10px 20px;font-size:16px}
++.grove-detail details.grove-more{margin-top:6px}
++.grove-detail .grove-history li{font-size:14px}
++/* 清单卡上的日期事实做淡：主视觉是状态点与徽章，不靠灰色「截止」抢注意力（[data-fact] 仍保留给读屏与测试）。 */
++.grove-chips .grove-chip.is-fact{font-size:12px;background:transparent;border:1px solid #ece4d6;color:#8b8172;padding:1px 8px}
++.grove-chips .grove-chip.is-fact.is-coral{background:#fbeae4;border-color:#f0c9ba;color:#b0553f}
++@media (max-width:899px){
++ .grove-detail-title{font-size:23px}
++ .grove-detail .grove-card{padding:12px 14px;border-radius:14px}
++ .grove-detail-steps .grove-standards li{font-size:15.5px}
++ /* 底部操作条随详情滚动贴在底栏之上，不另建重复按钮。 */
++ .grove-detail .grove-detail-feedback{padding-bottom:6px}
++ .grove-detail .grove-detail-actions{position:sticky;bottom:calc(64px + env(safe-area-inset-bottom));z-index:3;background:linear-gradient(#fff0,#fff 32%);padding:8px 0 2px;margin-top:6px}
++ .grove-detail .grove-detail-actions .primary{flex:1 1 auto}
++}
++
++/* 手机上科目牌再压一点：第一张卡更早出现。 */
++@media (max-width:899px){
++ .grove-subject{margin-top:10px}
++ .grove-subject>.grove-tag,.grove-subject>h2.grove-tag{font-size:15px;padding:1px 9px;margin:0 0 5px;border-radius:8px}
++ .grove-row article,.grove-row{padding:9px 10px}
++ .grove-rows{gap:8px}
++}
++
++/* 卡片第 3 条起折成一行；徽章多出来的收成 +N。 */
++.grove-point-more{font-size:12.5px;color:#3d6b8f;margin-top:2px}
++.grove-badge.is-more{background:#f2ece0;color:#8b8172}
++.grove-chips .grove-chip.is-fact{background:transparent;border:1px solid #ece4d6;color:#8b8172;font-size:12px;padding:1px 8px}
++@media (max-width:899px){
++ /* 底部固定 tab 条不能盖住最后一张卡。 */
++ body[data-page="home"] main{padding-bottom:calc(96px + env(safe-area-inset-bottom))}
++ .grove-rows{gap:8px}
++ .grove-point{font-size:14.5px}
++ .grove-points{gap:1px}
++}
++.grove-detail .grove-empty-line{margin:0}
++.grove-detail .grove-materials:not(:has(.grove-material)){padding:10px 14px}
++.grove-detail .grove-materials:not(:has(.grove-material))>h3{margin:0 0 2px}
+diff --git a/test_daily_list_expression.py b/test_daily_list_expression.py
+new file mode 100644
+index 0000000..e2910ff
+--- /dev/null
++++ b/test_daily_list_expression.py
+@@ -0,0 +1,320 @@
++#!/usr/bin/env python3
++"""Display-only contract for the daily-list body: one requirement reads once (C1-C8).
++
++The product's daily card used to stack a task's body, 提交要求 and 补充要求 on top of each other, repeat the title's
++own words in the body, and fold the family's arrangement into the teacher's words. These tests pin the display contract
++on fully fictional tasks: labels never read in the body, a clause reads once, a restatement of the title goes, the
++title's opening is not repeated, a line the card already reads goes, labelled lines keep their new words, the family's
++arrangement reads apart in plan_lines, and no line this display edited keeps a dangling full-width semicolon. Nothing
++here writes a store: the same saved action and the same task dict read unchanged after the call.
++
++The comparison is the display's own: _plain (NFKC, case, whitespace, punctuation) equality, continuous substring, or
++the same words with only particles (了/着/里/也/都/就/和…) differing. There is no similarity threshold: a word that is
++not exactly (or particle-)equal is never a repeat, so 明天/后天, 练习册/练习本, 1号本/2号本 and a title's 第1题 never
++swallow a line that adds one.
++"""
++import copy
++import unittest
++
++import family_agenda
++
++
++DAY = '2026-11-04'
++CHILD = {'id': 'child-display-1', 'name': '小禾'}
++
++# The three fictional tasks from the parent's report, rebuilt from the saved words. The actions are display input only:
++# no store and no model is involved in this file.
++ENGLISH_TITLE = '英语：完成《每日练习》'
++ENGLISH_ACTION = ('完成英语《每日练习》：一、看图选词第1—3题；二、标星单词 under、near 各抄写一遍。不需要录音。'
++                  '做完放进英语夹里，明天带来。\n'
++                  '提交要求：做完放进英语夹，明天带来。\n'
++                  '补充要求：完成英语《每日练习》。\n'
++                  '完成后放进英语夹里，明天带到学校。\n'
++                  '不用在群里发照片。')
++ENGLISH_LINES = ['一、看图选词第1—3题',
++                 '二、标星单词 under、near 各抄写一遍。',
++                 '不需要录音。',
++                 '做完放进英语夹里，明天带来。',
++                 # Kept on purpose: 完成后…带到学校 is neither a continuous part of, nor particle-equal to,
++                 # 做完…明天带来, so dropping it would delete the words 学校/完成 rather than a pure repetition. This is
++                 # exactly the case where a similarity score is not allowed to decide: C2 still reads every identical
++                 # clause once, and C3 below shows no line only retells the title.
++                 '完成后放进英语夹里，明天带到学校。',
++                 '不用在群里发照片。']
++
++MATH_TITLE = '数学：完成《每日练习》第26页第1—3题'
++MATH_ACTION = ('完成数学《每日练习》第26页第1—3题；第4题不做。每题写出算式并验算。\n'
++               '提交要求：家长签字后周五交给数学周老师')
++MATH_LINES = ['第4题不做。', '每题写出算式并验算。', '家长签字后周五交给数学周老师']
++
++CHINESE_TITLE = '语文：朗读《风经过小巷》第2、3自然段'
++CHINESE_ACTION = ('朗读《风经过小巷》第2、3自然段。各读两遍，读给家长听。\n'
++                  '补充要求：不用录音，也不用上传，明早我抽听。')
++CHINESE_LINES = ['各读两遍，读给家长听。', '不用录音，也不用上传，明早我抽听。']
++CHINESE_PLAN = '林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍'
++
++LABELS = ('提交要求', '补充要求', '补充说明', '正文')
++
++
++def plain(text):
++    """The same comparison shape the display uses: NFKC width, case, whitespace and punctuation do not make a word new."""
++    import unicodedata
++    text = unicodedata.normalize('NFKC', str(text)).lower()
++    return ''.join(ch for ch in text if not (ch.isspace() or unicodedata.category(ch).startswith('P')))
++
++
++class LabelTests(unittest.TestCase):
++    """C1: no 提交要求：/补充要求：/补充说明：/正文： tag reads in the body; the colon goes with the tag."""
++
++    def test_each_label_tag_is_left_out_whole_with_its_colon(self):
++        for tag in LABELS:
++            for mark in ('：', ':'):
++                with self.subTest(tag=tag, mark=mark):
++                    shown = family_agenda.action_lines('语文：A', tag + mark + '明天早上交练习册。')
++                    self.assertEqual(shown, ['明天早上交练习册。'])
++                    self.assertFalse(any(line.startswith(tag) for line in shown), shown)
++                    self.assertNotIn(tag + mark, ''.join(shown))
++
++    def test_a_label_whose_content_the_body_already_reads_is_dropped_whole(self):
++        # 提交要求 repeats 做完放进英语夹里，明天带来, which the card already shows: only the tag word changes.
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown, ENGLISH_LINES)
++        self.assertNotIn('提交要求', ''.join(shown))
++
++
++class ClauseOnceTests(unittest.TestCase):
++    """C2: a clause reads once across lines and inside one line; full-width/half-width and spacing do not hide it."""
++
++    def test_the_same_clause_is_not_read_twice_across_lines(self):
++        shown = family_agenda.action_lines('语文：A', '读第3课两遍，家长签字。\n家长签字。')
++        self.assertEqual(shown, ['读第3课两遍，家长签字。'])
++        self.assertEqual(plain(''.join(shown)).count('家长签字'), 1)
++
++    def test_the_same_clause_is_not_read_twice_inside_one_line_and_keeps_the_full_stop(self):
++        shown = family_agenda.action_lines('语文：A', '读第3课，读第3课。')
++        self.assertEqual(shown, ['读第3课。'])
++        self.assertEqual(plain(''.join(shown)).count('读第3课'), 1)
++
++    def test_a_dropped_middle_clause_keeps_the_remaining_order_and_separator(self):
++        self.assertEqual(family_agenda.action_lines('语文：A', '读第3课，读第3课，家长签字。'), ['读第3课，家长签字。'])
++        self.assertEqual(''.join(family_agenda.action_lines('语文：A', 'A，A，B。')), 'A，B。')
++
++    def test_spacing_and_punctuation_do_not_make_a_new_clause(self):
++        shown = family_agenda.action_lines('语文：A', '家长签字。\n 家长 签字！')
++        self.assertEqual(plain(''.join(shown)).count('家长签字'), 1)
++
++    def test_a_shorter_form_of_a_shown_clause_is_a_repeat(self):
++        shown = family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。')
++        self.assertEqual(shown, ['做完放进英语夹里，明天带来。'])
++
++
++class RestatementTests(unittest.TestCase):
++    """C3: a line the title already says whole is left out, but only when nothing of it is new."""
++
++    def test_a_line_that_only_retells_the_title_is_left_out(self):
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '补充要求：完成英语《每日练习》。'), [])
++
++    def test_one_new_word_keeps_the_line_even_when_the_title_says_the_rest(self):
++        # 本 is not in the title: this is a different object, not a restatement.
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》本。'),
++                         ['完成英语《每日练习》本。'])
++        # 自然段 says a real word the title's 段 does not: the frozen line stays.
++        self.assertEqual(family_agenda.action_lines('语文：朗读《秋天的小院》第2、3段两遍',
++                                                   '朗读《秋天的小院》第2、3自然段两遍。'),
++                         ['朗读《秋天的小院》第2、3自然段两遍。'])
++
++
++class TitleOpeningTests(unittest.TestCase):
++    """C4: the title's own opening reads once in the title; the rest of the line stays, with its own new words."""
++
++    def test_the_titles_own_opening_gives_way_and_the_new_requirement_stays(self):
++        shown = family_agenda.action_lines(MATH_TITLE, '完成数学《每日练习》第26页第1—3题；第4题不做。')
++        self.assertEqual(shown, ['第4题不做。'])
++        self.assertFalse(any('第26页' in line for line in shown), shown)
++
++    def test_a_title_word_the_line_itself_adds_keeps_the_whole_line(self):
++        # 完成 is that line's own word (the title is 数学：练习册第18页第2、4、6题).
++        shown = family_agenda.action_lines('数学：练习册第18页第2、4、6题',
++                                           '完成练习册第18页第2、4、6题；每题先列式，再写完整计算过程，算完后逐题验算。')
++        self.assertEqual(shown, ['完成练习册第18页第2、4、6题；', '每题先列式，再写完整计算过程，算完后逐题验算。'])
++
++    def test_a_new_question_number_is_never_cut_as_a_title_repeat(self):
++        # The title says 第1题 only; 第2题 is new, so the opening cannot give way (RED counter-example).
++        self.assertEqual(family_agenda.action_lines('数学：完成第20页第1题', '完成第20页第1、2题'),
++                         ['完成第20页第1、2题'])
++
++    def test_a_swapped_page_and_question_number_is_not_a_title_repeat(self):
++        self.assertEqual(family_agenda.action_lines('语文：完成练习册第2页第3题', '完成练习册第3页第2题'),
++                         ['完成练习册第3页第2题'])
++
++
++class SameContentTests(unittest.TestCase):
++    """C5: a line identical to a shown line, or different only by particles, goes; near-but-different words stay."""
++
++    def test_an_identical_later_line_is_dropped(self):
++        self.assertEqual(family_agenda.action_lines('语文：A', '读第3课两遍，家长签字。\n读第3课两遍，家长签字！'),
++                         ['读第3课两遍，家长签字。'])
++
++    def test_a_line_differing_only_by_particles_is_the_same_clause(self):
++        # 里 is a particle: 做完放进英语夹 and 做完放进英语夹里 are the same words.
++        self.assertEqual(family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。'),
++                         ['做完放进英语夹里，明天带来。'])
++
++    def test_near_but_different_words_are_never_swallowed(self):
++        cases = [('明天交练习册。\n明天不交练习册。', ['明天交练习册。', '明天不交练习册。']),
++                 ('今天交练习册。\n明天交练习册。', ['今天交练习册。', '明天交练习册。']),
++                 ('带上练习册。\n带上练习本。', ['带上练习册。', '带上练习本。']),
++                 ('不用明天交。\n不用后天交。', ['不用明天交。', '不用后天交。']),
++                 ('1号本写。\n2号本写。', ['1号本写。', '2号本写。'])]
++        for action, expected in cases:
++            with self.subTest(action=action):
++                self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', action), expected)
++
++    def test_the_english_completion_line_stays_because_it_is_not_the_same_words(self):
++        self.assertIn('完成后放进英语夹里，明天带到学校。', family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION))
++
++
++class NewInformationTests(unittest.TestCase):
++    """C6: a labelled line's new clauses stay; only the clauses the card already reads are left out."""
++
++    def test_a_labels_new_requirement_is_kept_without_its_label(self):
++        shown = family_agenda.action_lines(MATH_TITLE, MATH_ACTION)
++        self.assertFalse(any(line.startswith('提交要求') for line in shown), shown)
++        self.assertTrue(any('交给数学周老师' in line for line in shown), shown)
++
++    def test_a_labelled_extension_folds_into_the_shown_line_once(self):
++        # The frozen card from test_child_study_ui.cjs, unchanged: 明天早上交练习册 extends 明天早上交.
++        shown = family_agenda.action_lines('语文：完成《星芽阅读练习册》第28页第1、2题',
++                                           '完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。\n'
++                                           '提交要求：明天早上交练习册。')
++        self.assertEqual(shown, ['答案写在练习册上。', '今晚完成，明天早上交练习册。'])
++        self.assertEqual(''.join(shown).count('明天早上交'), 1)
++
++    def test_a_label_that_does_not_extend_the_last_clause_becomes_its_own_line_not_a_scramble(self):
++        # RED counter-example: folding this into the first sentence produced a sentence that is not a continuous part
++        # of the saved words (明天交练习册和卷子，然后读课文。). It must instead read as its own line after the saved one.
++        shown = family_agenda.action_lines('语文：A', '明天交练习册，然后读课文。\n提交要求：明天交练习册和卷子。')
++        self.assertEqual(shown, ['明天交练习册，然后读课文。', '明天交练习册和卷子。'])
++        self.assertIn(''.join(shown), '明天交练习册，然后读课文。明天交练习册和卷子。')
++
++
++class GoldenTaskTests(unittest.TestCase):
++    """The three fictional tasks from the parent's report, in their fixed display form (C1-C8 together)."""
++
++    def test_english_card_reads_once(self):
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown, ENGLISH_LINES)
++        self.assertFalse(any(line.startswith(label) for line in shown for label in LABELS), shown)
++        self.assertFalse(any('每日练习' in line for line in shown), shown)
++
++    def test_math_card_reads_once_and_keeps_the_new_handback(self):
++        self.assertEqual(family_agenda.action_lines(MATH_TITLE, MATH_ACTION), MATH_LINES)
++
++    def test_chinese_body_reads_once(self):
++        self.assertEqual(family_agenda.action_lines(CHINESE_TITLE, CHINESE_ACTION), CHINESE_LINES)
++
++
++class PlanLineTests(unittest.TestCase):
++    """C7: the family's arrangement reads apart in plan_lines; lines keeps only the teacher's words."""
++
++    def _row(self, task, item):
++        view = family_agenda.day_view([item], [task], [], CHILD, DAY, DAY, 'wrong')
++        return view['groups'][0]['items'][0], view
++
++    def _task_and_item(self, focus='next', scheduled=True):
++        task = {'id': 'task-display-1', 'child': CHILD['name'], 'title': CHINESE_TITLE, 'action': CHINESE_ACTION,
++                'action_lines': family_agenda.action_lines(CHINESE_TITLE, CHINESE_ACTION),
++                'focus': {'next_action': CHINESE_PLAN} if focus == 'next' else None,
++                'source': 'school', 'school_origin': True, 'progress': None}
++        agenda = {'due_on': DAY, 'due_kind': 'deadline', 'category': 'homework'}
++        if scheduled:
++            agenda['scheduled_on'] = DAY
++        item = {'id': 'item-display-1', 'kind': 'task', 'task_id': task['id'], 'title': CHINESE_TITLE,
++                'child_ids': [CHILD['id']], 'agenda': agenda, 'closed': False, 'status': '待跟进'}
++        return task, item, agenda
++
++    def test_the_family_arrangement_reads_apart_from_the_teachers_words(self):
++        task, item, _ = self._task_and_item()
++        before = copy.deepcopy(task)
++        row, _ = self._row(task, item)
++        self.assertEqual(row['lines'], CHINESE_LINES)
++        self.assertEqual(row['plan_lines'], [CHINESE_PLAN])
++        self.assertFalse(any('家庭安排' in line for line in row['lines']), row['lines'])
++        self.assertFalse(any('家庭安排' in line for line in row['plan_lines']), row['plan_lines'])
++        self.assertEqual(task, before, 'display only: the task is not rewritten')
++
++    def test_the_family_text_is_truly_removed_from_lines_not_copied(self):
++        task, item, _ = self._task_and_item()
++        row, _ = self._row(task, item)
++        self.assertEqual(len(row['lines']), len(CHINESE_LINES))
++        self.assertNotIn(CHINESE_PLAN, row['lines'])
++
++    def test_plan_lines_defaults_to_empty_and_keeps_every_other_row_key(self):
++        task, item, _ = self._task_and_item(focus=None)
++        row, _ = self._row(task, item)
++        self.assertEqual(row['plan_lines'], [])
++        self.assertEqual(row['lines'], CHINESE_LINES)
++        for key in ('id', 'kind', 'task_id', 'title', 'subject', 'category', 'status', 'closed', 'pending_review',
++                    'origin', 'origin_label', 'lines', 'complete_words', 'facts', 'today', 'when',
++                    'publications', 'published_at', 'publisher', 'progress', 'records', 'wrong'):
++            self.assertIn(key, row)
++        # A conditional key stays conditional: no school_material on this item, so no material key and no version key.
++        self.assertNotIn('material', row)
++        self.assertNotIn('version', row)
++
++    def test_a_version_latest_family_line_is_still_read_as_a_plan(self):
++        task, item, _ = self._task_and_item(focus=None)
++        item = dict(item, version={'state': 'latest', 'title': CHINESE_TITLE,
++                                   'lines': ['家庭安排（计划 ' + DAY + '）：家长自己的安排']})
++        row, _ = self._row(task, item)
++        self.assertEqual(row['plan_lines'], ['家长自己的安排'])
++        self.assertEqual(row['lines'], [])
++
++
++class PunctuationTests(unittest.TestCase):
++    """C8: a line this display edited never keeps a dangling full-width semicolon; lines stay whole short phrases."""
++
++    def test_no_edited_line_starts_or_ends_on_a_full_width_semicolon(self):
++        for title, action in ((ENGLISH_TITLE, ENGLISH_ACTION), (MATH_TITLE, MATH_ACTION), (CHINESE_TITLE, CHINESE_ACTION)):
++            with self.subTest(title=title):
++                shown = family_agenda.action_lines(title, action)
++                self.assertTrue(all(line.strip() for line in shown), shown)
++                self.assertFalse([line for line in shown if line.startswith('；') or line.endswith('；')], shown)
++
++    def test_the_english_first_step_keeps_no_dangling_semicolon(self):
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown[0], '一、看图选词第1—3题')
++        self.assertFalse(shown[0].endswith('；'))
++
++
++class FoldSemanticsTests(unittest.TestCase):
++    """C2/C5: only particles fold; an adverb that adds a step (再/也/还/都/就) never disappears as a repeat."""
++
++    def test_an_incremental_adverb_keeps_its_own_line(self):
++        for action, second in (('读一遍。\n再读一遍。', '再读一遍。'),
++                               ('语文要交。\n语文也要交。', '语文也要交。'),
++                               ('明天带练习册。\n明天再带练习册。', '明天再带练习册。'),
++                               ('明天不带练习册。\n明天不再带练习册。', '明天不再带练习册。')):
++            with self.subTest(action=action):
++                shown = family_agenda.action_lines('语文：A', action)
++                self.assertIn(second, shown)
++
++    def test_fold_still_joins_a_true_particle_only_repeat(self):
++        shown = family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。')
++        self.assertEqual(shown, ['做完放进英语夹里，明天带来。'])
++
++
++class TitleNumberGuardTests(unittest.TestCase):
++    """C3: a title range and a saved single number never flatten into one another."""
++
++    def test_a_saved_single_item_is_not_covered_by_the_title_range(self):
++        self.assertEqual(family_agenda.action_lines('数学：完成第1—3题', '完成第13题'), ['完成第13题'])
++        self.assertEqual(family_agenda.action_lines('语文：朗读第1、2段', '朗读第12段'), ['朗读第12段'])
++
++    def test_a_title_that_really_covers_the_line_still_reads_once(self):
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
++
++
++if __name__ == '__main__':
++    unittest.main()
