@@ -482,9 +482,24 @@ class WorkKindTests(unittest.TestCase):
         self.assertEqual(self._work('交回《出游回执》'),
                          {'kind': 'errand', 'label': '事务', 'evidence': 'photo', 'need_photo': True})
 
-    def test_bringing_crayons_asks_for_a_confirmation_not_a_photo(self):
+    def test_bringing_things_to_school_needs_only_a_confirmation(self):
+        # Photo is for a physical thing to hand back/sign; bringing crayons or a rope is a spoken confirmation.
         self.assertEqual(self._work('明天带彩笔'),
                          {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+        self.assertEqual(self._work('明天带跳绳'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_bringing_a_dictation_notebook_is_an_errand_not_dictation(self):
+        self.assertEqual(self._work('明天带听写本'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_handing_a_receipt_back_still_needs_a_photo(self):
+        self.assertEqual(self._work('明天交回回执'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'photo', 'need_photo': True})
+
+    def test_a_booking_notice_asking_to_understand_is_only_logged(self):
+        self.assertEqual(self._work('咨询报名须知'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'log', 'need_photo': False})
 
     def test_dictation_asks_for_a_photo(self):
         self.assertEqual(self._work('听写第3课单词')['kind'], 'dictation')
@@ -524,6 +539,28 @@ class WorkKindTests(unittest.TestCase):
     def test_a_result_has_exactly_the_four_contract_keys(self):
         work = self._work('和妈妈聊今天的事')
         self.assertEqual(set(work), {'kind', 'label', 'evidence', 'need_photo'})
+
+    def test_a_technology_festival_entry_is_an_errand_not_craft(self):
+        # Real title/lines: 作品征集报名 is paperwork, and the line says 填写/发送 — not a handmade object.
+        work = self._work('科学：南山区第28届科技节作品征集报名（9月29日截止）',
+                          ['填写科技节作品征集模版，于9月29日20:00前发送至本班科…'])
+        self.assertEqual(work, {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_reading_a_course_selection_notice_is_an_errand_not_reading(self):
+        # Real title/lines: 选课 + 仔细阅读《选课通知》 tells the parent how to operate, it is not a reading task.
+        work = self._work('综合：学校精品课选课',
+                          ['9月13日9:00—22:00，仔细阅读《荔林小学家长选课通…'])
+        self.assertEqual(work, {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_filling_a_questionnaire_is_an_errand_without_a_photo(self):
+        self.assertEqual(self._work('填报南山区心理健康讲座选题问卷'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_making_a_pinwheel_is_still_craft(self):
+        self.assertEqual(self._work('手工：制作纸风车')['kind'], 'craft')
+
+    def test_reading_a_story_book_is_still_reading(self):
+        self.assertEqual(self._work('阅读《小王子》第3章')['kind'], 'reading')
 
     def _real_row(self, title, lines):
         task = {'id': 'task-work-1', 'child': CHILD['name'], 'title': title, 'action': '\n'.join(lines),

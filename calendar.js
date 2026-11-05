@@ -557,6 +557,7 @@ function groveSpanDotsHTML(info){
  }
  return `<span class="grove-span-bar" data-span-bar aria-hidden="true">${dots.join('')}</span>`;
 }
+function groveMonthDay(d){return d?String(d).slice(5):''}
 function groveSpanHTML(r){
  const info=groveSpanInfo(r);if(!info)return '';
  if(!info.end)return '';
@@ -564,13 +565,15 @@ function groveSpanHTML(r){
  const remain=groveSpanRemainWords(info,!!r.closed);
  if(!info.start){
   // 起点未知：只显示剩余/过期（不画标尺、不写「跨 N 天」）。
-  return `<div class="grove-span is-remain${late?' is-late':''}" data-span-only><span class="grove-span-tail">${esc(remain)}</span></div>`;
+  const onlyDates=info.end?`${groveMonthDay(info.end.d)} 截止`:'';
+  return `<div class="grove-span is-remain${late?' is-late':''}" data-span-only><span class="grove-span-tail">${esc(remain)}</span>${onlyDates?`<span class="grove-span-dates" data-span-dates>${esc(onlyDates)}</span>`:''}</div>`;
  }
  const span=info.span||1;
  if(span<2)return '';
  const closedTxt=r.closed?`<span class="grove-span-lead">跨 <b>${span}</b> 天${info.usedDays?` · <b>${info.usedDays}</b> 天做完`:''}</span>`:`<span class="grove-span-lead">跨 <b>${span}</b> 天</span>`;
  return `<div class="grove-span${late?' is-late':''}" data-span="${span}" data-span-days="${span}">`
   +closedTxt+groveSpanDotsHTML(info)+`<span class="grove-span-tail">${esc(r.closed?'':remain)}</span>`
+  +`<span class="grove-span-dates" data-span-dates>${esc(groveMonthDay(info.start.d)+' → '+groveMonthDay(info.end.d))}</span>`
   +`<span class="grove-sr">起点 ${esc(info.start.d)}，终点 ${esc(info.end.d)}，共 ${span} 天</span></div>`;
 }
 function groveSpanSummary(r){
@@ -780,7 +783,7 @@ document.addEventListener('click',e=>{
  const closeDetail=e.target.closest('[data-grove-detail-close]');if(closeDetail){groveCloseDetail();if(history.state?.grove)history.back();return}
  const open=e.target.closest('[data-grove-open]');if(open){groveSelect(open.dataset.groveOpen,true);return}
  // Switching the part only shows another list: no re-render, so the selected row's detail and any unsaved input there stay.
- const part=e.target.closest('[data-grove-scope]');if(part){groveScope=part.dataset.groveScope;for(const b of document.querySelectorAll('[data-grove-scope]'))b.setAttribute('aria-pressed',String(b===part));for(const l of document.querySelectorAll('[data-grove-scope-list]'))l.hidden=l.dataset.groveScopeList!==groveScope;return}
+ const part=e.target.closest('[data-grove-scope]');if(part){const next=part.dataset.groveScope;if(next!==groveScope){groveScope=next;render()}return}
  const tab=e.target.closest('[data-grove-tab]');if(tab){groveTab=tab.dataset.groveTab;groveDetailOpen=false;render();return}
  const pick=e.target.closest('[data-grove-day],[data-grove-week]');
  if(pick){const day=pick.dataset.groveDay||calendarAdd(groveDay||data.today,+pick.dataset.groveWeek);groveDay=day===data.today?'':day;groveSelected='';groveScope='open';groveDetailOpen=false;render();if(groveDay)groveLoadDay(groveDay);return}
@@ -833,10 +836,11 @@ function todayTasksHTML(){
  const laterCount=(view.upcoming||[]).length+undatedOther.length;
  const upcomingTitles=(view.upcoming||[]).map(x=>x.title||'').filter(Boolean);
  const upcomingSum=upcomingTitles.slice(0,2).join('、')+(upcomingTitles.length>2?` 等 ${upcomingTitles.length} 件`:'');
- const upcomingStrip=(mode!=='phone'&&laterCount)?`<div class="grove-upcoming-strip" data-grove-upcoming><span class="grove-upcoming-count">明后天 ${laterCount} 件</span>${upcomingSum?`<span class="grove-upcoming-sum">${esc(upcomingSum)}</span>`:''}<span class="grove-sr">即将/待补：${esc((view.upcoming||[]).map(x=>[x.day,x.title].filter(Boolean).join(' ')).join('；'))}</span><button type="button" class="grove-upcoming-more" data-grove-day="${esc(calendarAdd(day,1))}" aria-label="看明天">看明天 ›</button></div>`:'';
- const laterSection=laterCount?`<section class="grove-later-list" data-grove-col="later" aria-label="明后天"><h2 class="grove-tag">明后天<span>${laterCount}</span></h2><div class="grove-rows">${laterHTML}</div></section>`:'';
- const cancelledSection=cancelled.length?`<section class="grove-later-list is-cancelled-list" id="groveCancelled" data-grove-col="cancelled" aria-label="已取消"><h2 class="grove-tag">已取消<span>${cancelled.length}</span></h2><div class="grove-rows">${cancelled.map(x=>groveLaterCardHTML(x,'cancelled')).join('')}</div></section>`:'';
- const listHTML=`<div class="grove-stack" data-grove-stack><div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${groveScope==='open'?'':' hidden'}>${groupsHTML}</div>${laterSection}${cancelledSection}</div>`+(mode==='phone'?groveUpcomingHTML(view):'');
+ const upcomingStrip=(mode!=='phone'&&laterCount&&groveScope==='open')?`<div class="grove-upcoming-strip" data-grove-upcoming><span class="grove-upcoming-count">明后天 ${laterCount} 件</span>${upcomingSum?`<span class="grove-upcoming-sum">${esc(upcomingSum)}</span>`:''}<span class="grove-sr">即将/待补：${esc((view.upcoming||[]).map(x=>[x.day,x.title].filter(Boolean).join(' ')).join('；'))}</span><button type="button" class="grove-upcoming-more" data-grove-day="${esc(calendarAdd(day,1))}" aria-label="看明天">看明天 ›</button></div>`:'';
+ const laterSection=(groveScope!=='open'&&laterCount)?`<section class="grove-later-list" data-grove-col="later" aria-label="明后天"><h2 class="grove-tag">明后天<span>${laterCount}</span></h2><div class="grove-rows">${laterHTML}</div></section>`:'';
+ const cancelledSection=(groveScope!=='open'&&cancelled.length)?`<section class="grove-later-list is-cancelled-list" id="groveCancelled" data-grove-col="cancelled" aria-label="已取消"><h2 class="grove-tag">已取消<span>${cancelled.length}</span></h2><div class="grove-rows">${cancelled.map(x=>groveLaterCardHTML(x,'cancelled')).join('')}</div></section>`:'';
+ const scopeBar=groveScope==='upcoming'?`<div class="grove-scope-bar" data-grove-scope-bar><strong>明后天</strong><span>共 ${laterCount} 件</span><button type="button" data-grove-scope="open">‹ 回今天</button></div>`:'';
+ const listHTML=scopeBar+`<div class="grove-stack" data-grove-stack><div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${groveScope==='open'?'':' hidden'}>${groupsHTML}</div>${laterSection}${cancelledSection}</div>`+(mode==='phone'?(groveUpcomingHTML(view)||(laterCount?`<button type="button" class="grove-upcoming grove-upcoming-phone" data-grove-set="later">明后天 ${laterCount} 件 · 查看 ›</button>`:'')):'');
  const doneHTML='';
  const gapHTML=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const errorHTML=(r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:'')+gapHTML+schoolProcessingHTML();
@@ -1169,16 +1173,19 @@ document.addEventListener('click',e=>{
  if(groveRoot?.classList.contains('is-detail')&&e.target.closest('.grove-board')&&!e.target.closest('#groveDetail')&&!e.target.closest('[data-grove-open]')&&!e.target.closest('[data-grove-detail-close]')){groveCloseDetail();if(history.state?.grove)history.back()}
  const src=e.target.closest('[data-grove-src-ref]');if(src){if(typeof openSchoolOriginal==='function')openSchoolOriginal(src.dataset.groveSrcRef,src.dataset.groveSrcChild||'','');return}
  const set=e.target.closest('[data-grove-set]');if(set){
-  for(const b of document.querySelectorAll('[data-grove-set]'))b.setAttribute('aria-pressed',String(b===set));
   const key=set.dataset.groveSet,subject=set.dataset.subject||'',root=document.querySelector('.grove');
-  groveCancelledOpen=key==='cancelled';
-  const cancelBox=document.getElementById('groveCancelled');
-  if(cancelBox)cancelBox.hidden=!groveCancelledOpen;
-  let target=key==='today'?root?.querySelector('#task-groups')
+  for(const b of document.querySelectorAll('[data-grove-set]'))b.setAttribute('aria-pressed',String(b===set));
+  if(key==='later'||key==='cancelled'){
+   if(groveScope!=='upcoming'){groveScope='upcoming';render()}
+   const sel=key==='cancelled'?'#groveCancelled':'[data-grove-col="later"]';
+   const target=document.querySelector('[data-grove-scope-bar]')||document.querySelector(sel);
+   if(target){target.scrollIntoView({block:'start',behavior:'smooth'});const back=document.querySelector('[data-grove-scope-bar]');if(back)back.hidden=false}
+   return
+  }
+  if(key==='today'&&groveScope!=='open'){groveScope='open';render();return}
+  const target=key==='today'?root?.querySelector('#task-groups')
    :key==='subject'?root?.querySelector('.grove-subject[data-subject="'+CSS.escape(subject)+'"]')
-   :key==='cancelled'?cancelBox
-   :root?.querySelector('.grove-col[data-grove-col="'+CSS.escape(key==='done'?'done':'later')+'"]');
-  if(!target&&key==='later'){const panel=document.getElementById('groveLaterPanel');if(panel){panel.hidden=false;target=panel}}
+   :null;
   target?.scrollIntoView({block:'start',behavior:'smooth'});return
  }
  // 详情底部“标记完成”走清单行里同一个 data-check（同一保存路径，未读清的作业仍不可勾）。
