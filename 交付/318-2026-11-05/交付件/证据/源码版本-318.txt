@@ -1,0 +1,41 @@
+记录时间: 2026-11-05T11:07:02Z
+REPO: /tmp/rel-318
+HEAD: 04b83c81df6af56e8c3403350fa3e115d151b043
+lead 冻结 sha1: 04b83c81df6af56e8c3403350fa3e115d151b043
+HEAD 与冻结 sha1: 一致
+构建号: 318
+工作区改动文件（git status --porcelain）:
+   M calendar.js
+   M packaging/macos/Sources/Workspace.swift
+   M workbench.css
+改动文件 sha1:
+  f0a37c8fb1827162b39bd289b977eb24501efd9f  calendar.js
+  b83b4531dfa2ed29be4652c016c3375803f761cd  packaging/macos/Sources/Workspace.swift
+  0800b098d3a1e0d938d0646e6ade5d87fd429cb4  workbench.css
+被 .gitignore 忽略的新文件 sha1:
+  60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+  90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
+fix.patch sha1: 35bddb8bfdd6234dc8eab68842eff0ba5a205180
+fix.patch 字节数: 190177
+
+=== 双份 sha 对照（主仓库 vs 构建副本 /tmp/rel-318，rsync 排 .git/private/__pycache__）===
+对照时间: 2026-11-05T11:07:51Z
+OK b83b4531dfa2ed29be4652c016c3375803f761cd packaging/macos/Sources/Workspace.swift
+OK 85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0 packaging/macos/Sources/WorkspaceAPI.swift
+OK f0a37c8fb1827162b39bd289b977eb24501efd9f calendar.js
+OK 0800b098d3a1e0d938d0646e6ade5d87fd429cb4 workbench.css
+OK 4c17738bb0917e0eee4c098214502ddbc363b333 app.js
+OK 3d8807c865287b8fc46fc6ff7495df4b40fd1235 family_agent.py
+OK ff9c3f85696ee2a555bf77bc50b566aef881be1c family_agenda.py
+OK bf2c974be34b6460d980d18b8e2ffc1498611be1 family_llm.py
+OK 43f18a4235a36b6267a110ccdbd3cb41979304c3 test_native_workspace.cjs
+OK 60c34a20810fda75fbf56840a8bee47e9c6def08 test_daily_list_expression.py
+OK 90e84511c610506ad54d1beceddeb89ee47e7401 test_school_fold_visibility.py
+副本 HEAD: 无 .git（按 lead 要求排掉；HEAD 取自主仓库）
+主仓库 HEAD: 04b83c81df6af56e8c3403350fa3e115d151b043
+构建后主仓库复核: 3 个改动文件（应为 3）
+
+=== 构建产物与 lead 本机构建对照 ===
+lead 说明: binary sha1=9087f6c276841a6acbb50b5ba228b531575fd594, 8,225,504 B, CFBundleVersion=318
+本机构建:  binary sha1=9087f6c276841a6acbb50b5ba228b531575fd594, 8225504 B, CFBundleVersion=318
+结论: 逐字节一致（sha1 相同）

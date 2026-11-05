@@ -1,0 +1,60 @@
+终审收窄修复（projection 两处窄修）
+记录时间: 2026-11-04T08:08:22Z
+REPO HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51
+family_agenda.py 本轮 sha1: 8348a71661cc22860eb40423224c576bba1109a6
+family_agenda.py 上一轮 sha1（已作废）: 6c1574d7cc474542b2656214879c9615c77aebd7
+新增回归测试 test_daily_list_expression.py sha1: 625a74f3459412e502d3bd86ca71fb7a6ff57432
+  （该文件被 REPO .gitignore 的根通配规则忽略，不在 git status 中，但已写入 证据/fix.patch）
+reviewer 终审: work/reviewer-evidence/final-audit.md → GREEN（可交付），sha1 8348a716
+
+一、reviewer 终审的 5 类硬伤逐条
+  1) A2e 否定词丢失           GREEN（18 条对抗样例 RED=0；A5a 已修）
+  2) A2a–d 丢数字/对象/时间    GREEN（原始场景）；但分隔符变体 N1/N2 曾判 BLOCK → 本轮 M1 修复
+  3) A1b/A1c 标题裁剪丢新 token GREEN（原始场景）；同上 N1/N2 → 本轮 M1 修复
+  4) A4b 折叠乱序/编造         GREEN（reorders 0 / fabricate 0）；但 fold 副词吞行 F1–F4 曾判 BLOCK → 本轮 M2 修复
+  5) day_view 未真删 plan 行   GREEN（plan_lines 独立，lines 真删）
+  BLOCK 两类（F1–F4 折叠副词、N1/N2 数字分隔符）对应 reviewer 必改 M1/M2/M3，本轮已修并补测。
+
+二、修复前后输出（同一探针：旧版 = git archive HEAD + 上一轮 fix.patch 还原的 6c1574d7 树；
+    新版 = 当前工作区 8348a716，探针脚本 /tmp/fa_probe.py 直接调用 family_agenda.action_lines）
+
+旧版（6c1574d7，修复前）:
+  F1  ["读一遍。"]
+  N1  []
+  N2  []
+  D1  ["明天带练习册。"]
+  E1  ["完成后把照片上传到班级相册。"]
+新版（8348a716，修复后）:
+  F1  ["读一遍。", "再读一遍。"]
+  N1  ["完成第13题"]
+  N2  ["朗读第12段"]
+  D1  ["明天带练习册。", "明天再带练习册。"]
+  E1  ["完成后把照片上传到班级相册。"]
+
+用例与结论:
+  F1  title='语文：A'                action='读一遍。\n再读一遍。'
+      旧版 ['读一遍。'] → 新版 ['读一遍。','再读一遍。']（“再读一遍”是增量的第二遍，不再被 fold 吞掉）
+  N1  title='数学：完成第1—3题'       action='完成第13题'
+      旧版 [] → 新版 ['完成第13题']（范围题号≠单题号，整行不再被标题复述省略）
+  N2  title='语文：朗读第1、2段'      action='朗读第12段'
+      旧版 [] → 新版 ['朗读第12段']
+  D1  title='英语：准备明天的听写'     action='明天带练习册。\n明天再带练习册。'
+      旧版 ['明天带练习册。'] → 新版 ['明天带练习册。','明天再带练习册。']（“明天带/明天再带”两行都在）
+  E1  title='英语：完成《每日练习》。' action='完成《每日练习》。\n完成后把照片上传到班级相册。'
+      旧版/新版均为 ['完成后把照片上传到班级相册。']（标题真的覆盖整行时仍只读一次，无回归）
+
+三、回归测试（M3 要求）
+  Ran 33 tests in 0.008s
+  
+  OK
+  （完整 33 个测试含新增 FoldSemanticsTests / TitleNumberGuardTests；未改任何既有断言）
+
+四、对演示数据的影响（逐字核对）
+  与上一轮 证据/api-day-修复后.json 相比：除 GET /api/day 每次随机生成的 token 字段外，JSON 逐字相同；
+  --check 计数不变（today=5 later=2 open=7 closed=1 undated=1 upcoming=0），卡片可见文本不变。
+  证据/家庭安排块DOM断言-308.txt：assertions.json failures=[]，DOM 标签/逐行文本/详情小节与 payload 一致。
+
+五、结论
+  这些行为在演示数据上不改变可见输出，只防止真实语料里的信息丢失：
+  ① 近似重复但多出“再/也/还/都/就”的行不再被折叠（宁多一句，不漏一句）；
+  ② 数字分隔符不同（第1—3题 vs 第13题）或对象/时间/否定不同的整行，不再被标题复述省略。

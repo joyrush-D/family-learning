@@ -1,0 +1,20 @@
+原生「标记完成」服务端契约证据（Build 315）
+记录时间: 2026-11-05T05:48:50Z
+隔离方式: REPO 工作区 rsync 到临时目录（排除 .git/private/__pycache__），快照 data/ 与 家庭运行规则.md 拷入临时目录；未写 REPO、未打开 App。
+临时端口: 58322
+接口: GET /api/state 取 token → GET /api/day?child_id=child-1&day=2026-11-04 → POST /api/task {"id":<task_id>,"status":"已完成","note":...}（X-Family-Token）→ 再 GET /api/day
+----
+GET /api/state -> children: ['示例甲', '示例乙'] token ok
+GET /api/day?day=2026-11-04 -> counts: {"open": 3, "closed": 0, "upcoming": 0, "material": 0, "undated": 1, "today": 3, "overdue": 0, "later": 0, "earlier": 0, "unknown": 0, "passed": 0}
+待标记项: subject=英语 kind=task task_id=AGENT-e9f38c84c51730cf04a9bc35 title=英语：完成《每日练习》并明天带回
+   item keys: category,closed,complete_words,facts,follow_ups,id,kind,lines,origin,origin_label,pending_review,plan_lines,progress,publications,published_at,publisher,records,status,subject,task_id,title,today,when,wrong
+POST /api/task body: {"id": "AGENT-e9f38c84c51730cf04a9bc35", "status": "已完成", "note": "家长通过清单勾选确认此事项已完成。"}
+POST /api/task -> {"ok": true, "task": {"id": "AGENT-e9f38c84c51730cf04a9bc35", "child": "示例甲", "title": "英语：完成《每日练习》并明天带回", "due": "2026-11-05", "original_status": "待跟进", "source": "Agent建议:agent-4a14fa58a20ce5fd04716d99246c3f67\nmessage:qa-qq-a4:h18-m05\n虚构四年级A班 · 2026-11-04T16:05:00+08:00\n英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n\nmessage:qa-qq-a4:h18-m13\n虚构四年级A班 · 2026-11-04T17:25:00+08:00\n补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。", "action": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一
+GET /api/day after -> counts: {"open": 2, "closed": 1, "upcoming": 0, "material": 0, "undated": 1, "today": 2, "overdue": 0, "later": 0, "earlier": 0, "unknown": 0, "passed": 0}
+列表是否仍含该项: False
+counts.closed 变化: 0 -> 1 (+1)
+counts.open 变化: 3 -> 2
+RESULT: OK（服务端契约通过：POST /api/task 后该项从清单消失、closed +1）
+----
+服务端日志末尾:
+家庭学习助手 http://127.0.0.1:58322

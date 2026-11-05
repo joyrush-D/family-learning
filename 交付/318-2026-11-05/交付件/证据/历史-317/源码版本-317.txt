@@ -1,0 +1,33 @@
+记录时间: 2026-11-05T10:23:18Z
+REPO: /tmp/rel-317
+HEAD: 04b83c81df6af56e8c3403350fa3e115d151b043
+构建号: 317
+工作区改动文件（git status --porcelain）:
+   M calendar.js
+   M packaging/macos/Sources/Workspace.swift
+   M workbench.css
+改动文件 sha1:
+  b8c43ef8044bbc0c16648ad9aeb6d5b3ac894b44  calendar.js
+  3336dcfa4e2e26032e94e37e8aaaa388814f25ae  packaging/macos/Sources/Workspace.swift
+  d5e85f0f10f2dadfaa977c8dcc9d92aa04083d20  workbench.css
+被 .gitignore 忽略的新文件 sha1:
+  60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+  90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
+fix.patch sha1: e4d0461f2afec3c8a0af7819ff29344109a6d468
+fix.patch 字节数: 76180
+
+=== 双份 sha 对照（主仓库 vs 构建副本 /tmp/rel-317，rsync -a 含 .git）===
+对照时间: 2026-11-05T10:25:14Z
+OK packaging/macos/Sources/Workspace.swift            3336dcfa4e2e26032e94e37e8aaaa388814f25ae
+OK packaging/macos/Sources/WorkspaceAPI.swift         85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0
+OK calendar.js                                        b8c43ef8044bbc0c16648ad9aeb6d5b3ac894b44
+OK workbench.css                                      d5e85f0f10f2dadfaa977c8dcc9d92aa04083d20
+OK app.js                                             4c17738bb0917e0eee4c098214502ddbc363b333
+OK family_agent.py                                    3d8807c865287b8fc46fc6ff7495df4b40fd1235
+OK family_agenda.py                                   ff9c3f85696ee2a555bf77bc50b566aef881be1c
+OK family_llm.py                                      bf2c974be34b6460d980d18b8e2ffc1498611be1
+OK test_native_workspace.cjs                          43f18a4235a36b6267a110ccdbd3cb41979304c3
+OK test_daily_list_expression.py                      60c34a20810fda75fbf56840a8bee47e9c6def08
+OK test_school_fold_visibility.py                     90e84511c610506ad54d1beceddeb89ee47e7401
+主仓库 HEAD: 04b83c81df6af56e8c3403350fa3e115d151b043
+副本   HEAD: 04b83c81df6af56e8c3403350fa3e115d151b043

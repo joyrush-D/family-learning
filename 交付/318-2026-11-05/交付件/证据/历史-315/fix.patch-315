@@ -1,0 +1,1277 @@
+diff --git a/calendar.js b/calendar.js
+index 2658c45..ff19d9d 100644
+--- a/calendar.js
++++ b/calendar.js
+@@ -677,8 +677,9 @@ function todayTasksHTML(){
+   +'</div>'+cancelledHTML;
+  const phoneBar='';
+  const tabCal=mode==='desktop'?'':`<div class="grove-cal">${groveTabsHTML(view)}</div>`;
+- const chipsAdd=mode==='desktop'?'':`<div class="grove-chips-row" role="group" aria-label="清单范围"><button type="button" class="grove-chip is-add" data-homework-new="${esc(currentChild()?.id)}">＋补录</button>${groveSetListHTML(view,true)}</div>`;
+- const phoneCal=mode==='desktop'?'':`<div class="grove-cal-top">${groveTabsHTML(view)}<div class="grove-cal-sched">${groveScheduleHTML(view)}</div></div>`;
++ const schedEmpty=!!(view.schedule&&!(view.schedule.lessons||[]).length&&!(view.schedule.plans||[]).length&&!view.schedule_error);
++ const chipsAdd=mode==='desktop'?'':`<div class="grove-chips-row" role="group" aria-label="清单范围"><button type="button" class="grove-chip is-add" data-homework-new="${esc(currentChild()?.id)}">＋补录</button>${groveSetListHTML(view,true)}${schedEmpty?`<button type="button" class="grove-chip" data-page="calendar">日历 / 导入课表</button>`:''}</div>`;
++ const phoneCal=mode==='desktop'?'':`<div class="grove-cal-top">${groveTabsHTML(view)}${schedEmpty?'':`<div class="grove-cal-sched">${groveScheduleHTML(view)}</div>`}</div>${schedEmpty?`<div hidden>${groveScheduleHTML(view)}</div>`:''}`;
+  const phoneWeek=mode==='desktop'?'':`<div class="grove-cal-bottom">${groveWeekHTML(view,day)}</div>`;
+  const body=groveTab==='wrong'?`${tabCal}<div class="grove-wrongbook">${groveWrongHTML(view)}</div>`
+   :groveTab==='learning'?`${tabCal}<div class="grove-learning-list">${groveLearningHTML(view)}</div>`
+@@ -955,6 +956,8 @@ function groveRailHost(){return document.getElementById('groveRailData')}
+ function groveAfterRender(){
+  const home=page==='home',view=home?groveView():null,mode=groveMode(),wide=home&&mode==='desktop'&&!!view;
+  document.body.classList.toggle('grove-wide',wide);
++ // 手机/两列：把「消息读取缺口」条挪到清单末尾，顶部让给今天要做（语义不变，仍可见可点）。
++ if(home&&mode!=='desktop'){const gapEl=document.querySelector('.grove-cols')?.parentElement?.querySelector('.today-source-gap'),colsEl=document.querySelector('.grove-cols');if(gapEl&&colsEl)colsEl.after(gapEl)}
+  const aside=document.querySelector('aside');if(!aside)return;
+  let host=groveRailHost();
+  if(!wide){if(host)host.remove();return}
+diff --git a/family_agenda.py b/family_agenda.py
+index 5a55d99..84898a1 100644
+--- a/family_agenda.py
++++ b/family_agenda.py
+@@ -1007,8 +1007,8 @@ _PLAN_LINE=re.compile(r'^家庭安排（计划\s*[^）]*）[：:]\s*(.*)$')
+ # A later notice's own words, as the merge keeps them beside the card's original requirements. They are provenance for
+ # the parent's review, not the requirement in force today, so the day row lists them as follow_ups (C9) and never mixes
+ # them into lines: an older range beside its correction reads as two contradictory instructions.
+-_FOLLOW_UP_LINE = re.compile(r'^(后到更正原文|后到补充原文|后到提醒原文|取消依据|后到原文)\s*(?:（([^）]*)）)?\s*[：:]\s*(.*)$')
+-_FOLLOW_UP_LABEL = {'后到更正原文':'更正','后到补充原文':'补充','后到提醒原文':'提醒','取消依据':'取消','后到原文':'提醒'}
++_FOLLOW_UP_LINE = re.compile(r'^(后到更正原文|后到补充原文|后到提醒原文|先前提醒|取消依据|后到原文)\s*(?:（([^）]*)）)?\s*[：:]\s*(.*)$')
++_FOLLOW_UP_LABEL = {'后到更正原文':'更正','后到补充原文':'补充','后到提醒原文':'提醒','先前提醒':'先前提醒','取消依据':'取消','后到原文':'提醒'}
+ _FOLLOW_UP_TIME = re.compile(r'(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2})')
+ 
+ def _follow_up(line):
+@@ -1168,6 +1168,34 @@ def _label_line(content,shown):
+     return content,set()
+ 
+ 
++_COMPOUND_SPLIT=re.compile(r'[后，,；;]')
++
++def _compound_parts(line):
++    """The pieces a combined restatement joins with 后/，/；, compared as plain words (display only)."""
++    return [part for part in (_plain(x) for x in _COMPOUND_SPLIT.split(str(line or ''))) if part]
++
++def _compound_covered(line,shown_text):
++    """True when every piece of this line already reads earlier, with its digits and negations also present there."""
++    parts=_compound_parts(line)
++    if len(parts)<2 or not all(part in shown_text for part in parts):return False
++    if any(ch in line and ch not in shown_text for ch in '不没别勿禁'):return False
++    return not (set(re.findall(r'\d+',str(line))) - set(re.findall(r'\d+',shown_text)))
++
++def _compound_drops(shown):
++    """Indices of combined restatement lines that add nothing over the lines already shown before them.
++
++    The guard keeps a two-line card from emptying (at least two lines must remain) and never lets a line's own
++    number/negation disappear without the earlier text carrying it, so 1号本/2号本 or 交/不交 stay two lines."""
++    if len(shown)<3:return set()
++    drops,kept=set(),[]
++    for i,line in enumerate(shown):
++        before=''.join(_plain(whole) for whole in kept)
++        if len(shown)-len(drops)-1>=2 and _compound_covered(line,before):
++            drops.add(i)
++        else:kept.append(line)
++    return drops
++
++
+ def action_lines(title,action,words=None):
+     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
+ 
+@@ -1209,12 +1237,22 @@ def action_lines(title,action,words=None):
+         if taken and not _plain(line):continue
+         if _whole_title_repeat(line,heading):continue
+         if any(_covered_by(_plain(whole),_plain(line)) for whole in shown):continue
++        # A line joining earlier pieces with 后/，/； either reads whole or goes whole in _compound_drops; splitting it
++        # here could leave a bare fragment of a sentence that the saved order never wrote.
++        parts=_compound_parts(line)
++        if len(parts)>=2:
++            before=''.join(_plain(whole) for whole in shown)
++            if any(part in before for part in parts):
++                if taken:edited.add(len(shown))
++                shown.append(line);continue
+         line,repeated=_without_repeats(line,shown)
+         if not _plain(line):continue
+         if taken or repeated:edited.add(len(shown))
+         shown.append(line)
++    drops=_compound_drops(shown)
+     out=[]
+     for i,line in enumerate(shown):
++        if i in drops:continue
+         parts=_steps(line)
+         if i in edited:parts=[part.strip().strip('；;，,') for part in parts]
+         out.extend(part for part in parts if _plain(part))
+diff --git a/family_agent.py b/family_agent.py
+index aa70346..72d1a09 100644
+--- a/family_agent.py
++++ b/family_agent.py
+@@ -2576,6 +2576,9 @@ class Store:
+         old=json.loads(row['evidence'] or '[]');seen={q.get('ref') for q in old}
+         added=[q for q in item.get('evidence') or [] if q.get('ref') not in seen]
+         change=str(link.get('change') or 'same')
++        # A notice that arrived later but was sent before the card's newest adopted message only repeats the older
++        # wording: it must read as an earlier reminder, never as the correction the card already carries.
++        stored_change=_school_earlier_change(change,[_school_original_time(q) for q in added],_school_adopted_times(c,plan))
+         lines=[line for line in str(row['body'] or '').split('\n') if line.strip()]
+         if change=='same':
+             for line in str(item.get('body') or '').split('\n'):
+@@ -2586,7 +2589,7 @@ class Store:
+         # The later original stays verbatim in this card's own plan: it proves the fold, while the card's cited originals (which
+         # the agenda reads one day's own words from) stay the first notice and its corrections. Its own lines join the visible
+         # body for every change: a reminder's requirement, a labelled replacement, or the ground of a cancellation.
+-        folded.append(dict(refs=[q.get('ref') for q in added],change=change,at=now.isoformat(),
++        folded.append(dict(refs=[q.get('ref') for q in added],change=stored_change,at=now.isoformat(),
+                            originals=[dict(ref=q.get('ref'),text=q.get('text'),time=q.get('time'),sender=q.get('sender'),publisher=q.get('publisher')) for q in added]))
+         plan['school_folded']=folded
+         body=_school_folded_body(plan,body)
+@@ -3225,7 +3228,7 @@ def _school_oral_entry(entry):
+     return bool(_SCHOOL_ORAL_PERSON.search(sender) or _SCHOOL_ORAL_ACCOUNT.search(account))
+ 
+ 
+-_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：'}
++_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：','same':'后到提醒原文：','earlier':'先前提醒：'}
+ 
+ 
+ def _school_folded_originals(plan):
+@@ -3240,6 +3243,51 @@ def _school_folded_originals(plan):
+     return found
+ 
+ 
++_SCHOOL_FOLD_NOTE_EARLIER = '后到原文（早于已采纳的更正，仅作记录）：'
++
++
++def _school_message_times(c, refs):
++    """The sending times of the messages a card already adopted, newest last.
++
++    A later notice's own time is compared with these to tell a true correction from an earlier reminder that only
++    arrived later: the card must never call the older wording its correction.
++    """
++    found=[]
++    for ref in refs or []:
++        parts=str(ref or '').split(':',2)
++        if len(parts)!=3 or parts[0]!='message': continue
++        try: row=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(parts[1],parts[2])).fetchone()
++        except Exception: continue
++        if row is None: continue
++        try: when=str(json.loads(row['payload']).get('time') or '')
++        except Exception: when=''
++        if when: found.append(when)
++    return found
++
++
++def _school_original_time(original):
++    """When a folded original was sent: its stored time, else the collection banner's own stamp."""
++    banner,_text=_school_folded_text((original or {}).get('text'))
++    return str((original or {}).get('time') or banner or '')
++
++
++def _school_earlier_change(change, times, adopted):
++    """A later-arriving notice that is older than every message already adopted is an earlier reminder, not a change."""
++    # Only a replacement-style label can be contradicted by an older wording ("更正: 1—4题" beside "1—3题"); a plain
++    # reminder's own label (提醒) is true whenever it was sent, so an older reminder stays a reminder.
++    if change not in ('update','append'): return change
++    known=[str(t or '') for t in times if t]
++    if not known or not adopted: return change
++    newest=max(str(t) for t in adopted)
++    return 'earlier' if all(t<newest for t in known) else change
++
++
++def _school_adopted_times(c, plan):
++    refs=['message:'+str(m.get('source_id'))+':'+str(m.get('message_id'))
++          for m in (plan or {}).get('school_messages') or [] if isinstance(m,dict) and m.get('source_id') and m.get('message_id')]
++    return _school_message_times(c, refs)
++
++
+ _SCHOOL_FOLD_NOTE = '后到原文（更正/取消依据，不进本事项日期判断）：'
+ 
+ _SCHOOL_TEXT_BANNER = re.compile(r'^[^\n]{0,60}[·•]\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z))\s*\n')
+@@ -3270,7 +3318,8 @@ def _school_fold_note(original):
+     ref,text,change,time=original
+     banner,text=_school_folded_text(text)
+     stamp=str(time or banner or '').strip()[:16].replace('T',' ')
+-    return _SCHOOL_FOLD_NOTE+(stamp or '时间未知')+'（'+ref+'）「'+str(text or '').strip()+'」'
++    prefix=_SCHOOL_FOLD_NOTE_EARLIER if change=='earlier' else _SCHOOL_FOLD_NOTE
++    return prefix+(stamp or '时间未知')+'（'+ref+'）「'+str(text or '').strip()+'」'
+ 
+ 
+ def _school_folded_lines(plan):
+@@ -3423,7 +3472,7 @@ def _school_accept_fold(store,row,plan):
+     cited=[(ref,text) for ref,text,change,time in folded
+            if ref and text and change in ('same','append')]
+     noted=[_school_fold_note(original) for original in folded
+-           if original[0] and original[1] and original[2] in ('update','cancel')]
++           if original[0] and original[1] and original[2] in ('update','cancel','earlier')]
+     if not lines and not cited and not noted: return
+     with store._db() as c:
+         item=c.execute('SELECT task_id FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+@@ -9922,31 +9971,38 @@ def _fold_school_follows(app, store, now):
+             if task is None: continue
+             evidence,_=_school_material(store,c,row)
+             change=str((link or {}).get('change') or brief.get('change') or 'same')
++            target_plan=json.loads(target['plan'] or '{}')
++            stored_change=_school_earlier_change(change,[_school_original_time(e) for e in evidence],
++                                                 _school_adopted_times(c,target_plan))
+             lines=[line for line in str(task['action'] or '').split('\n') if line.strip()]
+-            for line in str(row['body'] or '').split('\n'):
+-                line=line.strip()
+-                if line and line not in lines: lines.append(line)
++            if stored_change not in ('same','earlier'):
++                for line in str(row['body'] or '').split('\n'):
++                    line=line.strip()
++                    if line and line not in lines: lines.append(line)
+             # Every line of the later original stays visible in the action, and its message stays readable in the sources.
+             # Both paths write the same convention: a reminder/addition is cited (its message is part of the affair's own
+             # day), while a replacement/cancellation is a readable note with its words and sending time, never a cited
+-            # message line: the agenda reads one day's roles from every cited message.
+-            folded_plan={'school_folded':[dict(change=change,originals=[
++            # message line: the agenda reads one day's roles from every cited message. A reminder's own words are listed
++            # as a follow-up (后到提醒原文) instead of repeating the requirement the card already carries: the saved card
++            # keeps today's requirement, and the reminder reads as its own later notice.
++            folded_plan={'school_folded':[dict(change=stored_change,originals=[
+                 dict(ref=e.get('ref'),text=e.get('text'),time=e.get('time')) for e in evidence])]}
+             for line in _school_folded_lines(folded_plan):
+                 if line not in lines: lines.append(line)
+             source=str(task['source'] or '')
+             cited=[e for e in evidence if e.get('ref') and str(e.get('text') or '').strip()]
+             extra=[str(e.get('ref'))+'\n'+str(e.get('text')).strip() for e in cited
+-                   if change in ('same','append') and str(e.get('ref')) not in source]
+-            notes=[_school_fold_note((str(e.get('ref')),str(e.get('text')),change,str(e.get('time') or '')))
+-                   for e in cited if change in ('update','cancel')]
++                   if stored_change in ('same','append') and str(e.get('ref')) not in source]
++            notes=[_school_fold_note((str(e.get('ref')),str(e.get('text')),stored_change,str(e.get('time') or '')))
++                   for e in cited if stored_change in ('update','cancel','earlier')]
+             notes=[note for note in notes if note not in source]
+             if extra: source=source+'\n\n'+'\n\n'.join(extra)
+             if notes: source=source+'\n\n'+'\n'.join(notes)
+             due=task['due']
+             if change=='cancel':
+                 due=''
+-            elif change in ('update','append'):
++            elif change in ('update','append') and stored_change!='earlier':
++                # An earlier reminder never moves the day: it is older than the wording the task already carries.
+                 due=_school_late_due(evidence) or task['due']
+             c.execute('UPDATE manual_tasks SET action=?,source=?,due=? WHERE id=?',
+                       ('\n'.join(lines),source,due,task['id']))
+@@ -9959,7 +10015,7 @@ def _fold_school_follows(app, store, now):
+                       (task['id'],_json(plan),now.isoformat(),row['id']))
+             target_plan=json.loads(target['plan'] or '{}')
+             target_plan.setdefault('school_folded',[]).append(dict(item_id=row['id'],refs=[e.get('ref') for e in evidence],at=now.isoformat(),
+-                                                                     change=change,
++                                                                     change=stored_change,
+                                                                      originals=[dict(ref=e.get('ref'),text=e.get('text'),time=e.get('time'),sender=e.get('sender'),publisher=e.get('publisher')) for e in evidence]))
+             c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(target_plan),now.isoformat(),target['id']))
+             used+=1
+diff --git a/test_daily_list_expression.py b/test_daily_list_expression.py
+index 72a4c17..8423bac 100644
+--- a/test_daily_list_expression.py
++++ b/test_daily_list_expression.py
+@@ -322,6 +322,16 @@ class FollowUpTests(unittest.TestCase):
+         self.assertIn('朗读仍是《风经过小巷》第2、3自然段各两遍。', row['lines'])
+         self.assertIn('今天18:30由家长听读。', row['lines'])
+ 
++    def test_a_prior_reminder_reads_before_the_later_correction_and_keeps_its_label(self):
++        later = ('\n后到更正原文（2026-11-04 17:00）：只做第1—3题。'
++                 '\n先前提醒（2026-11-04 16:00）：再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
++        task, item = self._task_and_item(self.BASE + later)
++        row = self._row(task, item)
++        self.assertEqual([f['label'] for f in row['follow_ups']], ['先前提醒', '更正'])
++        self.assertEqual([f['time'] for f in row['follow_ups']], ['2026-11-04 16:00', '2026-11-04 17:00'])
++        self.assertEqual(row['follow_ups'][0]['text'],
++                         '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
++
+     def test_multi_line_originals_are_kept_whole_in_arrival_order_at_the_same_time(self):
+         later = ('\n后到补充原文（2026-11-04 17:00）：交回时间不变。'
+                  '\n后到补充原文（2026-11-04 17:00）：周五仍交给数学周老师。'
+@@ -360,6 +370,37 @@ class FollowUpTests(unittest.TestCase):
+         self.assertEqual(row['follow_ups'], [{'label': '更正', 'time': '2026-11-04 16:00', 'text': '第4题不做。'}])
+ 
+ 
++class CompoundRestatementTests(unittest.TestCase):
++    """C9b: a line that joins two already-shown requirements with 后/，/； reads once; no similarity, only exact pieces.
++
++    Each piece must read earlier; a digit or negation of its own must also read earlier; and at least two lines stay,
++    so a two-line card is never emptied. A compound line with one new piece stays whole instead of being split into a
++    fragment (带跳绳，穿运动鞋 keeps 穿运动鞋 and the sentence it was written in)."""
++
++    TITLE = '数学：完成练习册第3页第2题'
++
++    def test_a_line_combining_two_shown_requirements_is_left_out(self):
++        shown = family_agenda.action_lines(
++            self.TITLE, '完成练习册第3页第2题。\n请家长签字。\n周五交给数学老师。\n家长签字后周五交给数学老师。')
++        self.assertEqual(shown, ['请家长签字。', '周五交给数学老师。'])
++
++    def test_a_different_number_keeps_both_lines(self):
++        shown = family_agenda.action_lines('语文：A', '交作业到1号本。\n交作业到2号本。')
++        self.assertEqual(shown, ['交作业到1号本。', '交作业到2号本。'])
++
++    def test_a_negation_of_its_own_keeps_both_lines(self):
++        shown = family_agenda.action_lines('语文：A', '明天交练习册。\n明天不交练习册。')
++        self.assertEqual(shown, ['明天交练习册。', '明天不交练习册。'])
++
++    def test_a_compound_line_with_one_new_piece_keeps_its_whole_sentence(self):
++        shown = family_agenda.action_lines('语文：A', '带跳绳。\n带跳绳，穿运动鞋。')
++        self.assertEqual(shown, ['带跳绳。', '带跳绳，穿运动鞋。'])
++
++    def test_at_least_two_lines_remain(self):
++        shown = family_agenda.action_lines('语文：A', '请家长签字，周五交给数学老师。\n家长签字后周五交给数学老师。')
++        self.assertEqual(shown, ['请家长签字，周五交给数学老师。', '家长签字后周五交给数学老师。'])
++
++
+ class PunctuationTests(unittest.TestCase):
+     """C8: a line this display edited never keeps a dangling full-width semicolon; lines stay whole short phrases."""
+ 
+diff --git a/test_school_fold_visibility.py b/test_school_fold_visibility.py
+index 9b012d0..ee349b2 100644
+--- a/test_school_fold_visibility.py
++++ b/test_school_fold_visibility.py
+@@ -49,9 +49,15 @@ def folded(change, ref='message:fiction-group:9', text='数学《星河练习》
+ 
+ 
+ class FoldedLinesTest(unittest.TestCase):
+-    def test_reminder_lines_stay_as_written(self):
++    def test_reminder_moves_to_a_later_notice_not_the_body(self):
++        # A same-fold reminder is a later notice, not another current requirement: its whole original is a follow-up line.
+         lines = agent._school_folded_lines(dict(school_folded=[folded('same')]))
+-        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', lines)
++        self.assertEqual(lines, ['后到提醒原文（2026-11-04 17:00）：数学《星河练习》第12页第1—3题，今晚完成。'])
++        import family_agenda
++        parsed = family_agenda._follow_up(lines[0])
++        self.assertEqual(parsed['label'], '提醒')
++        self.assertEqual(parsed['time'], '2026-11-04 17:00')
++        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', parsed['text'])
+ 
+     def test_appended_and_updated_lines_stay_labelled(self):
+         appended = agent._school_folded_lines(dict(school_folded=[folded('append', text='交回时间不变。')]))
+@@ -160,8 +166,49 @@ class FoldPendingTest(unittest.TestCase):
+         self.assertIn('不用带叶子和旧书', row['body'])
+         self.assertEqual(row['due'], '')
+ 
++    def test_a_notice_older_than_the_adopted_correction_is_not_called_a_correction(self):
++        # m04 arrived at 20:00 but was sent 16:00, before m09 (17:00) that already changed the range: it repeats the older
++        # wording, so the card must read it as an earlier reminder, never as the correction of "第1—4题" beside "第1—3题".
++        self.connection.execute('CREATE TABLE agent_messages(source_id TEXT, id TEXT, payload TEXT)')
++        for source_id, message_id, when, text in (
++                ('fiction-qq', '1', '2026-11-04T15:40:00+08:00', '数学《每日练习》第26页第1—4题，今晚完成。'),
++                ('fiction-qq', '9', '2026-11-04T17:00:00+08:00', '更正：第26页只做第1—3题，第4题不做。')):
++            self.connection.execute('INSERT INTO agent_messages VALUES(?,?,?)',
++                                    (source_id, message_id, json.dumps(dict(time=when, text=text), ensure_ascii=False)))
++        self.connection.commit()
++        plan = dict(school_task=dict(state='ready', goal='完成数学《每日练习》第26页第1—3题。'),
++                    school_messages=[dict(source_id='fiction-qq', message_id='1'),
++                                     dict(source_id='fiction-qq', message_id='9')])
++        self.save_card('完成数学《每日练习》第26页第1—3题，第4题不做。', '2026-11-06', plan)
++        item = dict(child_id='child-1', body='完成数学《每日练习》第26页1—4题，今晚做并签字，周五交。',
++                    due='2026-11-06',
++                    evidence=[quote('message:fiction-wx:4', '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。',
++                                    '2026-11-04T16:00:00+08:00')])
++        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
++                                              dict(item_id='agent-card', change='update'), NOW)
++        self.assertTrue(ok)
++        row = self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++        self.assertIn('先前提醒（2026-11-04 16:00）：', row['body'])
++        self.assertIn('第26页1—4题', row['body'])
++        self.assertNotIn('后到更正原文', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++        plan = json.loads(row['plan'])
++        self.assertEqual(plan['school_folded'][-1]['change'], 'earlier')
++        lines = [line for line in row['body'].split('\n') if '先前提醒' in line]
++        self.assertEqual(len(lines), 1)
++        # A string assertion is not enough: the projection must parse this line as one follow-up (label + time), or it stays
++        # in the card's own body and the old "1—4题" wording still reads beside "1—3题".
++        import family_agenda
++        parsed = family_agenda._follow_up(lines[0])
++        self.assertIsNotNone(parsed)
++        self.assertEqual(parsed['label'], '先前提醒')
++        self.assertEqual(parsed['time'], '2026-11-04 16:00')
++        self.assertIn('第26页1—4题', parsed['text'])
++
+     def test_a_plain_reminder_keeps_one_body_and_its_day(self):
+         row = self.fold('same')
++        # The reminder's words read as its own later notice; the card body keeps the requirement in force only.
++        self.assertIn('后到提醒原文（2026-11-04 16:00）：', row['body'])
+         self.assertIn('今晚完成', row['body'])
+         self.assertEqual(row['due'], '2026-11-06')
+ 
+diff --git a/workbench.css b/workbench.css
+index 8bef76d..d2e67a4 100644
+--- a/workbench.css
++++ b/workbench.css
+@@ -936,3 +936,148 @@ body.grove-wide[data-page="home"] main{margin-left:212px;max-width:none;padding:
+  .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li{display:inline!important}
+  .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li+li::before{content:" · "}
+ }
++
++/* Build 314 视觉关 1-3（手机）：顶部压到 ≤200px、可点热区 ≥44、sheet 降到 38vh 露出 ≥2 张卡。 */
++@media (max-width:899px){
++ /* 1) 顶部压紧：aside/main/hero/告警/胶囊/日历条/列头 逐层收 */
++ body[data-page="home"] aside{padding:6px 14px 0}
++ body[data-page="home"] main{padding:6px 12px calc(96px + env(safe-area-inset-bottom,0px))}
++ .grove3 .grove-bar.is-phone{padding:0 0 1px;gap:0}
++ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:28px;gap:6px}
++ .grove3 .grove-bar.is-phone .grove-bar-kids .child-filters{gap:4px}
++ .grove3 .grove-bar.is-phone .grove-bar-main{gap:6px;min-height:24px}
++ .grove3 .grove-bar.is-phone .grove-bar-h{font-size:18px;line-height:1.15}
++ .grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:21px}
++ .grove3 .grove-bar.is-phone .grove-progress{height:4px}
++ .grove3 .grove-bar.is-phone .grove-bar-daybtn{min-height:28px!important;height:28px;padding:0 6px;font-size:11.5px}
++ /* 缺口语义条压成单行 16px */
++ .grove3 .today-source-gap,body[data-page="home"] .today-source-gap{margin:2px 0!important;padding:1px 6px!important;font-size:11.5px!important;line-height:1.25!important}
++ .grove3 .today-source-gap button,body[data-page="home"] .today-source-gap button{min-height:0!important;height:16px!important;padding:0 2px!important;font-size:11.5px!important}
++ /* 集合胶囊 32px，热区后面用 ::after 扩到 44 */
++ .grove3 .grove-chips-row{margin:2px 0 0;gap:4px;height:32px;align-items:center}
++ .grove3 .grove-chips-row .grove-chip{min-height:30px!important;height:30px;font-size:11.5px;padding:0 8px;position:relative}
++ .grove3 .grove-chips-row .grove-chip.is-add{min-height:30px!important;height:30px}
++ /* 日历 tab + 单行课表说明：46+16 */
++ .grove3 .grove-cal-top{padding:0 0 2px}
++ .grove3 .grove-cal-top .grove-tabs{padding:1px;gap:2px}
++ .grove3 .grove-cal-top .grove-tabs button{min-height:44px!important;height:44px;font-size:13px}
++ .grove3 .grove-cal-top #today-courses{height:16px;line-height:16px;font-size:11px}
++ .grove3 .grove-cal-top #today-courses *{font-size:11px!important;line-height:16px!important}
++ /* 列头压紧 */
++ .grove3 .grove-board-scroll{padding:2px 0 0}
++ .grove3 .grove-cols{padding:0}
++ .grove3 .grove-col{padding:4px 5px 6px}
++ .grove3 .grove-col-head{font-size:10px;margin:0 2px 1px}
++ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:11px;line-height:1.3;margin:0 0 1px;padding:0 6px}
++ .grove3 .grove-subject{margin-top:4px}
++ /* 2) 可点热区 ≥44×44（视觉高度不变） */
++ .grove3 .grove-chips-row .grove-chip::after,
++ .grove3 .grove-bar.is-phone .child-filters button::after,
++ .grove3 .grove-bar.is-phone .grove-bar-daybtn::after,
++ .grove3 .grove-cal-top .grove-tabs button::after,
++ .grove3 .grove-cal-top #today-courses button::after,
++ .grove3 .grove-cal-top #today-courses a::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%);z-index:2}
++ .grove3 .grove-chips-row .grove-chip,
++ .grove3 .grove-bar.is-phone .child-filters button,
++ .grove3 .grove-bar.is-phone .grove-bar-daybtn,
++ .grove3 .grove-cal-top .grove-tabs button,
++ .grove3 .grove-cal-top #today-courses :is(button,a){position:relative}
++ /* 3) sheet 降到 38vh，上方露出 ≥2 张卡 */
++ .grove3 .grove-detail{max-height:min(27vh,240px)!important}
++}
++
++/* Build 314 视觉关 1-3（手机·二轮）：再压 40-55px，把首卡打到 ≤200。 */
++@media (max-width:899px){
++ body[data-page="home"] aside{padding:4px 14px 0}
++ body[data-page="home"] main{padding:4px 12px calc(96px + env(safe-area-inset-bottom,0px))}
++ .grove3 .grove-bar.is-phone{padding:0;gap:0;border-bottom:0}
++ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:26px;gap:5px}
++ .grove3 .grove-bar.is-phone .grove-bar-main{gap:5px;min-height:21px}
++ .grove3 .grove-bar.is-phone .grove-bar-h{font-size:17px;line-height:1.1}
++ .grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:20px}
++ .grove3 .grove-bar.is-phone .grove-progress{height:3px}
++ .grove3 .grove-bar.is-phone .grove-bar-daybtn{min-height:26px!important;height:26px;padding:0 5px;font-size:11px}
++ .grove3 .grove-board-scroll{padding:0}
++ .grove3 .grove-chips-row{margin:1px 0 0;height:30px}
++ .grove3 .grove-chips-row .grove-chip{min-height:28px!important;height:28px;font-size:11px;padding:0 7px}
++ .grove3 .grove-chips-row .grove-chip.is-add{min-height:28px!important;height:28px}
++ .grove3 .grove-cal-top{padding:0}
++ .grove3 .grove-cal-top .grove-tabs button{min-height:44px!important;height:44px;font-size:12.5px}
++ .grove3 .grove-cal-top #today-courses{height:14px;line-height:14px}
++ .grove3 .grove-cal-top #today-courses *{font-size:10.5px!important;line-height:14px!important}
++ .grove3 .grove-col{padding:3px 4px 5px}
++ .grove3 .grove-col-head{font-size:9.5px;line-height:1.2;margin:0 2px}
++ .grove3 .grove-col-body{padding-top:0}
++ .grove3 .grove-subject{margin-top:2px}
++ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:10.5px;line-height:1.25;margin:0 0 1px;padding:0 5px}
++ /* 手机今日卡：padding 10–12，行高 ≥1.55 可读 */
++ .grove3 #task-groups .grove-row{padding:10px 11px}
++ .grove3 #task-groups .grove-row .grove-title{line-height:1.55}
++ .grove3 #task-groups .grove-row .grove-points,.grove3 #task-groups .grove-row .grove-points .grove-point{line-height:1.6}
++}
++
++/* Build 314 视觉关 1-3（手机·收尾 10px） */
++@media (max-width:899px){
++ .grove3 .grove-chips-row{margin:0;height:28px}
++ .grove3 .grove-chips-row .grove-chip{min-height:28px!important;height:28px;padding:0 6px}
++ .grove3 .grove-cal-top .grove-tabs{padding:0;gap:1px}
++ .grove3 .grove-cal-top .grove-tabs button{min-height:44px!important;height:44px}
++ .grove3 .grove-cal-top #today-courses{height:12px;line-height:12px}
++ .grove3 .grove-cal-top #today-courses *{font-size:10px!important;line-height:12px!important}
++ .grove3 .grove-col{padding:2px 4px 4px}
++ .grove3 .grove-col-head{font-size:9px;line-height:1.1;margin:0 1px}
++ .grove3 .grove-subject{margin:1px 0 0}
++ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:10px;line-height:1.2;margin:0;padding:0 4px}
++}
++
++/* Build 314 视觉关 1-3（手机·终轮）：胶囊行 44 命中盒、隐藏列头、课表行回到 18px 供命中、bar 再压。 */
++@media (max-width:899px){
++ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:26px}
++ .grove3 .grove-bar.is-phone .child-filters button{min-height:26px!important;height:26px;padding:0 8px;font-size:11.5px}
++ .grove3 .grove-bar.is-phone .grove-bar-main{min-height:20px;gap:4px}
++ .grove3 .grove-bar.is-phone .grove-bar-h{font-size:16.5px;line-height:1.05}
++ .grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:19px}
++ .grove3 .grove-bar.is-phone .grove-bar-daybtn{min-height:24px!important;height:24px;padding:0 4px;font-size:10.5px}
++ .grove3 .grove-col-head{display:none!important}
++ .grove3 .grove-col{padding:1px 4px 4px}
++ .grove3 .grove-cal-top #today-courses{height:18px;line-height:18px;overflow:visible}
++ .grove3 .grove-cal-top #today-courses *{font-size:10.5px!important;line-height:18px!important}
++ /* 胶囊行：容器 44 高，胶囊视觉仍 28（::before 画底），元素 44 就是命中盒 */
++ .grove3 .grove-chips-row{height:44px;align-items:center;overflow-x:auto;overflow-y:hidden;padding:0 2px;margin:0}
++ .grove3 .grove-chips-row .grove-set,.grove3 .grove-chips-row .grove-chip{position:relative;height:44px!important;min-height:44px!important;border:0!important;background:transparent!important;box-shadow:none!important;padding:0 8px!important;display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--g-ink2,#565147)}
++ .grove3 .grove-chips-row .grove-set::before,.grove3 .grove-chips-row .grove-chip::before{content:"";position:absolute;left:0;right:0;top:50%;height:28px;transform:translateY(-50%);border-radius:999px;background:var(--g-surface,#fffdf8);border:1px solid var(--g-line,#e5dfd1);z-index:-1}
++ .grove3 .grove-chips-row .grove-set.is-on::before{background:var(--g-accent,#2f5d4b);border-color:var(--g-accent,#2f5d4b)}
++ .grove3 .grove-chips-row .grove-set.is-on{color:#fff}
++ .grove3 .grove-chips-row .grove-chip.is-add::before{background:var(--g-accent-weak,#e9f0eb);border-color:transparent}
++ /* 日历/导入课表按钮 44 热区（p 允许溢出，避免被 overflow 裁掉） */
++ .grove3 .grove-cal-top #today-courses button{position:relative}
++ .grove3 .grove-cal-top #today-courses button::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%)}
++}
++
++/* Build 314 视觉关 1-3（手机·终轮 2）：孩子切换 44 视觉不变；看明天/日历按钮 44 热区 */
++@media (max-width:899px){
++ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:44px}
++ .grove3 .grove-bar.is-phone .child-filters{gap:5px;overflow:visible}
++ .grove3 .grove-bar.is-phone .child-filters button{position:relative;height:44px!important;min-height:44px!important;border:0!important;background:transparent!important;box-shadow:none!important;padding:0 10px!important;font-size:11.5px;color:var(--g-ink2,#565147)}
++ .grove3 .grove-bar.is-phone .child-filters button::before{content:"";position:absolute;left:0;right:0;top:50%;height:26px;transform:translateY(-50%);border-radius:999px;background:var(--g-surface,#fffdf8);border:1px solid var(--g-line,#e5dfd1);z-index:-1}
++ .grove3 .grove-bar.is-phone .child-filters button[aria-pressed="true"]::before{background:var(--g-accent,#2f5d4b);border-color:var(--g-accent,#2f5d4b)}
++ .grove3 .grove-bar.is-phone .child-filters button[aria-pressed="true"]{color:#fff}
++ .grove3 .grove-bar.is-phone .grove-bar-main{overflow:visible}
++ .grove3 .grove-bar.is-phone .grove-bar-daybtn{position:relative!important;height:44px!important;min-height:44px!important;margin:-10px 0!important;display:inline-flex!important;align-items:center;justify-content:center;padding:0 6px!important}
++ .grove3 .grove-cal-top #today-courses[data-schedule="none"]{display:none!important}
++ .grove3 .grove-chips-row .grove-chip[data-page="calendar"]{white-space:nowrap}
++}
++
++/* Build 314 视觉关：修复 site-nav 通用规则误伤「日历 tabs」（.grove-tabs 本身是 <nav>，被 aside nav button 命中压到 30/36px）。
++   用更高优先级把 tabs 按钮钉回 44px，site nav 的四项不受影响。 */
++body.grove-wide[data-page="home"] aside nav.grove-tabs button,
++body.grove-wide[data-page="home"] aside nav.grove-tabs button:hover{
++ min-height:44px!important;height:44px!important;font-size:11.5px!important;padding:0 2px!important;white-space:nowrap;
++}
++
++/* Build 314 视觉关：手机端杜绝横向滚动（fixture 有课表/长标题时也不让文档被撑宽）。 */
++@media (max-width:899px){
++ body[data-page="home"] main{overflow-x:clip}
++ .grove3,.grove3 .grove-board,.grove3 .grove-board-scroll,.grove3 .grove-list-head{max-width:100%;min-width:0;overflow-x:clip}
++ .grove3 .grove-tabs,.grove3 .grove-tabs button,.grove3 .grove-col{min-width:0}
++}
+diff --git a/test_daily_list_expression.py b/test_daily_list_expression.py
+new file mode 100644
+index 0000000..8423bac
+--- /dev/null
++++ b/test_daily_list_expression.py
+@@ -0,0 +1,449 @@
++#!/usr/bin/env python3
++"""Display-only contract for the daily-list body: one requirement reads once (C1-C8).
++
++The product's daily card used to stack a task's body, 提交要求 and 补充要求 on top of each other, repeat the title's
++own words in the body, and fold the family's arrangement into the teacher's words. These tests pin the display contract
++on fully fictional tasks: labels never read in the body, a clause reads once, a restatement of the title goes, the
++title's opening is not repeated, a line the card already reads goes, labelled lines keep their new words, the family's
++arrangement reads apart in plan_lines, and no line this display edited keeps a dangling full-width semicolon. Nothing
++here writes a store: the same saved action and the same task dict read unchanged after the call.
++
++The comparison is the display's own: _plain (NFKC, case, whitespace, punctuation) equality, continuous substring, or
++the same words with only particles (了/着/里/也/都/就/和…) differing. There is no similarity threshold: a word that is
++not exactly (or particle-)equal is never a repeat, so 明天/后天, 练习册/练习本, 1号本/2号本 and a title's 第1题 never
++swallow a line that adds one.
++"""
++import copy
++import unittest
++
++import family_agenda
++
++
++DAY = '2026-11-04'
++CHILD = {'id': 'child-display-1', 'name': '小禾'}
++
++# The three fictional tasks from the parent's report, rebuilt from the saved words. The actions are display input only:
++# no store and no model is involved in this file.
++ENGLISH_TITLE = '英语：完成《每日练习》'
++ENGLISH_ACTION = ('完成英语《每日练习》：一、看图选词第1—3题；二、标星单词 under、near 各抄写一遍。不需要录音。'
++                  '做完放进英语夹里，明天带来。\n'
++                  '提交要求：做完放进英语夹，明天带来。\n'
++                  '补充要求：完成英语《每日练习》。\n'
++                  '完成后放进英语夹里，明天带到学校。\n'
++                  '不用在群里发照片。')
++ENGLISH_LINES = ['一、看图选词第1—3题',
++                 '二、标星单词 under、near 各抄写一遍。',
++                 '不需要录音。',
++                 '做完放进英语夹里，明天带来。',
++                 # Kept on purpose: 完成后…带到学校 is neither a continuous part of, nor particle-equal to,
++                 # 做完…明天带来, so dropping it would delete the words 学校/完成 rather than a pure repetition. This is
++                 # exactly the case where a similarity score is not allowed to decide: C2 still reads every identical
++                 # clause once, and C3 below shows no line only retells the title.
++                 '完成后放进英语夹里，明天带到学校。',
++                 '不用在群里发照片。']
++
++MATH_TITLE = '数学：完成《每日练习》第26页第1—3题'
++MATH_ACTION = ('完成数学《每日练习》第26页第1—3题；第4题不做。每题写出算式并验算。\n'
++               '提交要求：家长签字后周五交给数学周老师')
++MATH_LINES = ['第4题不做。', '每题写出算式并验算。', '家长签字后周五交给数学周老师']
++
++CHINESE_TITLE = '语文：朗读《风经过小巷》第2、3自然段'
++CHINESE_ACTION = ('朗读《风经过小巷》第2、3自然段。各读两遍，读给家长听。\n'
++                  '补充要求：不用录音，也不用上传，明早我抽听。')
++CHINESE_LINES = ['各读两遍，读给家长听。', '不用录音，也不用上传，明早我抽听。']
++CHINESE_PLAN = '林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍'
++
++LABELS = ('提交要求', '补充要求', '补充说明', '正文')
++
++
++def plain(text):
++    """The same comparison shape the display uses: NFKC width, case, whitespace and punctuation do not make a word new."""
++    import unicodedata
++    text = unicodedata.normalize('NFKC', str(text)).lower()
++    return ''.join(ch for ch in text if not (ch.isspace() or unicodedata.category(ch).startswith('P')))
++
++
++class LabelTests(unittest.TestCase):
++    """C1: no 提交要求：/补充要求：/补充说明：/正文： tag reads in the body; the colon goes with the tag."""
++
++    def test_each_label_tag_is_left_out_whole_with_its_colon(self):
++        for tag in LABELS:
++            for mark in ('：', ':'):
++                with self.subTest(tag=tag, mark=mark):
++                    shown = family_agenda.action_lines('语文：A', tag + mark + '明天早上交练习册。')
++                    self.assertEqual(shown, ['明天早上交练习册。'])
++                    self.assertFalse(any(line.startswith(tag) for line in shown), shown)
++                    self.assertNotIn(tag + mark, ''.join(shown))
++
++    def test_a_label_whose_content_the_body_already_reads_is_dropped_whole(self):
++        # 提交要求 repeats 做完放进英语夹里，明天带来, which the card already shows: only the tag word changes.
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown, ENGLISH_LINES)
++        self.assertNotIn('提交要求', ''.join(shown))
++
++
++class ClauseOnceTests(unittest.TestCase):
++    """C2: a clause reads once across lines and inside one line; full-width/half-width and spacing do not hide it."""
++
++    def test_the_same_clause_is_not_read_twice_across_lines(self):
++        shown = family_agenda.action_lines('语文：A', '读第3课两遍，家长签字。\n家长签字。')
++        self.assertEqual(shown, ['读第3课两遍，家长签字。'])
++        self.assertEqual(plain(''.join(shown)).count('家长签字'), 1)
++
++    def test_the_same_clause_is_not_read_twice_inside_one_line_and_keeps_the_full_stop(self):
++        shown = family_agenda.action_lines('语文：A', '读第3课，读第3课。')
++        self.assertEqual(shown, ['读第3课。'])
++        self.assertEqual(plain(''.join(shown)).count('读第3课'), 1)
++
++    def test_a_dropped_middle_clause_keeps_the_remaining_order_and_separator(self):
++        self.assertEqual(family_agenda.action_lines('语文：A', '读第3课，读第3课，家长签字。'), ['读第3课，家长签字。'])
++        self.assertEqual(''.join(family_agenda.action_lines('语文：A', 'A，A，B。')), 'A，B。')
++
++    def test_spacing_and_punctuation_do_not_make_a_new_clause(self):
++        shown = family_agenda.action_lines('语文：A', '家长签字。\n 家长 签字！')
++        self.assertEqual(plain(''.join(shown)).count('家长签字'), 1)
++
++    def test_a_shorter_form_of_a_shown_clause_is_a_repeat(self):
++        shown = family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。')
++        self.assertEqual(shown, ['做完放进英语夹里，明天带来。'])
++
++
++class RestatementTests(unittest.TestCase):
++    """C3: a line the title already says whole is left out, but only when nothing of it is new."""
++
++    def test_a_line_that_only_retells_the_title_is_left_out(self):
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '补充要求：完成英语《每日练习》。'), [])
++
++    def test_one_new_word_keeps_the_line_even_when_the_title_says_the_rest(self):
++        # 本 is not in the title: this is a different object, not a restatement.
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》本。'),
++                         ['完成英语《每日练习》本。'])
++        # 自然段 says a real word the title's 段 does not: the frozen line stays.
++        self.assertEqual(family_agenda.action_lines('语文：朗读《秋天的小院》第2、3段两遍',
++                                                   '朗读《秋天的小院》第2、3自然段两遍。'),
++                         ['朗读《秋天的小院》第2、3自然段两遍。'])
++
++
++class TitleOpeningTests(unittest.TestCase):
++    """C4: the title's own opening reads once in the title; the rest of the line stays, with its own new words."""
++
++    def test_the_titles_own_opening_gives_way_and_the_new_requirement_stays(self):
++        shown = family_agenda.action_lines(MATH_TITLE, '完成数学《每日练习》第26页第1—3题；第4题不做。')
++        self.assertEqual(shown, ['第4题不做。'])
++        self.assertFalse(any('第26页' in line for line in shown), shown)
++
++    def test_a_title_word_the_line_itself_adds_keeps_the_whole_line(self):
++        # 完成 is that line's own word (the title is 数学：练习册第18页第2、4、6题).
++        shown = family_agenda.action_lines('数学：练习册第18页第2、4、6题',
++                                           '完成练习册第18页第2、4、6题；每题先列式，再写完整计算过程，算完后逐题验算。')
++        self.assertEqual(shown, ['完成练习册第18页第2、4、6题；', '每题先列式，再写完整计算过程，算完后逐题验算。'])
++
++    def test_a_new_question_number_is_never_cut_as_a_title_repeat(self):
++        # The title says 第1题 only; 第2题 is new, so the opening cannot give way (RED counter-example).
++        self.assertEqual(family_agenda.action_lines('数学：完成第20页第1题', '完成第20页第1、2题'),
++                         ['完成第20页第1、2题'])
++
++    def test_a_swapped_page_and_question_number_is_not_a_title_repeat(self):
++        self.assertEqual(family_agenda.action_lines('语文：完成练习册第2页第3题', '完成练习册第3页第2题'),
++                         ['完成练习册第3页第2题'])
++
++
++class SameContentTests(unittest.TestCase):
++    """C5: a line identical to a shown line, or different only by particles, goes; near-but-different words stay."""
++
++    def test_an_identical_later_line_is_dropped(self):
++        self.assertEqual(family_agenda.action_lines('语文：A', '读第3课两遍，家长签字。\n读第3课两遍，家长签字！'),
++                         ['读第3课两遍，家长签字。'])
++
++    def test_a_line_differing_only_by_particles_is_the_same_clause(self):
++        # 里 is a particle: 做完放进英语夹 and 做完放进英语夹里 are the same words.
++        self.assertEqual(family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。'),
++                         ['做完放进英语夹里，明天带来。'])
++
++    def test_near_but_different_words_are_never_swallowed(self):
++        cases = [('明天交练习册。\n明天不交练习册。', ['明天交练习册。', '明天不交练习册。']),
++                 ('今天交练习册。\n明天交练习册。', ['今天交练习册。', '明天交练习册。']),
++                 ('带上练习册。\n带上练习本。', ['带上练习册。', '带上练习本。']),
++                 ('不用明天交。\n不用后天交。', ['不用明天交。', '不用后天交。']),
++                 ('1号本写。\n2号本写。', ['1号本写。', '2号本写。'])]
++        for action, expected in cases:
++            with self.subTest(action=action):
++                self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', action), expected)
++
++    def test_the_english_completion_line_stays_because_it_is_not_the_same_words(self):
++        self.assertIn('完成后放进英语夹里，明天带到学校。', family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION))
++
++
++class NewInformationTests(unittest.TestCase):
++    """C6: a labelled line's new clauses stay; only the clauses the card already reads are left out."""
++
++    def test_a_labels_new_requirement_is_kept_without_its_label(self):
++        shown = family_agenda.action_lines(MATH_TITLE, MATH_ACTION)
++        self.assertFalse(any(line.startswith('提交要求') for line in shown), shown)
++        self.assertTrue(any('交给数学周老师' in line for line in shown), shown)
++
++    def test_a_labelled_extension_folds_into_the_shown_line_once(self):
++        # The frozen card from test_child_study_ui.cjs, unchanged: 明天早上交练习册 extends 明天早上交.
++        shown = family_agenda.action_lines('语文：完成《星芽阅读练习册》第28页第1、2题',
++                                           '完成《星芽阅读练习册》第28页第1、2题。\n答案写在练习册上。\n今晚完成，明天早上交。\n'
++                                           '提交要求：明天早上交练习册。')
++        self.assertEqual(shown, ['答案写在练习册上。', '今晚完成，明天早上交练习册。'])
++        self.assertEqual(''.join(shown).count('明天早上交'), 1)
++
++    def test_a_label_that_does_not_extend_the_last_clause_becomes_its_own_line_not_a_scramble(self):
++        # RED counter-example: folding this into the first sentence produced a sentence that is not a continuous part
++        # of the saved words (明天交练习册和卷子，然后读课文。). It must instead read as its own line after the saved one.
++        shown = family_agenda.action_lines('语文：A', '明天交练习册，然后读课文。\n提交要求：明天交练习册和卷子。')
++        self.assertEqual(shown, ['明天交练习册，然后读课文。', '明天交练习册和卷子。'])
++        self.assertIn(''.join(shown), '明天交练习册，然后读课文。明天交练习册和卷子。')
++
++
++class GoldenTaskTests(unittest.TestCase):
++    """The three fictional tasks from the parent's report, in their fixed display form (C1-C8 together)."""
++
++    def test_english_card_reads_once(self):
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown, ENGLISH_LINES)
++        self.assertFalse(any(line.startswith(label) for line in shown for label in LABELS), shown)
++        self.assertFalse(any('每日练习' in line for line in shown), shown)
++
++    def test_math_card_reads_once_and_keeps_the_new_handback(self):
++        self.assertEqual(family_agenda.action_lines(MATH_TITLE, MATH_ACTION), MATH_LINES)
++
++    def test_chinese_body_reads_once(self):
++        self.assertEqual(family_agenda.action_lines(CHINESE_TITLE, CHINESE_ACTION), CHINESE_LINES)
++
++
++class PlanLineTests(unittest.TestCase):
++    """C7: the family's arrangement reads apart in plan_lines; lines keeps only the teacher's words."""
++
++    def _row(self, task, item):
++        view = family_agenda.day_view([item], [task], [], CHILD, DAY, DAY, 'wrong')
++        return view['groups'][0]['items'][0], view
++
++    def _task_and_item(self, focus='next', scheduled=True):
++        task = {'id': 'task-display-1', 'child': CHILD['name'], 'title': CHINESE_TITLE, 'action': CHINESE_ACTION,
++                'action_lines': family_agenda.action_lines(CHINESE_TITLE, CHINESE_ACTION),
++                'focus': {'next_action': CHINESE_PLAN} if focus == 'next' else None,
++                'source': 'school', 'school_origin': True, 'progress': None}
++        agenda = {'due_on': DAY, 'due_kind': 'deadline', 'category': 'homework'}
++        if scheduled:
++            agenda['scheduled_on'] = DAY
++        item = {'id': 'item-display-1', 'kind': 'task', 'task_id': task['id'], 'title': CHINESE_TITLE,
++                'child_ids': [CHILD['id']], 'agenda': agenda, 'closed': False, 'status': '待跟进'}
++        return task, item, agenda
++
++    def test_the_family_arrangement_reads_apart_from_the_teachers_words(self):
++        task, item, _ = self._task_and_item()
++        before = copy.deepcopy(task)
++        row, _ = self._row(task, item)
++        self.assertEqual(row['lines'], CHINESE_LINES)
++        self.assertEqual(row['plan_lines'], [CHINESE_PLAN])
++        self.assertFalse(any('家庭安排' in line for line in row['lines']), row['lines'])
++        self.assertFalse(any('家庭安排' in line for line in row['plan_lines']), row['plan_lines'])
++        self.assertEqual(task, before, 'display only: the task is not rewritten')
++
++    def test_the_family_text_is_truly_removed_from_lines_not_copied(self):
++        task, item, _ = self._task_and_item()
++        row, _ = self._row(task, item)
++        self.assertEqual(len(row['lines']), len(CHINESE_LINES))
++        self.assertNotIn(CHINESE_PLAN, row['lines'])
++
++    def test_plan_lines_defaults_to_empty_and_keeps_every_other_row_key(self):
++        task, item, _ = self._task_and_item(focus=None)
++        row, _ = self._row(task, item)
++        self.assertEqual(row['plan_lines'], [])
++        self.assertEqual(row['lines'], CHINESE_LINES)
++        for key in ('id', 'kind', 'task_id', 'title', 'subject', 'category', 'status', 'closed', 'pending_review',
++                    'origin', 'origin_label', 'lines', 'complete_words', 'facts', 'today', 'when',
++                    'publications', 'published_at', 'publisher', 'progress', 'records', 'wrong'):
++            self.assertIn(key, row)
++        # A conditional key stays conditional: no school_material on this item, so no material key and no version key.
++        self.assertNotIn('material', row)
++        self.assertNotIn('version', row)
++
++    def test_a_version_latest_family_line_is_still_read_as_a_plan(self):
++        task, item, _ = self._task_and_item(focus=None)
++        item = dict(item, version={'state': 'latest', 'title': CHINESE_TITLE,
++                                   'lines': ['家庭安排（计划 ' + DAY + '）：家长自己的安排']})
++        row, _ = self._row(task, item)
++        self.assertEqual(row['plan_lines'], ['家长自己的安排'])
++        self.assertEqual(row['lines'], [])
++
++
++class FollowUpTests(unittest.TestCase):
++    """C9: a later notice's whole original reads apart in follow_ups; a bare line with no label stays in lines.
++
++    The merge labels update/append/cancel originals; a same-fold original is stored bare. The display separates only the
++    labelled ones, because a bare line can as well be a new requirement (不用在群里发照片) as a restatement. That choice is
++    pinned here so a later cleanup cannot quietly move every same-fold line out of the card.
++    """
++
++    BASE = '完成练习册第3页第2题。\n每题写出算式并验算。\n不用在群里发照片。'
++    LATER = ('\n后到更正原文（2026-11-04 16:00）：第4题不做。'
++             '\n后到补充原文（2026-11-04 17:00）：周五交给数学周老师。'
++             '\n取消依据（2026-11-04 18:00）：原订美术课带落叶事项取消。'
++             '\n后到原文（更正/取消依据，不进本事项日期判断）：2026-11-04 16:00（message:qa:x）「原第1—4题」')
++
++    def _row(self, task, item):
++        view = family_agenda.day_view([item], [task], [], CHILD, DAY, DAY, 'wrong')
++        return view['groups'][0]['items'][0]
++
++    def _task_and_item(self, action, focus='next', version=None):
++        title = '数学：完成练习册第3页第2题'
++        task = {'id': 'task-follow-1', 'child': CHILD['name'], 'title': title, 'action': action,
++                'focus': {'next_action': CHINESE_PLAN} if focus == 'next' else None,
++                'source': 'school', 'school_origin': True, 'progress': None}
++        agenda = {'due_on': DAY, 'due_kind': 'deadline', 'category': 'homework', 'scheduled_on': DAY}
++        item = {'id': 'item-follow-1', 'kind': 'task', 'task_id': task['id'], 'title': title,
++                'child_ids': [CHILD['id']], 'agenda': agenda, 'closed': False, 'status': '待跟进'}
++        if version is not None:
++            item['version'] = version
++        return task, item
++
++    def test_the_four_labelled_later_notices_read_apart_from_the_requirements(self):
++        task, item = self._task_and_item(self.BASE + self.LATER)
++        before = copy.deepcopy(task)
++        row = self._row(task, item)
++        self.assertEqual(row['lines'], self.BASE.splitlines())
++        self.assertEqual(row['follow_ups'], [
++            {'label': '更正', 'time': '2026-11-04 16:00', 'text': '第4题不做。'},
++            {'label': '提醒', 'time': '2026-11-04 16:00', 'text': '（message:qa:x）「原第1—4题」'},
++            {'label': '补充', 'time': '2026-11-04 17:00', 'text': '周五交给数学周老师。'},
++            {'label': '取消', 'time': '2026-11-04 18:00', 'text': '原订美术课带落叶事项取消。'},
++        ])
++        self.assertEqual(task, before, 'display only: the task and its saved action are not rewritten')
++
++    def test_a_bare_same_fold_line_without_a_label_stays_in_lines(self):
++        task, item = self._task_and_item(self.BASE + '\n朗读仍是《风经过小巷》第2、3自然段各两遍。\n今天18:30由家长听读。')
++        row = self._row(task, item)
++        self.assertEqual(row['follow_ups'], [])
++        self.assertIn('朗读仍是《风经过小巷》第2、3自然段各两遍。', row['lines'])
++        self.assertIn('今天18:30由家长听读。', row['lines'])
++
++    def test_a_prior_reminder_reads_before_the_later_correction_and_keeps_its_label(self):
++        later = ('\n后到更正原文（2026-11-04 17:00）：只做第1—3题。'
++                 '\n先前提醒（2026-11-04 16:00）：再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
++        task, item = self._task_and_item(self.BASE + later)
++        row = self._row(task, item)
++        self.assertEqual([f['label'] for f in row['follow_ups']], ['先前提醒', '更正'])
++        self.assertEqual([f['time'] for f in row['follow_ups']], ['2026-11-04 16:00', '2026-11-04 17:00'])
++        self.assertEqual(row['follow_ups'][0]['text'],
++                         '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
++
++    def test_multi_line_originals_are_kept_whole_in_arrival_order_at_the_same_time(self):
++        later = ('\n后到补充原文（2026-11-04 17:00）：交回时间不变。'
++                 '\n后到补充原文（2026-11-04 17:00）：周五仍交给数学周老师。'
++                 '\n后到更正原文（2026-11-04 16:00）：第4题不做。')
++        task, item = self._task_and_item(self.BASE + later)
++        row = self._row(task, item)
++        self.assertEqual([f['text'] for f in row['follow_ups']],
++                         ['第4题不做。', '交回时间不变。', '周五仍交给数学周老师。'])
++        self.assertEqual([f['time'] for f in row['follow_ups']],
++                         ['2026-11-04 16:00', '2026-11-04 17:00', '2026-11-04 17:00'])
++
++    def test_no_follow_up_payload_reads_unchanged_and_keeps_the_row_keys(self):
++        task, item = self._task_and_item(self.BASE, focus=None)
++        row = self._row(task, item)
++        self.assertEqual(row['follow_ups'], [])
++        self.assertEqual(row['plan_lines'], [])
++        self.assertEqual(row['lines'], self.BASE.splitlines())
++        self.assertIn('follow_ups', row)
++        self.assertEqual(set(row['follow_ups']), set())
++
++    def test_plan_lines_and_follow_ups_read_side_by_side(self):
++        task, item = self._task_and_item(self.BASE + self.LATER)
++        row = self._row(task, item)
++        self.assertEqual(row['plan_lines'], [CHINESE_PLAN])
++        self.assertEqual(len(row['follow_ups']), 4)
++        self.assertFalse(any('家庭安排' in line for line in row['lines']), row['lines'])
++
++    def test_a_version_latest_follow_up_is_read_as_a_notice(self):
++        task, item = self._task_and_item(self.BASE, focus=None,
++                                         version={'state': 'latest', 'title': '数学：完成练习册第3页第2题',
++                                                  'lines': ['家庭安排（计划 ' + DAY + '）：家长自己的安排',
++                                                            '后到更正原文（2026-11-04 16:00）：第4题不做。']})
++        row = self._row(task, item)
++        self.assertEqual(row['lines'], [])
++        self.assertEqual(row['plan_lines'], ['家长自己的安排'])
++        self.assertEqual(row['follow_ups'], [{'label': '更正', 'time': '2026-11-04 16:00', 'text': '第4题不做。'}])
++
++
++class CompoundRestatementTests(unittest.TestCase):
++    """C9b: a line that joins two already-shown requirements with 后/，/； reads once; no similarity, only exact pieces.
++
++    Each piece must read earlier; a digit or negation of its own must also read earlier; and at least two lines stay,
++    so a two-line card is never emptied. A compound line with one new piece stays whole instead of being split into a
++    fragment (带跳绳，穿运动鞋 keeps 穿运动鞋 and the sentence it was written in)."""
++
++    TITLE = '数学：完成练习册第3页第2题'
++
++    def test_a_line_combining_two_shown_requirements_is_left_out(self):
++        shown = family_agenda.action_lines(
++            self.TITLE, '完成练习册第3页第2题。\n请家长签字。\n周五交给数学老师。\n家长签字后周五交给数学老师。')
++        self.assertEqual(shown, ['请家长签字。', '周五交给数学老师。'])
++
++    def test_a_different_number_keeps_both_lines(self):
++        shown = family_agenda.action_lines('语文：A', '交作业到1号本。\n交作业到2号本。')
++        self.assertEqual(shown, ['交作业到1号本。', '交作业到2号本。'])
++
++    def test_a_negation_of_its_own_keeps_both_lines(self):
++        shown = family_agenda.action_lines('语文：A', '明天交练习册。\n明天不交练习册。')
++        self.assertEqual(shown, ['明天交练习册。', '明天不交练习册。'])
++
++    def test_a_compound_line_with_one_new_piece_keeps_its_whole_sentence(self):
++        shown = family_agenda.action_lines('语文：A', '带跳绳。\n带跳绳，穿运动鞋。')
++        self.assertEqual(shown, ['带跳绳。', '带跳绳，穿运动鞋。'])
++
++    def test_at_least_two_lines_remain(self):
++        shown = family_agenda.action_lines('语文：A', '请家长签字，周五交给数学老师。\n家长签字后周五交给数学老师。')
++        self.assertEqual(shown, ['请家长签字，周五交给数学老师。', '家长签字后周五交给数学老师。'])
++
++
++class PunctuationTests(unittest.TestCase):
++    """C8: a line this display edited never keeps a dangling full-width semicolon; lines stay whole short phrases."""
++
++    def test_no_edited_line_starts_or_ends_on_a_full_width_semicolon(self):
++        for title, action in ((ENGLISH_TITLE, ENGLISH_ACTION), (MATH_TITLE, MATH_ACTION), (CHINESE_TITLE, CHINESE_ACTION)):
++            with self.subTest(title=title):
++                shown = family_agenda.action_lines(title, action)
++                self.assertTrue(all(line.strip() for line in shown), shown)
++                self.assertFalse([line for line in shown if line.startswith('；') or line.endswith('；')], shown)
++
++    def test_the_english_first_step_keeps_no_dangling_semicolon(self):
++        shown = family_agenda.action_lines(ENGLISH_TITLE, ENGLISH_ACTION)
++        self.assertEqual(shown[0], '一、看图选词第1—3题')
++        self.assertFalse(shown[0].endswith('；'))
++
++
++class FoldSemanticsTests(unittest.TestCase):
++    """C2/C5: only particles fold; an adverb that adds a step (再/也/还/都/就) never disappears as a repeat."""
++
++    def test_an_incremental_adverb_keeps_its_own_line(self):
++        for action, second in (('读一遍。\n再读一遍。', '再读一遍。'),
++                               ('语文要交。\n语文也要交。', '语文也要交。'),
++                               ('明天带练习册。\n明天再带练习册。', '明天再带练习册。'),
++                               ('明天不带练习册。\n明天不再带练习册。', '明天不再带练习册。')):
++            with self.subTest(action=action):
++                shown = family_agenda.action_lines('语文：A', action)
++                self.assertIn(second, shown)
++
++    def test_fold_still_joins_a_true_particle_only_repeat(self):
++        shown = family_agenda.action_lines('语文：A', '做完放进英语夹里，明天带来。\n做完放进英语夹，明天带来。')
++        self.assertEqual(shown, ['做完放进英语夹里，明天带来。'])
++
++
++class TitleNumberGuardTests(unittest.TestCase):
++    """C3: a title range and a saved single number never flatten into one another."""
++
++    def test_a_saved_single_item_is_not_covered_by_the_title_range(self):
++        self.assertEqual(family_agenda.action_lines('数学：完成第1—3题', '完成第13题'), ['完成第13题'])
++        self.assertEqual(family_agenda.action_lines('语文：朗读第1、2段', '朗读第12段'), ['朗读第12段'])
++
++    def test_a_title_that_really_covers_the_line_still_reads_once(self):
++        self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
++
++
++if __name__ == '__main__':
++    unittest.main()
+diff --git a/test_school_fold_visibility.py b/test_school_fold_visibility.py
+new file mode 100644
+index 0000000..ee349b2
+--- /dev/null
++++ b/test_school_fold_visibility.py
+@@ -0,0 +1,274 @@
++"""Fictional regressions: a fold's later original stays visible for all four changes and its day wins.
++
++The program folds a proved later notice into the waiting card or the saved task instead of opening an orphan card. These
++tests keep that fold from hiding its own text: every line of the later original stays in order (a correction may state
++its new range on one line and its new day on the next), the labelled replacement and the ground of a cancellation stay
++readable, a moved day counts with or without a hand-back verb, and the later message stays readable in the task's
++sources by the same note convention on both the pending-card and the saved-task path (never a cited message line, which
++the agenda would read as one of the affair's own day-role messages).
++"""
++import datetime as dt
++import json
++import sqlite3
++import unittest
++
++import family_agent as agent
++
++NOW = dt.datetime(2026, 11, 4, 20, 0, tzinfo=agent.TZ)
++
++
++class _DB:
++    def __init__(self, connection):
++        self.connection = connection
++
++    def __enter__(self):
++        return self.connection
++
++    def __exit__(self, *error):
++        return False
++
++
++class _Store:
++    """A store shim with only the read/write surface the fold helpers touch."""
++
++    def __init__(self, connection):
++        self.connection = connection
++
++    def _db(self):
++        return _DB(self.connection)
++
++
++def quote(ref, text, time, change='same'):
++    return dict(ref=ref, text=text, time=time, sender='数学李老师', publisher='publisher:fiction-math',
++                kind='text', content_incomplete=False, attachments=[], related_messages=[ref], source='虚构班级')
++
++
++def folded(change, ref='message:fiction-group:9', text='数学《星河练习》第12页第1—3题，今晚完成。'):
++    return dict(item_id='agent-card', refs=[ref], change=change, at=NOW.isoformat(),
++                originals=[dict(ref=ref, text=text, time='2026-11-04T17:00:00+08:00')])
++
++
++class FoldedLinesTest(unittest.TestCase):
++    def test_reminder_moves_to_a_later_notice_not_the_body(self):
++        # A same-fold reminder is a later notice, not another current requirement: its whole original is a follow-up line.
++        lines = agent._school_folded_lines(dict(school_folded=[folded('same')]))
++        self.assertEqual(lines, ['后到提醒原文（2026-11-04 17:00）：数学《星河练习》第12页第1—3题，今晚完成。'])
++        import family_agenda
++        parsed = family_agenda._follow_up(lines[0])
++        self.assertEqual(parsed['label'], '提醒')
++        self.assertEqual(parsed['time'], '2026-11-04 17:00')
++        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', parsed['text'])
++
++    def test_appended_and_updated_lines_stay_labelled(self):
++        appended = agent._school_folded_lines(dict(school_folded=[folded('append', text='交回时间不变。')]))
++        self.assertIn('后到补充原文（2026-11-04 17:00）：交回时间不变。', appended)
++        updated = agent._school_folded_lines(dict(school_folded=[folded('update', text='更正第12页范围：只做第1—3题，第4题不做。')]))
++        self.assertTrue(any(line.startswith('后到更正原文（2026-11-04 17:00）：') and '第4题不做' in line for line in updated), updated)
++
++    def test_every_line_of_a_multiline_correction_stays_in_order(self):
++        text = '更正：数学《每日练习》第26页只做第1—3题。\n明天早上交回。'
++        lines = agent._school_folded_lines(dict(school_folded=[folded('update', text=text)]))
++        joined = '\n'.join(lines)
++        self.assertIn('只做第1—3题', joined)
++        self.assertIn('明天早上交回', joined)
++        self.assertLess(joined.index('只做第1—3题'), joined.index('明天早上交回'))
++
++    def test_every_line_of_a_multiline_cancellation_stays(self):
++        text = '明天美术改用教室材料，刚才收集落叶那一项取消。\n不用带叶子和旧书。'
++        lines = agent._school_folded_lines(dict(school_folded=[folded('cancel', text=text)]))
++        joined = '\n'.join(lines)
++        self.assertIn('取消', joined)
++        self.assertIn('不用带叶子和旧书', joined)
++
++    def test_cancellation_ground_stays_labelled(self):
++        lines = agent._school_folded_lines(dict(school_folded=[folded('cancel', text='刚才带落叶那一项取消，不用带。')]))
++        self.assertTrue(any(line.startswith('取消依据（2026-11-04 17:00）：') and '取消' in line for line in lines), lines)
++
++    def test_a_correction_line_names_the_sending_moment(self):
++        lines = agent._school_folded_lines(dict(school_folded=[folded('update', text='更正：只做第1—3题。')]))
++        self.assertTrue(lines and all(line.startswith('后到更正原文（2026-11-04 17:00）：') for line in lines), lines)
++
++    def test_an_unfolded_plan_adds_nothing(self):
++        self.assertEqual(agent._school_folded_lines({}), [])
++
++    def test_body_carries_every_change_after_the_first_lines(self):
++        plan = dict(school_folded=[folded('update', text='第12页只做第1—3题，第4题不做。')])
++        body = agent._school_folded_body(plan, '完成数学《星河练习》第12页。')
++        self.assertEqual(body.split('\n')[0], '完成数学《星河练习》第12页。')
++        self.assertTrue(any('第4题不做' in line for line in body.split('\n')))
++
++
++class FoldedDueTest(unittest.TestCase):
++    def test_an_update_states_its_own_new_day(self):
++        originals = [dict(text='改为下周一交回。', time='2026-11-04T17:00:00+08:00')]
++        self.assertEqual(agent._school_late_due(originals), '2026-11-09')
++
++    def test_a_reminder_keeping_the_day_states_the_same_day(self):
++        originals = [dict(text='数学《星河练习》今晚完成，周五交给我。', time='2026-11-04T16:00:00+08:00')]
++        self.assertEqual(agent._school_late_due(originals), '2026-11-06')
++
++    def test_a_moved_day_counts_without_a_hand_back_verb(self):
++        for text in ('改到11月10日交。', '推迟到11月10日交。', '改为11月10日交。', '改到11月10日。'):
++            originals = [dict(text=text, time='2026-11-04T17:00:00+08:00')]
++            self.assertEqual(agent._school_late_due(originals), '2026-11-10', text)
++
++    def test_no_stated_day_returns_nothing(self):
++        self.assertEqual(agent._school_late_due([dict(text='第12页范围不变。', time='2026-11-04T17:00:00+08:00')]), '')
++
++    def test_a_plain_completion_day_is_never_a_new_deadline(self):
++        self.assertEqual(agent._school_late_due([dict(text='今晚完成。', time='2026-11-04T17:00:00+08:00')]), '')
++
++
++class FoldPendingTest(unittest.TestCase):
++    """The waiting card keeps one identity: its body shows the later original and its due follows the change."""
++
++    def setUp(self):
++        self.connection = sqlite3.connect(':memory:')
++        self.connection.row_factory = sqlite3.Row
++        self.connection.execute('CREATE TABLE agent_items(id TEXT PRIMARY KEY, job_id TEXT, child_id TEXT, kind TEXT, '
++                                'title TEXT, body TEXT, evidence TEXT, due TEXT, created TEXT, updated TEXT, '
++                                'state TEXT, task_id TEXT, plan TEXT)')
++        self.store = _Store(self.connection)
++
++    def tearDown(self):
++        self.connection.close()
++
++    def save_card(self, body, due, plan):
++        self.connection.execute("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,created,updated,state,task_id,plan)"
++                                " VALUES('agent-card','job','child-1','school','待核对：数学','%s','[]','%s','%s','%s','pending','','%s')"
++                                % (body, due, NOW.isoformat(), NOW.isoformat(), json.dumps(plan)))
++        self.connection.commit()
++        return self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++
++    def fold(self, change, incoming_body='数学《每日练习》第26页只做第1—3题，第4题不做，今晚完成。'):
++        row = self.save_card('完成数学《每日练习》第26页。', '2026-11-06', dict(school_task=dict(state='review', goal='完成数学《每日练习》第26页。')))
++        item = dict(child_id='child-1', body=incoming_body, due='2026-11-06',
++                    evidence=[quote('message:fiction-wx:9', incoming_body, '2026-11-04T16:00:00+08:00')])
++        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
++                                              dict(item_id='agent-card', change=change), NOW)
++        self.assertTrue(ok)
++        return self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++
++    def test_a_replacement_joins_the_body_and_keeps_its_day(self):
++        row = self.fold('update')
++        self.assertIn('第4题不做', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++
++    def test_a_multiline_replacement_keeps_both_the_range_and_the_new_day(self):
++        row = self.fold('update', '更正：数学《每日练习》第26页只做第1—3题。\n明天早上交回。')
++        self.assertIn('只做第1—3题', row['body'])
++        self.assertIn('明天早上交回', row['body'])
++        self.assertEqual(row['due'], '2026-11-05')
++
++    def test_a_cancellation_shows_its_ground_and_clears_the_day(self):
++        row = self.fold('cancel', '刚才带两片落叶那一项取消，不用带叶子和旧书。')
++        self.assertIn('取消依据（2026-11-04 16:00）：', row['body'])
++        self.assertIn('不用带叶子和旧书', row['body'])
++        self.assertEqual(row['due'], '')
++
++    def test_a_notice_older_than_the_adopted_correction_is_not_called_a_correction(self):
++        # m04 arrived at 20:00 but was sent 16:00, before m09 (17:00) that already changed the range: it repeats the older
++        # wording, so the card must read it as an earlier reminder, never as the correction of "第1—4题" beside "第1—3题".
++        self.connection.execute('CREATE TABLE agent_messages(source_id TEXT, id TEXT, payload TEXT)')
++        for source_id, message_id, when, text in (
++                ('fiction-qq', '1', '2026-11-04T15:40:00+08:00', '数学《每日练习》第26页第1—4题，今晚完成。'),
++                ('fiction-qq', '9', '2026-11-04T17:00:00+08:00', '更正：第26页只做第1—3题，第4题不做。')):
++            self.connection.execute('INSERT INTO agent_messages VALUES(?,?,?)',
++                                    (source_id, message_id, json.dumps(dict(time=when, text=text), ensure_ascii=False)))
++        self.connection.commit()
++        plan = dict(school_task=dict(state='ready', goal='完成数学《每日练习》第26页第1—3题。'),
++                    school_messages=[dict(source_id='fiction-qq', message_id='1'),
++                                     dict(source_id='fiction-qq', message_id='9')])
++        self.save_card('完成数学《每日练习》第26页第1—3题，第4题不做。', '2026-11-06', plan)
++        item = dict(child_id='child-1', body='完成数学《每日练习》第26页1—4题，今晚做并签字，周五交。',
++                    due='2026-11-06',
++                    evidence=[quote('message:fiction-wx:4', '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。',
++                                    '2026-11-04T16:00:00+08:00')])
++        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
++                                              dict(item_id='agent-card', change='update'), NOW)
++        self.assertTrue(ok)
++        row = self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
++        self.assertIn('先前提醒（2026-11-04 16:00）：', row['body'])
++        self.assertIn('第26页1—4题', row['body'])
++        self.assertNotIn('后到更正原文', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++        plan = json.loads(row['plan'])
++        self.assertEqual(plan['school_folded'][-1]['change'], 'earlier')
++        lines = [line for line in row['body'].split('\n') if '先前提醒' in line]
++        self.assertEqual(len(lines), 1)
++        # A string assertion is not enough: the projection must parse this line as one follow-up (label + time), or it stays
++        # in the card's own body and the old "1—4题" wording still reads beside "1—3题".
++        import family_agenda
++        parsed = family_agenda._follow_up(lines[0])
++        self.assertIsNotNone(parsed)
++        self.assertEqual(parsed['label'], '先前提醒')
++        self.assertEqual(parsed['time'], '2026-11-04 16:00')
++        self.assertIn('第26页1—4题', parsed['text'])
++
++    def test_a_plain_reminder_keeps_one_body_and_its_day(self):
++        row = self.fold('same')
++        # The reminder's words read as its own later notice; the card body keeps the requirement in force only.
++        self.assertIn('后到提醒原文（2026-11-04 16:00）：', row['body'])
++        self.assertIn('今晚完成', row['body'])
++        self.assertEqual(row['due'], '2026-11-06')
++
++
++class FoldAcceptTest(unittest.TestCase):
++    """Accepting a card writes the folded lines into the task's action and the later message into its sources."""
++
++    def setUp(self):
++        self.connection = sqlite3.connect(':memory:')
++        self.connection.row_factory = sqlite3.Row
++        self.connection.execute('CREATE TABLE agent_items(id TEXT PRIMARY KEY, task_id TEXT)')
++        self.connection.execute('CREATE TABLE manual_tasks(id TEXT PRIMARY KEY, action TEXT, source TEXT, due TEXT)')
++        self.connection.execute("INSERT INTO agent_items(id,task_id) VALUES('agent-card','TASK-1')")
++        self.connection.execute("INSERT INTO manual_tasks(id,action,source,due) VALUES('TASK-1','完成数学《每日练习》。',"
++                                "'Agent建议:agent-card\\nmessage:fiction-qq:1\\n完成数学《每日练习》。','2026-11-06')")
++        self.connection.commit()
++        self.store = _Store(self.connection)
++
++    def tearDown(self):
++        self.connection.close()
++
++    def plan_for(self, change, text):
++        return dict(school_folded=[dict(refs=['message:fiction-wx:9'], change=change, at=NOW.isoformat(),
++                                        originals=[dict(ref='message:fiction-wx:9', text=text,
++                                                        time='2026-11-04T16:00:00+08:00')])])
++
++    def test_action_source_and_day_after_acceptance(self):
++        plan = self.plan_for('update', '数学《每日练习》第26页只做第1—3题，第4题不做。')
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        task = self.connection.execute("SELECT * FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        self.assertIn('第4题不做', task['action'])
++        self.assertIn('后到原文', task['source'])
++        self.assertIn('2026-11-04 16:00', task['source'])
++        self.assertIn('只做第1—3题', task['source'])
++        # A replacement is a readable note, never a cited message line: the agenda must not read the old range as a day role.
++        self.assertNotIn('\nmessage:fiction-wx:9', '\n' + task['source'])
++
++    def test_a_reminder_is_still_cited_as_a_message(self):
++        plan = self.plan_for('same', '数学《每日练习》第26页1—3题，今晚做，周五交。')
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        task = self.connection.execute("SELECT * FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        self.assertIn('message:fiction-wx:9', task['source'])
++
++    def test_the_note_carries_words_and_time_on_both_paths(self):
++        note = agent._school_fold_note(('message:fiction-wx:9', '只做第1—3题，第4题不做。', 'update',
++                                        '2026-11-04T16:00:00+08:00'))
++        self.assertTrue(note.startswith(agent._SCHOOL_FOLD_NOTE))
++        self.assertIn('2026-11-04 16:00', note)
++        self.assertIn('只做第1—3题', note)
++        self.assertFalse(note.startswith('message:'))
++
++    def test_a_second_acceptance_does_not_duplicate_lines(self):
++        plan = dict(school_folded=[folded('same')])
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        once = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
++        twice = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
++        self.assertEqual(once['action'], twice['action'])
++        self.assertEqual(once['source'], twice['source'])
++
++
++if __name__ == '__main__':
++    unittest.main()
