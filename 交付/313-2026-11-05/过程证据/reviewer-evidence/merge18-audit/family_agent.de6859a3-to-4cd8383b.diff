@@ -1,0 +1,183 @@
+--- /tmp/merge18_audit/family_agent.py	2026-11-04 23:46:29
++++ family_agent.py	2026-11-04 23:58:15
+@@ -73,7 +73,9 @@
+ SCHOOL_SELECTION_REVISION = 2
+ # The selection's own note for a model day it did not adopt; the day itself is kept beside it as school_unadopted_due.
+ SCHOOL_UNADOPTED_NOTE = ' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。'
+-_SCHOOL_SPLIT_REQUIREMENT=re.compile(r'完成|做完|做|交|带|拿|读|朗读|背|抄|写|签|订正|打印|准备|练|上传|拍照|听写|画|剪|贴|改|补')
++_SCHOOL_SPLIT_REQUIREMENT=re.compile(r'完成|做完|做|交|带|拿|读|朗读|背|抄|写|签|订正|打印|准备|练|上传|拍照|听写|画|剪|贴|改|补|预[习学]|复习|背诵|默写|思考|观察|收集|整理|听|看|查|数|算|记')
++# A split fragment keeps a subject label only in its label form (语文：…); '美术老师今天课上说' is just a lead-in.
++_SCHOOL_SPLIT_SUBJECT=re.compile(r'(?:^|\n)\s*(?:语文|数学|英语|美术|音乐|体育|科学|道法|品德|政治|历史|地理|物理|化学|生物|班队|班会|劳动)\s*[：:]')
+ _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
+ TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
+     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
+@@ -2574,17 +2576,21 @@
+         old=json.loads(row['evidence'] or '[]');seen={q.get('ref') for q in old}
+         added=[q for q in item.get('evidence') or [] if q.get('ref') not in seen]
+         lines=[line for line in str(row['body'] or '').split('\n') if line.strip()]
+-        for line in str(item.get('body') or '').split('\n'):
+-            line=line.strip()
+-            if line and line not in lines: lines.append(line)
++        if link.get('change')=='same':
++            for line in str(item.get('body') or '').split('\n'):
++                line=line.strip()
++                if line and line not in lines: lines.append(line)
+         body='\n'.join(lines)
+         folded=list(plan.get('school_folded') or [])
+-        folded.append(dict(refs=[q.get('ref') for q in item.get('evidence') or []],change=link.get('change','same'),at=now.isoformat()))
++        # The later original stays verbatim in this card's own plan: it proves the fold, while the card's cited originals (which
++        # the agenda reads one day's own words from) stay the first notice and its corrections.
++        folded.append(dict(refs=[q.get('ref') for q in added],change=link.get('change','same'),at=now.isoformat(),
++                           originals=[dict(ref=q.get('ref'),text=q.get('text'),time=q.get('time'),sender=q.get('sender'),publisher=q.get('publisher')) for q in added]))
+         plan['school_folded']=folded
+         if brief:
+             brief['goal']=body;plan['school_task']=brief
+-        c.execute("UPDATE agent_items SET body=?,evidence=?,due=?,plan=?,updated=? WHERE id=? AND state='pending'",
+-                  (body,_json(old+added),row['due'] or item.get('due',''),_json(plan),now.isoformat(),row['id']))
++        c.execute("UPDATE agent_items SET body=?,due=?,plan=?,updated=? WHERE id=? AND state='pending'",
++                  (body,row['due'] or item.get('due',''),_json(plan),now.isoformat(),row['id']))
+         return True
+ 
+     def _fail(self, key, now, *, fingerprint=None, reason=''):
+@@ -2719,7 +2725,8 @@
+                     publishers.add((source_id,_publisher_cross_channel(store,source,message,c)));refs.append(quote['ref']);times.append(str(message.get('time') or ''))
+             except (AgentError,ValueError,KeyError,TypeError,AttributeError):continue
+             if not refs or row['id'] in exclude or before and not max(times)<before:continue  # read before the limit counts
+-            source,publisher=next(iter(publishers)) if len(publishers)==1 else ('','')
++            sources={source_id for source_id,_ in publishers};values={publisher for _,publisher in publishers if publisher}
++            source=next(iter(sources)) if len(sources)==1 else '';publisher=next(iter(values)) if len(values)==1 else ''
+             result.append(dict(id='pending:'+row['id'],title=str(brief.get('title') or row['title'])[:200],goal=str(brief.get('goal') or row['body'] or '')[:400],
+                                due=row['due'] or '',state='pending',source_id=source,publisher=publisher,refs=refs,latest=max(times),first=min(times)))
+             if len(result)>=limit:break
+@@ -3202,7 +3209,7 @@
+     from family_agenda import sent_day
+     old=target.get('due') or '';days=[sent_day(e.get('time','')) for e in evidence]
+     said='\n'.join(str(e.get('text') or '') for e in evidence)
+-    if due and old and due!=old and _SCHOOL_MOVED.search(said):
++    if due and old and due!=old and re.search(_SCHOOL_MOVED,said):
+         return '提醒把原事项改到另一天，是否同一次待核对；原事项和提醒原文都保留。'
+     if due and not old:
+         # The item states no day of its own: a reminder's day would be a new deadline, never this item's own.
+@@ -8128,9 +8135,11 @@
+             # it only on its own proof: one verified teacher's account, the card's own concrete object, no day of it moved.
+             reply=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
+             summary=dict(title=proposal.get('task_title'),goal=proposal.get('task_goal'),state=proposal.get('task_state'))
+-            for listed in school_pending:
+-                proven=_school_pending_link(listed,'same',summary,reply,proposal.get('due',''),title)
+-                if proven: pending_target,pending_link=listed,proven; break
++            hits=[(listed,_school_pending_link(listed,'same',summary,reply,proposal.get('due',''),title)) for listed in school_pending]
++            hits=[(listed,proven) for listed,proven in hits if proven]
++            if len(hits)==1: pending_target,pending_link=hits[0]
++            # Several waiting cards share this object and nothing (subject, channel, own object) tells them apart: the
++            # notice stays its own card for the parent, never a silent join to whichever was listed first.
+         if (routing and not historical and proposal.get('task_change') in ('update','same','append','cancel') and proposal.get('task_state')=='review'
+                 and (pending_link or proposal.get('task_target_id') in {t['id'] for t in school_tasks})):notice=[]
+         # A ready repeat of one saved item (same) is that item's notice as well: the saved item already covers its located
+@@ -8261,9 +8270,11 @@
+                                         and q not in _school_own_steps(title_quotes[index],[e['text'] for e in evidence if e['ref'] in {c['ref'] for c in cited}],
+                                                                        title_quotes[:index]+title_quotes[index+1:])])
+             mark=split_marks.get(index,{})
+-            if 'formed' in mark and not _SCHOOL_SPLIT_REQUIREMENT.search(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or '')):
+-                # A split of one message yields no residue of its own: a fragment that only repeats the lead-in
+-                # (美术老师今天课上说) names no requirement, object or day and must not become a card to decide.
++            if ('formed' in mark and not _SCHOOL_SPLIT_REQUIREMENT.search(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))
++                    and not _SCHOOL_SPLIT_SUBJECT.search(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))
++                    and not re.search(r'[《》0-9]', str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))):
++                # A split of one message yields no residue of its own: only a fragment that names no subject, no action
++                # and no object (美术老师今天课上说) is a pure lead-in. Anything else stays, as a card if unsure.
+                 continue
+             if 'formed' in mark:
+                 # No model receipt: the proposal it was taken out of, verbatim, and the original run it was formed from.
+@@ -9365,6 +9376,10 @@
+             _text(value,name,spec.get('maxLength',4000))
+             if 'enum' in spec and value[name] not in spec['enum']: raise AgentError('原件行动字段取值无法核对')
+         chosen=_text(value,'existing_item_id',80)
++        if value.get('change')=='same' and not value.get('target_id') and value.get('state')=='ready' and chosen==row['id']:
++            # The reply relates the complete reading of this notice to its own candidate, and cites no saved task: what it
++            # has now read is this notice's own requirement, not a reminder about an existing decision.
++            value=dict(value,change='new')
+         if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
+         used.add(chosen) if chosen else None
+         old=existing.get(chosen);batch_proof=None
+@@ -9620,6 +9635,61 @@
+                 changed=c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected)).rowcount
+             failed+=changed
+     return created,failed
++
++def _fold_school_follows(app, store, now):
++    """A later notice the program already proved one saved task's affair joins that task: one card per affair, no orphan.
++
++    A reminder saved while its card was still waiting carries the program's own link (school_pending_of: the verified
++    publisher, the card's concrete object, no day moved), and a reply the model already related to a saved task carries that
++    target. Once the card is saved as a task, such a notice is provenance of that task, never a second card: its original
++    stays verbatim in its own row (accepted onto the task) and its requirement lines join the task's action. The task's
++    cited originals and its own day are untouched, so the first notice's words still give its completion day.
++    """
++    used=0
++    with store._db() as c:
++        rows=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created,id")]
++        tasks={t['id']:dict(t) for t in c.execute('SELECT * FROM manual_tasks')}
++    for row in rows:
++        plan=json.loads(row['plan'] or '{}');brief=plan.get('school_task') or {};link=plan.get('school_pending_of') or {}
++        target_id=''
++        if isinstance(link,dict) and link.get('item_id'): target_id=link['item_id']
++        elif brief.get('change')=='same' and str(brief.get('target_id') or '').startswith('AGENT-'):
++            target_id=str(brief['target_id'])
++        if not target_id: continue
++        with store._db() as c:
++            c.execute('BEGIN IMMEDIATE')
++            live=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
++            if live is None or dict(live)!=row: continue
++            if isinstance(link,dict) and link.get('item_id'):
++                target=c.execute('SELECT * FROM agent_items WHERE id=?',(target_id,)).fetchone()
++            else:
++                target=c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted' AND task_id=? ORDER BY created,id LIMIT 1",
++                                 (target_id,)).fetchone()
++            if target is None or target['state']!='accepted' or not target['task_id']: continue
++            if isinstance(link,dict) and link.get('item_id') and link['item_id']!=target['id']: continue
++            if not isinstance(link,dict) or not link.get('item_id'):
++                # The model related this row to the saved task; the program joins only the card's own concrete object.
++                if not _school_same_object(str(row['title'] or '')+'\n'+str(row['body'] or ''),
++                                           str(target['title'] or '')+'\n'+str(target['body'] or '')): continue
++            task=tasks.get(target['task_id'])
++            if task is None: continue
++            evidence,_=_school_material(store,c,row)
++            lines=[line for line in str(task['action'] or '').split('\n') if line.strip()]
++            for line in str(row['body'] or '').split('\n'):
++                line=line.strip()
++                if line and line not in lines: lines.append(line)
++            c.execute('UPDATE manual_tasks SET action=? WHERE id=?',('\n'.join(lines),task['id']))
++            plan.update(school_duplicate_of=target['id'],
++                        school_same_receipt=dict(link=link or {},task_id=task['id'],
++                                                 input_basis=_school_message_basis(evidence),folded_at=now.isoformat()))
++            c.execute("UPDATE agent_items SET state='accepted',task_id=?,plan=?,updated=? WHERE id=?",
++                      (task['id'],_json(plan),now.isoformat(),row['id']))
++            target_plan=json.loads(target['plan'] or '{}')
++            target_plan.setdefault('school_folded',[]).append(dict(item_id=row['id'],refs=[e.get('ref') for e in evidence],at=now.isoformat()))
++            c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(target_plan),now.isoformat(),target['id']))
++            used+=1
++    return used
++
+ 
+ def _refresh_school(app, store, now, budget):
+     """Upgrade only pending notices; keep IDs/decisions and the existing call budget.
+@@ -9862,6 +9932,11 @@
+                     if not isinstance(result,dict) or set(result) != set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
+                     if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
+                     if compiled_requirements is not None: result=_school_requirement_goal(result,compiled_requirements)
++                    if (result['state']=='ready' and result.get('change') in ('same','append','update') and not result.get('target_id')
++                            and not any(_school_same_object(result['title']+'\n'+result['goal'],t['title']+'\n'+t['goal']) for t in targets)):
++                        # The reply relates this notice to a card, and that card is this candidate: its own complete reading is
++                        # the notice's own requirement. No saved task shares its object, so it is no reminder of a decision.
++                        result=dict(result,change='new')
+                     if saved_reread:
+                         # A reread decides again but never rewrites its originals: any day it states must be the one day
+                         # they prove, and the goal carries their complete requirements through the shared compilation.
+@@ -10321,6 +10396,7 @@
+                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
+                 by_id = {row['id']: row for row in records}
+             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
++            _fold_school_follows(app,store,now)
+             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
+             # Fresh batches above go first; saved repeats of one affair are revisited only with a call to spare.
+             same=_reconcile_school_same(app,store,now,min(1,max(0,budget-1)));budget-=same['used'];processed+=same['used'];failed+=same['failed']

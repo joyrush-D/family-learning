@@ -1,0 +1,27 @@
+{
+  "ingested_messages": 6,
+  "attempts": [
+    {
+      "attempt": 1,
+      "now": "2026-11-04T20:00:00+08:00",
+      "result": {
+        "failed": 0,
+        "processed": 6,
+        "created": 16
+      },
+      "duration_s": 7.5,
+      "model_calls": [
+        {
+          "call_index": 1,
+          "name": "family_agent_selection",
+          "ok": true,
+          "error": null,
+          "duration_s": 7.03
+        }
+      ]
+    }
+  ],
+  "root": "/private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/synthetic-agent-0qi0s9sq",
+  "data_dir": "/private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/synthetic-agent-0qi0s9sq/private",
+  "now": "2026-11-04T20:00:00+08:00"
+}

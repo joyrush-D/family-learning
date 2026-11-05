@@ -1,0 +1,13 @@
+# baseline @58973a6 2026-11-04T15:27:27+08:00
+== test_daily_list_whole_day.py
+Ran 19 tests in 4.675s
+
+OK
+== test_school_completion_today.py
+Ran 55 tests in 17.197s
+
+FAILED (failures=3)
+== test_school_same_ready_notice.py
+Ran 30 tests in 0.045s
+
+OK

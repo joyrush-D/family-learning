@@ -1,0 +1,8 @@
+REPO  : /Users/joyrush/.local/share/family-learning/public-integration-20260926
+快照  : /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/演示数据/十八渠道快照
+端口  : 8834
+数据来源：2026-11-04 的真模型运行（doubao-seed-evolving，8 次模型调用）——本次是回放，不再调用模型。
+后台已就绪：http://127.0.0.1:8834（启动 1.86 秒，日志：/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/.runtime-十八渠道/demo.log）
+演示后台保持运行中（PID 27401）；打开 App 或用其他脚本截图。
+  停止：sh 一起成长·十八渠道演示.command --stop
+已停止十八渠道演示后台（PID 27401）。

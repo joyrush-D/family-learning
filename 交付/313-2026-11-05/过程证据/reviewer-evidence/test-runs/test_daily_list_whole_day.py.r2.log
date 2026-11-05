@@ -1,0 +1,704 @@
+./Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:168: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111ade020>
+  if 'request_key' not in [r['name'] for r in c.execute('PRAGMA table_info(uploads)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:168: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111ade200>
+  if 'request_key' not in [r['name'] for r in c.execute('PRAGMA table_info(uploads)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:112: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111ade110>
+  def __init__(self, state, data=None):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbae30>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb4c0>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb100>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbba60>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb970>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111ade200>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c21210>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c213f0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c214e0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c21300>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c215d0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c218a0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c226b0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c227a0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c225c0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22980>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22a70>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22890>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:764: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111ade2f0>
+  MATERIAL_SAVED=dict(state='saved',label='原件已保存',summary='',unclear=[],explanation='')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:764: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e44130>
+  MATERIAL_SAVED=dict(state='saved',label='原件已保存',summary='',unclear=[],explanation='')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:764: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e444f0>
+  MATERIAL_SAVED=dict(state='saved',label='原件已保存',summary='',unclear=[],explanation='')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:764: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e45120>
+  MATERIAL_SAVED=dict(state='saved',label='原件已保存',summary='',unclear=[],explanation='')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbae30>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb1f0>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c23970>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb4c0>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c23880>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c23790>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c236a0>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c21c60>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c21a80>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:178: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c217b0>
+  c.execute('CREATE TABLE IF NOT EXISTS record_task_creations (task_id TEXT PRIMARY KEY, record_id INTEGER NOT NULL, request_hash TEXT NOT NULL, linked_at TEXT NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb1f0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c205e0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb100>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb4c0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c216c0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c204f0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adde40>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addc60>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addd50>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+..../opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c216c0>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c206d0>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c207c0>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add5d0>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111ade020>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add6c0>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/_parser.py:260: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addb70>
+  def get(self):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c205e0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adca90>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb4c0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addc60>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbac50>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb1f0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c204f0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addb70>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add7b0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add8a0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add300>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add4e0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add120>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc220>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add3f0>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.../Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:179: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb4c0>
+  c.execute('CREATE TABLE IF NOT EXISTS profile_overrides (child_id TEXT PRIMARY KEY, name TEXT NOT NULL, grade TEXT NOT NULL, classroom TEXT NOT NULL, version INTEGER NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:179: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb1f0>
+  c.execute('CREATE TABLE IF NOT EXISTS profile_overrides (child_id TEXT PRIMARY KEY, name TEXT NOT NULL, grade TEXT NOT NULL, classroom TEXT NOT NULL, version INTEGER NOT NULL)')
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adca90>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addc60>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add300>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46d40>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc220>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addc60>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb4c0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb100>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add120>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc5e0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add3f0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add300>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add4e0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add8a0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add7b0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111bbb100>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add7b0>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add300>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c5e0>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add3f0>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c7c0>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47b50>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47a60>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46200>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ca90>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c8b0>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/json/encoder.py:105: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c9a0>
+  def __init__(self, *, skipkeys=False, ensure_ascii=True,
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47b50>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46200>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47e20>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47a60>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47f10>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47d30>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47c40>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add3f0>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add300>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addc60>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc220>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc5e0>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add120>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add8a0>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add4e0>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:2663: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add7b0>
+  class Handler(BaseHTTPRequestHandler):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:917: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add7b0>
+  for index,p in enumerate(proposals):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:917: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add8a0>
+  for index,p in enumerate(proposals):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:917: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add120>
+  for index,p in enumerate(proposals):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:917: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add4e0>
+  for index,p in enumerate(proposals):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d120>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cc70>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46200>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47b50>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46b60>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc5e0>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c040>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c130>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add300>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111addc60>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c21b70>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add210>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46a70>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cb80>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc5e0>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e47b50>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46200>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/re/__init__.py:285: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cc70>
+  return _compile(pattern, flags).finditer(string)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d210>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c040>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c130>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d120>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d300>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc5e0>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add210>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111add990>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22200>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22020>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/app.py:155: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c20e50>
+  if name not in [r['name'] for r in c.execute('PRAGMA table_info(records)')]:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111e46b60>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22020>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c22200>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adc5e0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959210>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1129595d0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959030>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111c20e50>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959120>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1129596c0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1129598a0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959b70>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959a80>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cc70>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d030>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c130>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111adda80>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959300>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d210>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1129593f0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+<frozen importlib._bootstrap_external>:781: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x1129594e0>
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d030>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d210>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112958e50>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:2247: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112959300>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:6432: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c040>
+  return all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:6432: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  return all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:6432: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d210>
+  return all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agent.py:6432: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  return all(carries(m) or modifies(m) for m in re.finditer(_SCHOOL_CLAUSE_ROLES['学生'],own))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae93f0>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae9210>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d030>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae88b0>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae9300>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae94e0>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae9120>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae8f40>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae9030>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae89a0>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea2f0>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:104: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea200>
+  def _negates(before):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d210>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d030>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c130>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae8a90>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea3e0>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea200>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea2f0>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae8b80>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae89a0>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_taxonomy.py:482: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae9e40>
+  for qid, rids in orig.items(): ev.setdefault(qid, set()).update(('original', r) for r in rids)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d030>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112ae9e40>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea020>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/family_agenda.py:381: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea200>
+  def _held_events(text,published):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9d210>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c400>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9c040>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aea2f0>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeaa70>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeac50>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeb010>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeb2e0>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/unittest/mock.py:1316: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeb1f0>
+  if typo in kwargs_to_check:
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9cd60>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x111f9ce50>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeb1f0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Caskroom/miniforge/base/lib/python3.13/pathlib/_local.py:277: ResourceWarning: unclosed database in <sqlite3.Connection object at 0x112aeb2e0>
+  @property
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.
+----------------------------------------------------------------------
+Ran 19 tests in 3.570s
+
+OK

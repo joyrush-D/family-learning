@@ -1,0 +1,33 @@
+{
+  "math_task": {
+    "id": "AGENT-46d7f691d45e2af7a8132331",
+    "child": "示例甲",
+    "title": "数学：完成练习册第12页第2至4题",
+    "due": "2026-11-05",
+    "original_status": "待跟进",
+    "source": "Agent建议:agent-ddcd18966c5c8c96ed22f141dd43ec38\nmessage:synthetic-group:502\n虚构班级 · 2026-11-04T16:01:00+08:00\n数学：今晚完成练习册第12页第2至4题，写出计算过程，明天交回。",
+    "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+  },
+  "profiles": [
+    {
+      "id": "child-1",
+      "name": "示例甲",
+      "label": "示例甲",
+      "age": "10岁",
+      "grade": "四年级",
+      "classroom": "",
+      "version": 0,
+      "history": []
+    },
+    {
+      "id": "child-2",
+      "name": "示例乙",
+      "label": "示例乙",
+      "age": "13岁",
+      "grade": "初一",
+      "classroom": "",
+      "version": 0,
+      "history": []
+    }
+  ]
+}

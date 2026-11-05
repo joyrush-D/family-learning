@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<style>
+  :root{
+    --bg:#fbf7ef; --card:#fff; --ink:#2e2a24; --ink-2:#4a443b; --muted:#8b8172;
+    --line:#ece4d6; --line-2:#f4eee2;
+    --green:#4f7a44; --green-soft:#eaf2e3; --green-line:#cfe0c2;
+    --amber:#a9701f; --amber-soft:#fdf2dc; --amber-line:#f0dcb4;
+    --rose:#b0553f; --rose-soft:#fbeae4; --rose-line:#f2d3c8;
+    --blue:#3d6b8f; --blue-soft:#e8f0f6; --blue-line:#cfe0ec;
+    --purple:#6b5aa6; --purple-soft:#efeaf9; --purple-line:#ddd3f2;
+  }
+  *{box-sizing:border-box; -webkit-font-smoothing:antialiased}
+  body{margin:0; background:#e9e4da; font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; color:var(--ink)}
+  .screen{background:var(--bg); position:relative; overflow:hidden}
+
+  /* ---------- 共同小件 ---------- */
+  .pill{display:inline-flex; align-items:center; gap:4px; height:21px; padding:0 8px; border-radius:11px;
+        font-size:11.5px; font-weight:600; white-space:nowrap; border:1px solid transparent}
+  .pill.need{background:var(--amber-soft); color:var(--amber); border-color:var(--amber-line)}
+  .pill.bring{background:var(--blue-soft); color:var(--blue); border-color:var(--blue-line)}
+  .pill.quiet{background:var(--green-soft); color:var(--green); border-color:var(--green-line)}
+  .pill.due{background:#f6efe3; color:#8a7a5e; border-color:#e9dfcc}
+  .pill.sign{background:var(--rose-soft); color:var(--rose); border-color:var(--rose-line)}
+  .check{width:23px; height:23px; border-radius:7px; border:1.6px solid #cfc4b0; background:#fffdf8; flex:0 0 auto}
+  .check.done{background:var(--green); border-color:var(--green); position:relative}
+  .check.done::after{content:""; position:absolute; left:6px; top:3.5px; width:7px; height:12px;
+    border-right:2.2px solid #fff; border-bottom:2.2px solid #fff; transform:rotate(40deg)}
+
+  /* ================= A. 一天清单（手机 360） ================= */
+  #list{width:360px; padding:0 0 62px}
+  .lb-top{padding:14px 16px 10px; display:flex; align-items:center; justify-content:space-between; background:var(--bg)}
+  .child{display:flex; align-items:center; gap:6px; background:#fff; border:1px solid var(--line);
+    border-radius:999px; padding:5px 11px 5px 9px; font-size:13.5px; font-weight:650; box-shadow:0 1px 2px rgba(80,60,30,.05)}
+  .child .dot{width:18px; height:18px; border-radius:50%; background:var(--green-soft); color:var(--green);
+    font-size:10px; display:flex; align-items:center; justify-content:center; font-weight:800}
+  .child .car{color:var(--muted); font-size:10px}
+  .lb-date{font-size:13px; color:var(--muted); font-weight:600}
+  .lb-date b{color:var(--ink); font-weight:750}
+
+  .lb-hero{padding:4px 16px 12px}
+  .lb-h1{font-size:23px; font-weight:800; letter-spacing:.2px; margin:0 0 3px}
+  .lb-sub{font-size:12.5px; color:var(--muted); display:flex; align-items:center; gap:8px}
+  .bar{height:5px; border-radius:3px; background:#eae1d1; flex:1; overflow:hidden}
+  .bar i{display:block; height:100%; background:var(--green); border-radius:3px}
+
+  .lb-act{display:flex; gap:8px; padding:0 16px 14px}
+  .btn{height:32px; border-radius:9px; border:1px solid var(--line); background:#fff; color:var(--ink-2);
+       font-size:12.5px; font-weight:650; display:inline-flex; align-items:center; gap:5px; padding:0 12px}
+  .btn.primary{background:var(--green); border-color:var(--green); color:#fff}
+
+  .subj{padding:0 16px}
+  .subj-h{display:flex; align-items:center; gap:7px; margin:12px 0 7px; font-size:12.5px; color:var(--muted); font-weight:700}
+  .subj-h .bar2{width:3px; height:12px; border-radius:2px}
+  .subj-h .n{margin-left:auto; font-weight:600; opacity:.75; font-size:11.5px}
+
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:10px 12px;
+        display:flex; gap:9px; margin-bottom:8px; box-shadow:0 1px 2px rgba(90,70,40,.04)}
+  .card.done{background:#f8faf5; border-color:#e6eddd}
+  .card.done .c-t{color:var(--muted); text-decoration:line-through; text-decoration-thickness:1px}
+  .c-body{flex:1; min-width:0}
+  .c-t{font-size:14px; font-weight:700; line-height:1.35; margin:1px 0 3px}
+  .c-d{font-size:12.5px; color:var(--ink-2); line-height:1.5; margin:0 0 6px; word-break:break-word}
+  .c-d .sep{color:#c9bfae; padding:0 5px}
+  .c-tags{display:flex; flex-wrap:wrap; gap:5px}
+  .plan{margin:7px 0 0; background:var(--amber-soft); border:1px solid var(--amber-line); border-radius:9px;
+        padding:6px 9px; font-size:12px; color:#7d5a1c; line-height:1.45}
+  .plan b{font-weight:750}
+  .plan .lab{font-size:10.5px; font-weight:800; letter-spacing:.4px; color:#b0832e; display:block; margin-bottom:1px}
+
+  .lb-tab{position:absolute; left:0; right:0; bottom:0; height:56px; background:rgba(255,255,255,.96);
+    border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-around; font-size:11px; color:var(--muted)}
+  .lb-tab div{display:flex; flex-direction:column; align-items:center; gap:2px; font-weight:600}
+  .lb-tab div.on{color:var(--green)}
+  .lb-tab .ic{font-size:15px; line-height:1}
+
+  /* ================= B. 事项详情（原生右栏 900） ================= */
+  #detail{width:900px; padding:22px 30px 88px}
+  .d-crumb{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted); margin-bottom:9px}
+  .d-chip{background:#fff; border:1px solid var(--line); border-radius:999px; padding:2px 9px; font-weight:700; color:var(--ink-2)}
+  .d-title{font-size:25px; font-weight:800; margin:0 0 4px; letter-spacing:.2px}
+  .d-src{font-size:12px; color:var(--muted); margin-bottom:14px}
+  .d-src a{color:var(--blue); text-decoration:none; font-weight:650}
+  .d-chips{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap}
+  .d-chips .pill{height:28px; border-radius:8px; font-size:12.5px; padding:0 11px}
+  .d-chips .k{opacity:.72; font-weight:600; margin-right:3px}
+  .d-chips .v{font-weight:750}
+
+  .d-card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 16px; margin-bottom:12px;
+          box-shadow:0 1px 2px rgba(90,70,40,.04)}
+  .d-h{font-size:12.5px; font-weight:800; color:var(--muted); letter-spacing:.6px; margin:0 0 9px}
+  .steps{counter-reset:s; margin:0; padding:0; list-style:none}
+  .steps li{counter-increment:s; position:relative; padding:0 0 10px 30px; font-size:14.5px; line-height:1.5; color:var(--ink)}
+  .steps li:last-child{padding-bottom:0}
+  .steps li::before{content:counter(s); position:absolute; left:0; top:1px; width:20px; height:20px; border-radius:50%;
+    background:var(--green-soft); color:var(--green); border:1px solid var(--green-line); font-size:11.5px; font-weight:800;
+    display:flex; align-items:center; justify-content:center}
+  .steps li .m{color:var(--muted); font-size:12.5px; display:block; margin-top:1px}
+  .d-plan{background:var(--amber-soft); border:1px solid var(--amber-line); border-radius:14px; padding:12px 16px; margin-bottom:12px}
+  .d-plan .d-h{color:#b0832e; margin-bottom:6px}
+  .d-plan p{margin:0; font-size:14px; color:#7d5a1c; line-height:1.5}
+  .d-meta{display:flex; align-items:center; gap:14px; font-size:12.5px; color:var(--muted); padding:4px 2px 0}
+  .d-meta a{color:var(--blue); font-weight:650; text-decoration:none}
+  .d-bar{position:absolute; left:0; right:0; bottom:0; height:66px; background:rgba(251,247,239,.97);
+    border-top:1px solid var(--line); display:flex; align-items:center; gap:10px; padding:0 30px}
+  .d-bar .sp{flex:1}
+  .d-bar .btn{height:36px; font-size:13.5px; padding:0 16px; border-radius:10px}
+  .d-bar .btn.green{background:var(--green); border-color:var(--green); color:#fff}
+  .d-bar .btn.ghost{background:#fff}
+</style></head>
+<body>
+
+<!-- ============ A. 一天清单 ============ -->
+<div class="screen" id="list">
+  <div class="lb-top">
+    <div class="child"><span class="dot">甲</span>示例甲<span class="car">▾</span></div>
+    <div class="lb-date">11月4日 周三 · <b>今天</b></div>
+  </div>
+
+  <div class="lb-hero">
+    <h1 class="lb-h1">今天 7 件事</h1>
+    <div class="lb-sub"><span>已完成 2</span><span class="bar" style="max-width:120px"><i style="width:29%"></i></span><span>还剩 5</span></div>
+  </div>
+
+  <div class="lb-act">
+    <button class="btn primary">＋ 补录口头作业</button>
+    <button class="btn">看明天</button>
+  </div>
+
+  <div class="subj">
+    <div class="subj-h"><span class="bar2" style="background:#c98b3a"></span>英语<span class="n">4 项</span></div>
+
+    <div class="card done">
+      <div class="check done"></div>
+      <div class="c-body">
+        <div class="c-t">完成《每日练习》第 3 页</div>
+        <div class="c-d">做完拍照传到班级相册<span class="sep">·</span>今天已交</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="check"></div>
+      <div class="c-body">
+        <div class="c-t">完成《每日练习》</div>
+        <div class="c-d">① 看图选词 第 1—3 题<span class="sep">·</span>② 抄写 under、near 各一遍</div>
+        <div class="c-tags">
+          <span class="pill quiet">不用录音</span>
+          <span class="pill bring">明天带去英语夹</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="check"></div>
+      <div class="c-body">
+        <div class="c-t">跟读 Unit 7 第 3—10 个单词</div>
+        <div class="c-d">今晚听音频，每词 3 遍<span class="sep">·</span>不用抄写</div>
+        <div class="c-tags"><span class="pill due">明天课堂听写</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="check"></div>
+      <div class="c-body">
+        <div class="c-t">带《单词听写本》</div>
+        <div class="c-d">不用在家练，带到学校交给英语老师</div>
+        <div class="c-tags"><span class="pill bring">明天带</span><span class="pill quiet">在校完成</span></div>
+      </div>
+    </div>
+
+    <div class="subj-h"><span class="bar2" style="background:#5a7ea8"></span>数学<span class="n">1 项</span></div>
+    <div class="card">
+      <div class="check"></div>
+      <div class="c-body">
+        <div class="c-t">完成《每日练习》第 26 页 第 1—3 题</div>
+        <div class="c-d">每题写出算式并验算<span class="sep">·</span>第 4 题不做</div>
+        <div class="c-tags">
+          <span class="pill sign">需家长签字</span>
+          <span class="pill bring">周五交给周老师</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="subj-h"><span class="bar2" style="background:#7a9a4e"></span>语文<span class="n">1 项</span></div>
+    <div class="card">
+      <div class="check"></div>
+      <div class="c-body">
+        <div class="c-t">朗读《风经过小巷》第 2、3 自然段</div>
+        <div class="c-d">各读两遍，读给家长听<span class="sep">·</span>不用录音、不用上传，明早抽听</div>
+        <div class="c-tags"><span class="pill quiet">读给家长听</span></div>
+        <div class="plan"><span class="lab">我家安排</span><b>今天 18:30</b> 爸爸来听，仍读两遍</div>
+      </div>
+    </div>
+
+    <div class="subj-h"><span class="bar2" style="background:#a8743f"></span>综合事务<span class="n">1 项</span></div>
+    <div class="card">
+      <div class="check"></div>
+      <div class="c-body">
+        <div class="c-t">交回《出游回执》</div>
+        <div class="c-d">勾选参加意向并签名，明早交给班主任</div>
+        <div class="c-tags"><span class="pill sign">需签名</span><span class="pill due">明早交</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="lb-tab">
+    <div class="on"><span class="ic">◉</span>今天</div>
+    <div><span class="ic">▦</span>一周</div>
+    <div><span class="ic">✎</span>错题本</div>
+    <div><span class="ic">☰</span>更多</div>
+  </div>
+</div>
+
+<!-- ============ B. 事项详情 ============ -->
+<div class="screen" id="detail">
+  <div class="d-crumb"><span class="d-chip">数学</span><span>11月4日 周三</span><span>·</span><span>当前 示例甲</span></div>
+  <h1 class="d-title">完成《每日练习》第 26 页 第 1—3 题</h1>
+  <div class="d-src">数学周老师 · 2026-11-04 15:40 发布 · 学校群消息 <a href="#">看原消息 ↗</a></div>
+
+  <div class="d-chips">
+    <span class="pill need"><span class="k">完成</span><span class="v">今天 11-04</span></span>
+    <span class="pill bring"><span class="k">交回</span><span class="v">11-06 周五</span></span>
+    <span class="pill sign"><span class="k">要</span><span class="v">家长签字</span></span>
+  </div>
+
+  <div class="d-card">
+    <div class="d-h">要做什么</div>
+    <ol class="steps">
+      <li>第 1—3 题，每题写出算式并验算<span class="m">做完检查一遍再合本</span></li>
+      <li>第 4 题不做<span class="m">老师明确划掉了，别多写</span></li>
+      <li>家长签字后，周五交给周老师</li>
+    </ol>
+  </div>
+
+  <div class="d-card">
+    <div class="d-h">完成标准</div>
+    <div style="font-size:14px; line-height:1.55">三道题都有竖式、答案和验算过程；错题改在错题本上；家长签字在卷头。</div>
+  </div>
+
+  <div class="d-plan">
+    <div class="d-h">我家安排</div>
+    <p>今晚 19:30 爸爸陪写第 2 题，先讲一遍再让孩子独立做。</p>
+  </div>
+
+  <div class="d-meta"><span>来源 3 条</span><span>·</span><span>资料 1 份</span><span>·</span><a href="#">展开全部</a></div>
+
+  <div class="d-bar">
+    <button class="btn ghost">补录</button>
+    <button class="btn ghost">拍照反馈</button>
+    <div class="sp"></div>
+    <button class="btn green">标记完成</button>
+  </div>
+</div>
+
+</body></html>

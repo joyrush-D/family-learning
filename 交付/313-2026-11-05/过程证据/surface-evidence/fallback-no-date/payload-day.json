@@ -1,0 +1,339 @@
+{
+  "today": "2026-11-04",
+  "day": "2026-11-04",
+  "child_id": "child-1",
+  "child_name": "示例星星",
+  "children": [
+    {
+      "id": "child-1",
+      "name": "示例星星"
+    },
+    {
+      "id": "child-2",
+      "name": "示例小宇"
+    }
+  ],
+  "token": "Uuo_AA3pJWHUHQ4YUGxE2bUykQ-R9Qi_byZrFpawShk",
+  "source_error": "",
+  "groups": [
+    {
+      "subject": "数学",
+      "items": [
+        {
+          "id": "MANUAL-b8b87d2b99e988bda7d6",
+          "kind": "task",
+          "task_id": "MANUAL-b8b87d2b99e988bda7d6",
+          "title": "数学：完成《每日练习》第26页第1—3题",
+          "subject": "数学",
+          "category": "homework",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "family",
+          "origin_label": "家长录入",
+          "lines": [
+            "第4题不做。",
+            "每题写出算式并验算。",
+            "请家长签字。",
+            "周五交回。",
+            "家长签字后周五交给数学周老师"
+          ],
+          "plan_lines": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "due",
+              "kind": "deadline",
+              "label": "截止",
+              "value": "2026-11-04",
+              "known": true,
+              "state": ""
+            }
+          ],
+          "today": true,
+          "when": "today",
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    },
+    {
+      "subject": "语文",
+      "items": [
+        {
+          "id": "MANUAL-6a6a219f329b444e31ca",
+          "kind": "task",
+          "task_id": "MANUAL-6a6a219f329b444e31ca",
+          "title": "语文：朗读《风经过小巷》第2、3自然段",
+          "subject": "语文",
+          "category": "homework",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "family",
+          "origin_label": "家长录入",
+          "lines": [
+            "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；",
+            "不用录音，也不用上传，明早我抽听。"
+          ],
+          "plan_lines": [
+            "林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。"
+          ],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "due",
+              "kind": "deadline",
+              "label": "截止",
+              "value": "2026-11-04",
+              "known": true,
+              "state": ""
+            }
+          ],
+          "today": true,
+          "when": "today",
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    },
+    {
+      "subject": "英语",
+      "items": [
+        {
+          "id": "MANUAL-174f349be714b0739b23",
+          "kind": "task",
+          "task_id": "MANUAL-174f349be714b0739b23",
+          "title": "英语：完成《每日练习》",
+          "subject": "英语",
+          "category": "homework",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "family",
+          "origin_label": "家长录入",
+          "lines": [
+            "一、看图选词第1—3题",
+            "二、标星单词 under、near 各抄写一遍。",
+            "不需要录音。",
+            "做完放进英语夹里，明天带来。",
+            "完成后放进英语夹里，明天带到学校。",
+            "不用在群里发照片。"
+          ],
+          "plan_lines": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "due",
+              "kind": "deadline",
+              "label": "截止",
+              "value": "2026-11-04",
+              "known": true,
+              "state": ""
+            }
+          ],
+          "today": true,
+          "when": "today",
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    },
+    {
+      "subject": "科目待定",
+      "items": [
+        {
+          "id": "T01",
+          "kind": "task",
+          "task_id": "T01",
+          "title": "阅读后，听听孩子的发现",
+          "subject": "科目待定",
+          "category": "todo",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "family",
+          "origin_label": "家长录入",
+          "lines": [
+            "问问孩子愿意分享哪一段。"
+          ],
+          "plan_lines": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "due",
+              "kind": "deadline",
+              "label": "截止",
+              "value": "2026-11-04",
+              "known": true,
+              "state": ""
+            }
+          ],
+          "today": true,
+          "when": "today",
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    }
+  ],
+  "closed": [],
+  "wrong": [],
+  "upcoming": [],
+  "undated": [
+    {
+      "subject": "科目待定",
+      "items": [
+        {
+          "id": "T03",
+          "kind": "task",
+          "task_id": "T03",
+          "title": "准备周末的自然观察",
+          "subject": "科目待定",
+          "category": "todo",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "family",
+          "origin_label": "家长录入",
+          "lines": [
+            "带上笔记本，画下感兴趣的植物。"
+          ],
+          "plan_lines": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "due",
+              "label": "交回",
+              "value": "日期未写明，不猜",
+              "known": false
+            }
+          ],
+          "today": false,
+          "when": "unknown",
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ]
+    }
+  ],
+  "materials": [],
+  "counts": {
+    "open": 4,
+    "closed": 0,
+    "upcoming": 0,
+    "material": 0,
+    "undated": 1,
+    "today": 4,
+    "overdue": 0,
+    "later": 0,
+    "earlier": 0,
+    "unknown": 0,
+    "passed": 0
+  },
+  "schedule": {
+    "lessons": [],
+    "plans": [],
+    "cancelled": 0,
+    "completed": 0
+  },
+  "schedule_error": "",
+  "week": [
+    {
+      "day": "2026-11-02",
+      "open": 4,
+      "today": 0,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-03",
+      "open": 4,
+      "today": 0,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-04",
+      "open": 4,
+      "today": 4,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-05",
+      "open": 4,
+      "today": 0,
+      "overdue": 4,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-06",
+      "open": 4,
+      "today": 0,
+      "overdue": 4,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-07",
+      "open": 4,
+      "today": 0,
+      "overdue": 4,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-08",
+      "open": 4,
+      "today": 0,
+      "overdue": 4,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    }
+  ],
+  "learning": {
+    "subjects": [],
+    "pack": {
+      "installed": false,
+      "message": "知识包未安装或与固定版本不一致；原错题与引导照常可用"
+    }
+  },
+  "school_pending": 0,
+  "school_read_gaps": []
+}

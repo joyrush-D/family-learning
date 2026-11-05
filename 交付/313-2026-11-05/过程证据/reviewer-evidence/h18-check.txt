@@ -1,0 +1,114 @@
+========================================================================================
+h18-a-math | title = 数学：《每日练习》第26页第1—3题
+  [one-line-semicolon] action = '完成《每日练习》第26页第1、2、3题；每题写出算式；每题验算；家长签字；周五交给数学周老师。\n第4题明确不做。'
+  [one-line-semicolon] shown  = ['完成《每日练习》第26页第1、2、3题；', '每题写出算式；', '每题验算；', '家长签字；', '周五交给数学周老师。', '第4题明确不做。']
+    OK  unit='完成《每日练习》第26页第1、2、3题' coverage=1.00 missing=[]
+    OK  unit='每题写出算式' coverage=1.00 missing=[]
+    OK  unit='每题验算' coverage=1.00 missing=[]
+    OK  unit='家长签字' coverage=1.00 missing=[]
+    OK  unit='周五交给数学周老师' coverage=1.00 missing=[]
+    OK  neg ='第4题明确不做' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('hand_back_on', '2026-11-06')]
+  [one-unit-per-line] action = '完成《每日练习》第26页第1、2、3题。\n每题写出算式。\n每题验算。\n家长签字。\n周五交给数学周老师。第4题明确不做。'
+  [one-unit-per-line] shown  = ['完成《每日练习》第26页第1、2、3题。', '每题写出算式。', '每题验算。', '家长签字。', '周五交给数学周老师。', '第4题明确不做。']
+    OK  unit='完成《每日练习》第26页第1、2、3题' coverage=1.00 missing=[]
+    OK  unit='每题写出算式' coverage=1.00 missing=[]
+    OK  unit='每题验算' coverage=1.00 missing=[]
+    OK  unit='家长签字' coverage=1.00 missing=[]
+    OK  unit='周五交给数学周老师' coverage=1.00 missing=[]
+    OK  neg ='第4题明确不做' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('hand_back_on', '2026-11-06')]
+========================================================================================
+h18-a-reading | title = 语文：朗读《风经过小巷》第2、3自然段
+  [one-line-semicolon] action = '《风经过小巷》第2、3自然段各朗读两遍；读给家长听；明早由语文林老师抽听。\n不用录音、不用上传、不用背诵。'
+  [one-line-semicolon] shown  = ['《风经过小巷》第2、3自然段各朗读两遍；', '读给家长听；', '明早由语文林老师抽听。', '不用录音、不用上传、不用背诵。']
+    OK  unit='《风经过小巷》第2、3自然段各朗读两遍' coverage=1.00 missing=[]
+    OK  unit='读给家长听' coverage=1.00 missing=[]
+    OK  unit='明早由语文林老师抽听' coverage=1.00 missing=[]
+    OK  neg ='不用录音、不用上传、不用背诵' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('teacher_check_on', '2026-11-05'), ('family_plan_at', '2026-11-04')]
+  [one-unit-per-line] action = '《风经过小巷》第2、3自然段各朗读两遍。\n读给家长听。\n明早由语文林老师抽听。不用录音、不用上传、不用背诵。'
+  [one-unit-per-line] shown  = ['《风经过小巷》第2、3自然段各朗读两遍。', '读给家长听。', '明早由语文林老师抽听。', '不用录音、不用上传、不用背诵。']
+    OK  unit='《风经过小巷》第2、3自然段各朗读两遍' coverage=1.00 missing=[]
+    OK  unit='读给家长听' coverage=1.00 missing=[]
+    OK  unit='明早由语文林老师抽听' coverage=1.00 missing=[]
+    OK  neg ='不用录音、不用上传、不用背诵' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('teacher_check_on', '2026-11-05'), ('family_plan_at', '2026-11-04')]
+========================================================================================
+h18-a-english | title = 英语：英语《每日练习》
+  [one-line-semicolon] action = '看图选词第1—3题；under、near各抄写一遍；做完放英语夹里，明早带来。\n不需要录音，不用群里发照片。'
+  [one-line-semicolon] shown  = ['看图选词第1—3题；', 'under、near各抄写一遍；', '做完放英语夹里，明早带来。', '不需要录音，不用群里发照片。']
+    OK  unit='看图选词第1—3题' coverage=1.00 missing=[]
+    OK  unit='under、near各抄写一遍' coverage=1.00 missing=[]
+    OK  unit='做完放英语夹里，明早带来' coverage=1.00 missing=[]
+    OK  neg ='不需要录音，不用群里发照片' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('bring_to_school_on', '2026-11-05')]
+  [one-unit-per-line] action = '看图选词第1—3题。\nunder、near各抄写一遍。\n做完放英语夹里，明早带来。不需要录音，不用群里发照片。'
+  [one-unit-per-line] shown  = ['看图选词第1—3题。', 'under、near各抄写一遍。', '做完放英语夹里，明早带来。', '不需要录音，不用群里发照片。']
+    OK  unit='看图选词第1—3题' coverage=1.00 missing=[]
+    OK  unit='under、near各抄写一遍' coverage=1.00 missing=[]
+    OK  unit='做完放英语夹里，明早带来' coverage=1.00 missing=[]
+    OK  neg ='不需要录音，不用群里发照片' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('bring_to_school_on', '2026-11-05')]
+========================================================================================
+h18-a-art-cancelled | title = 美术：收集并带两片落叶
+  [one-line-semicolon] action = '\n整项取消；叶子和夹叶子的旧书都不用带。。'
+  [one-line-semicolon] shown  = ['整项取消；', '叶子和夹叶子的旧书都不用带。。']
+    OK  neg ='整项取消；叶子和夹叶子的旧书都不用带。' coverage=1.00 missing=[]
+  [one-unit-per-line] action = '整项取消；叶子和夹叶子的旧书都不用带。。'
+  [one-unit-per-line] shown  = ['整项取消；', '叶子和夹叶子的旧书都不用带。。']
+    OK  neg ='整项取消；叶子和夹叶子的旧书都不用带。' coverage=1.00 missing=[]
+========================================================================================
+h18-b-math | title = 数学：《计算小卡》第4页第1—6题
+  [one-line-semicolon] action = '《计算小卡》第4页第1—6题，直接写得数；明天交。\n不用抄题、不另加题；已经做过的不用再做一遍。。'
+  [one-line-semicolon] shown  = ['直接写得数', '明天交。', '不用抄题、不另加题；', '已经做过的不用再做一遍。。']
+    OK  unit='《计算小卡》第4页第1—6题，直接写得数' coverage=1.00 missing=[]
+    OK  unit='明天交' coverage=1.00 missing=[]
+    OK  neg ='不用抄题、不另加题；已经做过的不用再做一遍。' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('hand_back_on', '2026-11-05')]
+  [one-unit-per-line] action = '《计算小卡》第4页第1—6题，直接写得数。\n明天交。不用抄题、不另加题；已经做过的不用再做一遍。。'
+  [one-unit-per-line] shown  = ['直接写得数。', '明天交。', '不用抄题、不另加题；', '已经做过的不用再做一遍。。']
+    OK  unit='《计算小卡》第4页第1—6题，直接写得数' coverage=1.00 missing=[]
+    OK  unit='明天交' coverage=1.00 missing=[]
+    OK  neg ='不用抄题、不另加题；已经做过的不用再做一遍。' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('hand_back_on', '2026-11-05')]
+========================================================================================
+h18-b-photo | title = 带一张一寸证件照更新学生卡
+  [one-line-semicolon] action = '带一张一寸证件照，明早交班主任用于更新学生卡；现有蓝底或白底都可，不用重新拍。\n蓝底、白底是二选一的允许范围，数量仍为一张；不要求重新拍。。'
+  [one-line-semicolon] shown  = ['明早交班主任用于更新学生卡', '现有蓝底或白底都可，不用重新拍。', '蓝底、白底是二选一的允许范围，数量仍为一张；', '不要求重新拍。。']
+    OK  unit='带一张一寸证件照，明早交班主任用于更新学生卡' coverage=1.00 missing=[]
+    OK  unit='现有蓝底或白底都可，不用重新拍' coverage=1.00 missing=[]
+    OK  neg ='蓝底、白底是二选一的允许范围，数量仍为一张；不要求重新拍。' coverage=1.00 missing=[]
+    dates = [('bring_and_hand_back_on', '2026-11-05')]
+  [one-unit-per-line] action = '带一张一寸证件照，明早交班主任用于更新学生卡。\n现有蓝底或白底都可，不用重新拍。蓝底、白底是二选一的允许范围，数量仍为一张；不要求重新拍。。'
+  [one-unit-per-line] shown  = ['明早交班主任用于更新学生卡。', '现有蓝底或白底都可，不用重新拍。', '蓝底、白底是二选一的允许范围，数量仍为一张；', '不要求重新拍。。']
+    OK  unit='带一张一寸证件照，明早交班主任用于更新学生卡' coverage=1.00 missing=[]
+    OK  unit='现有蓝底或白底都可，不用重新拍' coverage=1.00 missing=[]
+    OK  neg ='蓝底、白底是二选一的允许范围，数量仍为一张；不要求重新拍。' coverage=1.00 missing=[]
+    dates = [('bring_and_hand_back_on', '2026-11-05')]
+========================================================================================
+h18-b-chinese-unread | title = 语文：《识字小卡》练习（具体内容待补）
+  [one-line-semicolon] action = '完成附件《识字小卡》上的练习；具体题目范围待读取；完成后请家长在卡片下方签名；明早交语文郑老师。'
+  [one-line-semicolon] shown  = ['完成附件《识字小卡》上的练习；', '具体题目范围待读取；', '完成后请家长在卡片下方签名；', '明早交语文郑老师。']
+    OK  unit='完成附件《识字小卡》上的练习；具体题目范围待读取' coverage=1.00 missing=[]
+    OK  unit='完成后请家长在卡片下方签名' coverage=1.00 missing=[]
+    OK  unit='明早交语文郑老师' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('hand_back_on', '2026-11-05')]
+  [one-unit-per-line] action = '完成附件《识字小卡》上的练习；具体题目范围待读取。\n完成后请家长在卡片下方签名。\n明早交语文郑老师。'
+  [one-unit-per-line] shown  = ['完成附件《识字小卡》上的练习；', '具体题目范围待读取。', '完成后请家长在卡片下方签名。', '明早交语文郑老师。']
+    OK  unit='完成附件《识字小卡》上的练习；具体题目范围待读取' coverage=1.00 missing=[]
+    OK  unit='完成后请家长在卡片下方签名' coverage=1.00 missing=[]
+    OK  unit='明早交语文郑老师' coverage=1.00 missing=[]
+    dates = [('complete_by', '2026-11-04'), ('hand_back_on', '2026-11-05')]
+========================================================================================
+h18-b-art-oral | title = 美术：明天美术带一盒彩笔
+  [one-line-semicolon] action = '明天带一盒彩笔。'
+  [one-line-semicolon] shown  = []
+    OK  unit='明天带一盒彩笔' coverage=1.00 missing=[]
+    dates = [('bring_to_class_on', '2026-11-05')]
+  [one-unit-per-line] action = '明天带一盒彩笔。'
+  [one-unit-per-line] shown  = []
+    OK  unit='明天带一盒彩笔' coverage=1.00 missing=[]
+    dates = [('bring_to_class_on', '2026-11-05')]
+========================================================================================
+LOSSES: 0

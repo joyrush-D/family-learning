@@ -1,0 +1,18 @@
+{
+  "calls": [
+    {
+      "name": "family_agent_selection",
+      "model": "doubao-seed-evolving",
+      "evidence": [
+        "message:synthetic-group:501",
+        "message:synthetic-group:502",
+        "message:synthetic-group:503",
+        "message:synthetic-group:504",
+        "message:synthetic-group:505",
+        "message:synthetic-group:506"
+      ]
+    }
+  ],
+  "saved": [],
+  "listed": []
+}

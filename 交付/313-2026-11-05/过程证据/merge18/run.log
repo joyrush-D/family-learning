@@ -1,0 +1,48 @@
+ingested 18 messages across 6 sources
+attachments: 981d9a92bd81a764edbb34ad284c6a9d application/pdf | d818f839ad2daa364b17921b4c1ab0ba image/jpeg
+TICK 0 20:00 created 9 processed 8 failed 0 | unprocessed 11 pending 4 items 8 tasks 1 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}]
+TICK 1 20:07 created 9 processed 8 failed 0 | unprocessed 3 pending 7 items 15 tasks 3 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:63400213ac96466ca080659d09fe3e7ad6ed8de7', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c2092072f092fc9c8049e8c269721cd8a84ff610', 'attempts': 1, 'done': 1, 'error': ''}]
+TICK 2 20:14 created 2 processed 2 failed 0 | unprocessed 1 pending 8 items 17 tasks 3 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:63400213ac96466ca080659d09fe3e7ad6ed8de7', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c2092072f092fc9c8049e8c269721cd8a84ff610', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:60bd35a44591132422d5defabcec8b45ea6f7c59', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281', 'attempts': 1, 'done': 1, 'error': ''}]
+TICK 3 20:21 created 4 processed 2 failed 0 | unprocessed 0 pending 8 items 19 tasks 5 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:63400213ac96466ca080659d09fe3e7ad6ed8de7', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c2092072f092fc9c8049e8c269721cd8a84ff610', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:60bd35a44591132422d5defabcec8b45ea6f7c59', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:b8866f44df2e2b00023783bd12d947d03db60ad6', 'attempts': 1, 'done': 1, 'error': ''}]
+TICK 4 20:28 created 0 processed 0 failed 0 | unprocessed 0 pending 8 items 19 tasks 5 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:63400213ac96466ca080659d09fe3e7ad6ed8de7', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c2092072f092fc9c8049e8c269721cd8a84ff610', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:60bd35a44591132422d5defabcec8b45ea6f7c59', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:b8866f44df2e2b00023783bd12d947d03db60ad6', 'attempts': 1, 'done': 1, 'error': ''}]
+TICK 5 20:35 created 0 processed 0 failed 0 | unprocessed 0 pending 8 items 19 tasks 5 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:63400213ac96466ca080659d09fe3e7ad6ed8de7', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c2092072f092fc9c8049e8c269721cd8a84ff610', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:60bd35a44591132422d5defabcec8b45ea6f7c59', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:b8866f44df2e2b00023783bd12d947d03db60ad6', 'attempts': 1, 'done': 1, 'error': ''}]
+TICK 6 20:42 created 0 processed 0 failed 0 | unprocessed 0 pending 8 items 19 tasks 5 pdf [('h18-m05', None)] jobs [{'id': 'messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:3efb454d4479b3a9d449542a3122b404a72d7843', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:63400213ac96466ca080659d09fe3e7ad6ed8de7', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c2092072f092fc9c8049e8c269721cd8a84ff610', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:60bd35a44591132422d5defabcec8b45ea6f7c59', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281', 'attempts': 1, 'done': 1, 'error': ''}, {'id': 'messages:b8866f44df2e2b00023783bd12d947d03db60ad6', 'attempts': 1, 'done': 1, 'error': ''}]
+stable after 7 ticks
+
+model calls: 8 | names: ['family_agent_selection', 'family_school_task']
+  - 0 family_agent_selection 36.91 ok
+  - 1 family_agent_selection 20.86 ok
+  - 2 family_agent_selection 34.47 ok
+  - 3 family_agent_selection 22.82 ok
+  - 4 family_agent_selection 20.73 ok
+  - 5 family_agent_selection 25.45 ok
+  - 6 family_agent_selection 12.52 ok
+  - 7 family_school_task 19.13 ok
+
+final tasks: 5
+  * AGENT-160c6c9c820698a880291826 | 示例甲 | 朗读《风经过小巷》第2、3自然段 | due 2026-11-04
+  * AGENT-f818953082a70e7e66799bd4 | 示例乙 | 明早带一寸证件照交班主任 | due 2026-11-05
+  * AGENT-45400257d2f61992fd05ddb2 | 示例乙 | 数学：完成《计算小卡》第4页第1—6题 | due 2026-11-05
+  * AGENT-98b8eeadbf04b6488e2aa127 | 示例乙 | 明天带一盒彩笔 | due 2026-11-05
+  * AGENT-e9f38c84c51730cf04a9bc35 | 示例甲 | 英语：完成《每日练习》并明天带回 | due 2026-11-05
+
+final items:
+  # agent-0049f82473af2b6a7ea940d7503d5835 child-1 pending | 美术：带落叶及旧书要求已取消 | task 
+  # agent-4a14fa58a20ce5fd04716d99246c3f67 child-1 accepted | 英语：完成《每日练习》并明天带回 | task AGENT-e9f38c84c51730cf04a9bc35
+  # agent-602b344bde374f9e19cd837a2268489b child-1 accepted | 朗读《风经过小巷》第2、3自然段 | task AGENT-160c6c9c820698a880291826
+  # agent-ed300d2af524614375c40d8af7c4324a child-1 pending | 数学：完成《每日练习》第26页1—4题 | task 
+  # agent-f95d8805ae24997da44f15f2f94e68d6 child-1 pending | 数学：完成《每日练习》第26页第1—3题 | task 
+  # agent-71f9b78d5a940d15cb543ec39784eebb child-2 accepted | 明早带一寸证件照交班主任 | task AGENT-f818953082a70e7e66799bd4
+  # agent-8b5abea6a93079245b124c94868024c8 child-2 accepted | 数学：完成《计算小卡》第4页第1—6题 | task AGENT-45400257d2f61992fd05ddb2
+  # agent-e1724f1f59a63ae55e7c30c18367cf8a child-2 pending | 语文：完成《识字小卡》练习并请家长签名 | task 
+  # agent-e3563915851dc039f19795e23c91eb5f child-1 pending | 英语：完成《每日练习》并明早带回 | task 
+  # agent-fc7084f0f0161b640c8d9b8d78cd1520 child-1 pending | 语文：朗读《风经过小巷》第2、3自然段 | task 
+  # agent-b2a3cc2e545c71080694e0dc3a8e0d83 child-2 accepted | 数学：完成《计算小卡》第4页1—6题 | task AGENT-45400257d2f61992fd05ddb2
+  # agent-fb405f0e826bec92ed47e93b57de4ce8 child-1 pending | 语文：朗读《风经过小巷》第2、3自然段 | task 
+  # agent-8958e3a90b62d814e73debf9455b7390 child-2 pending | 美术老师今天课上说 | task 
+  # agent-ebcd63eaf52b302d3edfb6093a979087 child-2 accepted | 明天带一盒彩笔 | task AGENT-98b8eeadbf04b6488e2aa127
+  # goal-4aa066595907e486319200acadd6c92f child-1 draft | 英语：学校学习要求 | task 
+  # goal-47b93177aabb4f3f89a919a79121db81 child-1 draft | 语文：学校学习要求 | task 
+  # goal-abb032574f6a363eeb620734538938c2 child-1 draft | 数学：学校学习要求 | task 
+  # goal-210f888e9fdf844e1824c360781efd01 child-2 draft | 数学：学校学习要求 | task 
+  # goal-4388ffaff365b1a487187edff8edde95 child-2 draft | 语文：学校学习要求 | task 

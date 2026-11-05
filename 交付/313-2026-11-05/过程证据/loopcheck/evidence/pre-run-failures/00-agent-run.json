@@ -1,0 +1,11 @@
+{
+  "ingested_messages": 6,
+  "run_once": {
+    "failed": 1,
+    "processed": 0,
+    "created": 0
+  },
+  "root": "/private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/synthetic-agent-zg9zieru",
+  "data_dir": "/private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/synthetic-agent-zg9zieru/private",
+  "now": "2026-11-04T20:00:00+08:00"
+}

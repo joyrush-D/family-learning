@@ -1,0 +1,4 @@
+-rwxr-xr-x@ 1 joyrush  wheel  6250096 Nov  4 16:02 /tmp/surface-app/一起成长.app/Contents/MacOS/YiqiChengzhang
+5f933d514568a618709304fd6ac423d6e439984c4444ec018e91256a350cda0c  /tmp/surface-app/一起成长.app/Contents/MacOS/YiqiChengzhang
+2026-11-04 15:40:28 /Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift
+2026-11-04 15:28:20 /Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/WorkspaceAPI.swift

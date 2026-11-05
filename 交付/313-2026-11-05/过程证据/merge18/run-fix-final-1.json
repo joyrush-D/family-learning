@@ -1,0 +1,2557 @@
+{
+ "fixture": "/Users/joyrush/Documents/deepseek-harness/default-workspace/work/handoff-20261104/extract/DeepSeek-Harness-交接-20261104/附件/全虚构验收材料/FIXTURE.json",
+ "model": "doubao-seed-evolving",
+ "sources": [
+  {
+   "id": "qa-qq-a4",
+   "platform": "qq",
+   "child_id": "child-1",
+   "name": "虚构四年级A班",
+   "cursor": "0",
+   "enabled": true
+  },
+  {
+   "id": "qa-wx-a4",
+   "platform": "wechat",
+   "child_id": "child-1",
+   "name": "虚构四年级A班提醒群",
+   "cursor": "0",
+   "enabled": true
+  },
+  {
+   "id": "qa-qq-b2",
+   "platform": "qq",
+   "child_id": "child-2",
+   "name": "虚构二年级B班",
+   "cursor": "0",
+   "enabled": true
+  },
+  {
+   "id": "qa-wx-b2",
+   "platform": "wechat",
+   "child_id": "child-2",
+   "name": "虚构二年级B班提醒群",
+   "cursor": "0",
+   "enabled": true
+  },
+  {
+   "id": "qa-manual-a",
+   "platform": "wechat",
+   "child_id": "child-1",
+   "name": "虚构家庭手动补录（甲）",
+   "cursor": "0",
+   "enabled": true
+  },
+  {
+   "id": "qa-manual-b",
+   "platform": "wechat",
+   "child_id": "child-2",
+   "name": "虚构家庭手动补录（乙）",
+   "cursor": "0",
+   "enabled": true
+  }
+ ],
+ "attachment_injection": {
+  "english": {
+   "upload_id": "cc896144d31133dc615d6200ad6b3075",
+   "name": "英语每日练习.pdf",
+   "mode": "injected read page receipt (fixture text, no bytes)"
+  },
+  "chinese": {
+   "upload_id": "d21a59fd783fe91d4a55b775efcbbf20",
+   "name": "识字小卡.jpg",
+   "mode": "attached, reader left pending (fixture unread state)"
+  }
+ },
+ "page_receipt": {
+  "originals": [
+   {
+    "upload_id": "cc896144d31133dc615d6200ad6b3075",
+    "title": "英语《每日练习》",
+    "note": "老师写明的英语练习要求，未见孩子作答。",
+    "uncertainties": [],
+    "requirements": [
+     "一、看图选词第1—3题。",
+     "二、标星单词 under、near 各抄写一遍。",
+     "不需要录音。"
+    ],
+    "deferred_contexts": []
+   }
+  ]
+ },
+ "payloads": [
+  {
+   "source_id": "qa-qq-a4",
+   "expected_cursor": "0",
+   "cursor": "8",
+   "checked_at": "2026-11-04T18:15:00+08:00",
+   "last_message_time": "2026-11-04T18:15:00+08:00",
+   "messages": [
+    {
+     "id": "h18-m01",
+     "message_order": "1",
+     "time": "2026-11-04T15:40:00+08:00",
+     "kind": "text",
+     "sender": "数学周老师",
+     "sender_id": "qa-qq-a-math",
+     "text": "数学《每日练习》第26页第1—4题，今晚完成。每题写出算式并验算，请家长签字，周五交给我。",
+     "unread": false
+    },
+    {
+     "id": "h18-m02",
+     "message_order": "2",
+     "time": "2026-11-04T15:45:00+08:00",
+     "kind": "text",
+     "sender": "语文林老师",
+     "sender_id": "qa-qq-a-chinese",
+     "text": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听。",
+     "unread": false
+    },
+    {
+     "id": "h18-m05",
+     "message_order": "3",
+     "time": "2026-11-04T16:05:00+08:00",
+     "kind": "text",
+     "sender": "英语唐老师",
+     "sender_id": "qa-qq-a-english",
+     "text": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。",
+     "unread": false
+    },
+    {
+     "id": "h18-m07",
+     "message_order": "4",
+     "time": "2026-11-04T16:15:00+08:00",
+     "kind": "text",
+     "sender": "美术许老师",
+     "sender_id": "qa-qq-a-art",
+     "text": "明天美术课每人带两片落叶，夹在一本旧书里带来。",
+     "unread": false
+    },
+    {
+     "id": "h18-m09",
+     "message_order": "5",
+     "time": "2026-11-04T17:00:00+08:00",
+     "kind": "text",
+     "sender": "数学周老师",
+     "sender_id": "qa-qq-a-math",
+     "text": "更正今天数学《每日练习》的范围：第26页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。",
+     "unread": false
+    },
+    {
+     "id": "h18-m12",
+     "message_order": "6",
+     "time": "2026-11-04T17:20:00+08:00",
+     "kind": "text",
+     "sender": "美术许老师",
+     "sender_id": "qa-qq-a-art",
+     "text": "明天美术改用教室里的材料，刚才收集并带两片落叶那一项取消，不用带叶子和夹叶子的旧书。",
+     "unread": false
+    },
+    {
+     "id": "h18-m13",
+     "message_order": "7",
+     "time": "2026-11-04T17:25:00+08:00",
+     "kind": "text",
+     "sender": "英语唐老师",
+     "sender_id": "qa-qq-a-english",
+     "text": "补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。",
+     "unread": false
+    },
+    {
+     "id": "h18-m18",
+     "message_order": "8",
+     "time": "2026-11-04T18:15:00+08:00",
+     "kind": "text",
+     "sender": "语文林老师",
+     "sender_id": "qa-qq-a-chinese",
+     "text": "朗读仍是《风经过小巷》第2、3自然段各两遍，不用背诵，明早抽听。",
+     "unread": false
+    }
+   ],
+   "error": ""
+  },
+  {
+   "source_id": "qa-wx-a4",
+   "expected_cursor": "0",
+   "cursor": "1",
+   "checked_at": "2026-11-04T16:00:00+08:00",
+   "last_message_time": "2026-11-04T16:00:00+08:00",
+   "messages": [
+    {
+     "id": "h18-m04",
+     "message_order": "1",
+     "time": "2026-11-04T16:00:00+08:00",
+     "kind": "text",
+     "sender": "数学周老师",
+     "sender_id": "qa-wx-a-math",
+     "text": "再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。",
+     "unread": false
+    }
+   ],
+   "error": ""
+  },
+  {
+   "source_id": "qa-qq-b2",
+   "expected_cursor": "0",
+   "cursor": "6",
+   "checked_at": "2026-11-04T17:40:00+08:00",
+   "last_message_time": "2026-11-04T17:40:00+08:00",
+   "messages": [
+    {
+     "id": "h18-m03",
+     "message_order": "1",
+     "time": "2026-11-04T15:50:00+08:00",
+     "kind": "text",
+     "sender": "数学陈老师",
+     "sender_id": "qa-qq-b-math",
+     "text": "数学《计算小卡》第4页第1—6题，今晚做完。不用抄题，直接写得数，明天交。",
+     "unread": false
+    },
+    {
+     "id": "h18-m06",
+     "message_order": "2",
+     "time": "2026-11-04T16:10:00+08:00",
+     "kind": "text",
+     "sender": "班主任吴老师",
+     "sender_id": "qa-qq-b-head",
+     "text": "明早请孩子带一张一寸证件照，交给班主任，用于更新学生卡。",
+     "unread": false
+    },
+    {
+     "id": "h18-m08",
+     "message_order": "3",
+     "time": "2026-11-04T16:20:00+08:00",
+     "kind": "text",
+     "sender": "语文郑老师",
+     "sender_id": "qa-qq-b-chinese",
+     "text": "今晚完成附件这张《识字小卡》上的练习，明早交给我。",
+     "unread": false
+    },
+    {
+     "id": "h18-m14",
+     "message_order": "4",
+     "time": "2026-11-04T17:30:00+08:00",
+     "kind": "text",
+     "sender": "班主任吴老师",
+     "sender_id": "qa-qq-b-head",
+     "text": "明早带证件照，一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+     "unread": false
+    },
+    {
+     "id": "h18-m15",
+     "message_order": "5",
+     "time": "2026-11-04T17:35:00+08:00",
+     "kind": "text",
+     "sender": "语文郑老师",
+     "sender_id": "qa-qq-b-chinese",
+     "text": "刚才的《识字小卡》，完成后还请家长在卡片下方签名，明早交给我。",
+     "unread": false
+    },
+    {
+     "id": "h18-m16",
+     "message_order": "6",
+     "time": "2026-11-04T17:40:00+08:00",
+     "kind": "text",
+     "sender": "数学陈老师",
+     "sender_id": "qa-qq-b-math",
+     "text": "计算小卡还是第4页1—6题，不用抄题。做过的就不用再做一遍。",
+     "unread": false
+    }
+   ],
+   "error": ""
+  },
+  {
+   "source_id": "qa-wx-b2",
+   "expected_cursor": "0",
+   "cursor": "1",
+   "checked_at": "2026-11-04T17:15:00+08:00",
+   "last_message_time": "2026-11-04T17:15:00+08:00",
+   "messages": [
+    {
+     "id": "h18-m11",
+     "message_order": "1",
+     "time": "2026-11-04T17:15:00+08:00",
+     "kind": "text",
+     "sender": "数学陈老师",
+     "sender_id": "qa-wx-b-math",
+     "text": "数学《计算小卡》第4页1—6题再提醒一下，今晚做完，明天交，不另加题。",
+     "unread": false
+    }
+   ],
+   "error": ""
+  },
+  {
+   "source_id": "qa-manual-a",
+   "expected_cursor": "0",
+   "cursor": "1",
+   "checked_at": "2026-11-04T17:10:00+08:00",
+   "last_message_time": "2026-11-04T17:10:00+08:00",
+   "messages": [
+    {
+     "id": "h18-m10",
+     "message_order": "1",
+     "time": "2026-11-04T17:10:00+08:00",
+     "kind": "text",
+     "sender": "虚构家长",
+     "sender_id": "qa-parent",
+     "text": "林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。",
+     "unread": false
+    }
+   ],
+   "error": ""
+  },
+  {
+   "source_id": "qa-manual-b",
+   "expected_cursor": "0",
+   "cursor": "1",
+   "checked_at": "2026-11-04T18:10:00+08:00",
+   "last_message_time": "2026-11-04T18:10:00+08:00",
+   "messages": [
+    {
+     "id": "h18-m17",
+     "message_order": "1",
+     "time": "2026-11-04T18:10:00+08:00",
+     "kind": "text",
+     "sender": "虚构孩子乙",
+     "sender_id": "qa-child-b-speaker",
+     "text": "美术老师今天课上说，明天带一盒彩笔。我没看到群里有这条通知。",
+     "unread": false
+    }
+   ],
+   "error": ""
+  }
+ ],
+ "calls": [
+  {
+   "index": 0,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:51:48+08:00",
+   "ok": true,
+   "elapsed_s": 5.51,
+   "ledger_state": "returned",
+   "ledger_ms": 5499,
+   "input_tokens": 5922,
+   "output_tokens": 840,
+   "total_tokens": 6762,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 1,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:51:54+08:00",
+   "ok": true,
+   "elapsed_s": 3.0,
+   "ledger_state": "returned",
+   "ledger_ms": 2990,
+   "input_tokens": 5594,
+   "output_tokens": 273,
+   "total_tokens": 5867,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 2,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:51:57+08:00",
+   "ok": true,
+   "elapsed_s": 4.46,
+   "ledger_state": "returned",
+   "ledger_ms": 4451,
+   "input_tokens": 6705,
+   "output_tokens": 531,
+   "total_tokens": 7236,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 3,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:52:02+08:00",
+   "ok": true,
+   "elapsed_s": 4.55,
+   "ledger_state": "returned",
+   "ledger_ms": 4543,
+   "input_tokens": 5367,
+   "output_tokens": 701,
+   "total_tokens": 6068,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 4,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:52:06+08:00",
+   "ok": true,
+   "elapsed_s": 2.39,
+   "ledger_state": "returned",
+   "ledger_ms": 2384,
+   "input_tokens": 5925,
+   "output_tokens": 266,
+   "total_tokens": 6191,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 5,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:52:09+08:00",
+   "ok": true,
+   "elapsed_s": 2.61,
+   "ledger_state": "returned",
+   "ledger_ms": 2600,
+   "input_tokens": 6123,
+   "output_tokens": 265,
+   "total_tokens": 6388,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 6,
+   "name": "family_agent_selection",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:52:11+08:00",
+   "ok": true,
+   "elapsed_s": 2.48,
+   "ledger_state": "returned",
+   "ledger_ms": 2477,
+   "input_tokens": 5934,
+   "output_tokens": 174,
+   "total_tokens": 6108,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  },
+  {
+   "index": 7,
+   "name": "family_school_task",
+   "model": "doubao-seed-evolving",
+   "at": "2026-11-04T23:52:14+08:00",
+   "ok": true,
+   "elapsed_s": 4.17,
+   "ledger_state": "returned",
+   "ledger_ms": 4162,
+   "input_tokens": 6720,
+   "output_tokens": 447,
+   "total_tokens": 7167,
+   "reported_model": "deepseek-v4-1-flash-261017"
+  }
+ ],
+ "ticks": [
+  {
+   "index": 0,
+   "now": "2026-11-04T20:00:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 10,
+    "processed": 8,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  },
+  {
+   "index": 1,
+   "now": "2026-11-04T20:07:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 9,
+    "processed": 8,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  },
+  {
+   "index": 2,
+   "now": "2026-11-04T20:14:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 2,
+    "processed": 2,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  },
+  {
+   "index": 3,
+   "now": "2026-11-04T20:21:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 2,
+    "processed": 2,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  },
+  {
+   "index": 4,
+   "now": "2026-11-04T20:28:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 0,
+    "processed": 0,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  },
+  {
+   "index": 5,
+   "now": "2026-11-04T20:35:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 0,
+    "processed": 0,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  },
+  {
+   "index": 6,
+   "now": "2026-11-04T20:42:00+08:00",
+   "result": {
+    "state": "ready",
+    "created": 0,
+    "processed": 0,
+    "failed": 0,
+    "media": {
+     "state": "ready"
+    },
+    "teacher_public": {
+     "state": "disabled"
+    },
+    "qq_fragment": {
+     "state": "disabled"
+    }
+   }
+  }
+ ],
+ "final": {
+  "now": "2026-11-04T20:42:00+08:00",
+  "items": [
+   {
+    "id": "agent-0049f82473af2b6a7ea940d7503d5835",
+    "job_id": "messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6",
+    "child_id": "child-1",
+    "kind": "school",
+    "title": "美术：带两片落叶（已取消）",
+    "body": "原要求明天美术课每人带两片落叶，夹在一本旧书里带来；后续通知取消该项，不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。",
+    "evidence": "[{\"ref\":\"message:qa-qq-a4:h18-m07\",\"text\":\"虚构四年级A班 · 2026-11-04T16:15:00+08:00\\n明天美术课每人带两片落叶，夹在一本旧书里带来。\"},{\"ref\":\"message:qa-qq-a4:h18-m12\",\"text\":\"虚构四年级A班 · 2026-11-04T17:20:00+08:00\\n明天美术改用教室里的材料，刚才收集并带两片落叶那一项取消，不用带叶子和夹叶子的旧书。\"}]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "pending",
+    "created": "2026-11-04T20:00:00+08:00",
+    "updated": "2026-11-04T20:00:00+08:00",
+    "task_id": "",
+    "plan": "{\"school_date_quote\":\"明天美术课每人带两片落叶，夹在一本旧书里带来。\",\"school_generated_snapshot\":\"d1f53fe5f95aa51d2b6dc75ba814a13243e8deb000cc86c12820c94b0e5fb802\",\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"\",\"change\":\"cancel\",\"goal\":\"原要求明天美术课每人带两片落叶，夹在一本旧书里带来；后续通知取消该项，不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。\",\"purpose\":\"admin\",\"reason\":\"老师后续明确取消带落叶和旧书的要求，原事项不再执行，保留取消记录待核。\",\"state\":\"review\",\"submission\":\"\",\"target_id\":\"\",\"title\":\"美术：带两片落叶（已取消）\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"\",\"change\":\"cancel\",\"goal\":\"原要求明天美术课每人带两片落叶，夹在一本旧书里带来；后续通知取消该项，不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。\",\"origin_basis\":{\"message:qa-qq-a4:h18-m07\":\"11a9b41929c65247f4fc3f0d3ae6ba661962c6a9be92e941468a60675a7ddf12\",\"message:qa-qq-a4:h18-m12\":\"3fc55472836424f86ffeae94717ff60262850e33e7b9b4afaa9c8f8e6bcdcb3d\"},\"policy\":10,\"purpose\":\"admin\",\"reason\":\"学校要求有变更，请核对原事项及新要求后确认；原状态和反馈保留。\",\"state\":\"review\",\"target_id\":\"\",\"title\":\"美术：带两片落叶（已取消）\"}}"
+   },
+   {
+    "id": "agent-4a14fa58a20ce5fd04716d99246c3f67",
+    "job_id": "messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6",
+    "child_id": "child-1",
+    "kind": "school",
+    "title": "英语：完成《每日练习》并明天带来",
+    "body": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。\n不需要录音。",
+    "evidence": "[{\"ref\":\"message:qa-qq-a4:h18-m05\",\"text\":\"虚构四年级A班 · 2026-11-04T16:05:00+08:00\\n英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\"}]",
+    "due": "2026-11-05",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:00:00+08:00",
+    "updated": "2026-11-04T23:52:18.715563+08:00",
+    "task_id": "AGENT-e9f38c84c51730cf04a9bc35",
+    "plan": "{\"school_date_quote\":\"英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\",\"school_folded\":[{\"at\":\"2026-11-04T20:07:00+08:00\",\"change\":\"same\",\"originals\":[{\"publisher\":null,\"ref\":\"message:qa-qq-a4:h18-m13\",\"sender\":null,\"text\":\"虚构四年级A班 · 2026-11-04T17:25:00+08:00\\n补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。\",\"time\":null}],\"refs\":[\"message:qa-qq-a4:h18-m13\"]}],\"school_generated_snapshot\":\"fe3a3635821a96073804d77c7fa93852ceb82fc765faa45d7a9c90f35f207015\",\"school_goal_id\":\"goal-4aa066595907e486319200acadd6c92f\",\"school_learning\":{\"goal_id\":\"goal-4aa066595907e486319200acadd6c92f\",\"subject\":\"英语\"},\"school_messages\":[{\"message_id\":\"h18-m05\",\"source_id\":\"qa-qq-a4\"}],\"school_original_action\":{\"anchors\":[{\"pages\":[],\"quote\":\"英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\",\"ref\":\"message:qa-qq-a4:h18-m05\",\"upload_ids\":[]},{\"pages\":[1],\"quote\":\"一、看图选词第1—3题。\",\"ref\":\"message:qa-qq-a4:h18-m05\",\"upload_ids\":[\"cc896144d31133dc615d6200ad6b3075\"]},{\"pages\":[1],\"quote\":\"二、标星单词 under、near 各抄写一遍。\",\"ref\":\"message:qa-qq-a4:h18-m05\",\"upload_ids\":[\"cc896144d31133dc615d6200ad6b3075\"]},{\"pages\":[1],\"quote\":\"不需要录音。\",\"ref\":\"message:qa-qq-a4:h18-m05\",\"upload_ids\":[\"cc896144d31133dc615d6200ad6b3075\"]}],\"identity\":\"d3f425cda8cdbae6c6f646b19f45fd660737013aea17259bc34cddd6deb04a0a\",\"requirements\":[{\"id\":\"pdf:cc896144d31133dc615d6200ad6b3075:1@message:qa-qq-a4:h18-m05:requirement:d1da6b33a3d2646e\",\"pages\":[1],\"ref\":\"message:qa-qq-a4:h18-m05\",\"text\":\"一、看图选词第1—3题。\",\"upload_ids\":[\"cc896144d31133dc615d6200ad6b3075\"]},{\"id\":\"pdf:cc896144d31133dc615d6200ad6b3075:1@message:qa-qq-a4:h18-m05:requirement:681db62e1398002a\",\"pages\":[1],\"ref\":\"message:qa-qq-a4:h18-m05\",\"text\":\"二、标星单词 under、near 各抄写一遍。\",\"upload_ids\":[\"cc896144d31133dc615d6200ad6b3075\"]},{\"id\":\"pdf:cc896144d31133dc615d6200ad6b3075:1@message:qa-qq-a4:h18-m05:requirement:864355b1a945fa86\",\"pages\":[1],\"ref\":\"message:qa-qq-a4:h18-m05\",\"text\":\"不需要录音。\",\"upload_ids\":[\"cc896144d31133dc615d6200ad6b3075\"]}],\"root_id\":\"agent-4a14fa58a20ce5fd04716d99246c3f67\",\"scope\":\"8a79fde3b8b86a9f0e04f8e27163a63196418face11b253a920db6d576eab55a\"},\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"可先按附件逐项完成，检查后放入英语夹，明天带回学校。\",\"change\":\"new\",\"goal\":\"完成今天附件中的英语《每日练习》。\\n做完放进英语夹里，明天带来。\",\"purpose\":\"learning\",\"reason\":\"正文要求完成附件中的英语《每日练习》，但附件内容尚未读取，具体题目和完成标准未知。\",\"state\":\"review\",\"submission\":\"做完放进英语夹里，明天带来。\",\"target_id\":\"\",\"title\":\"英语：完成《每日练习》并明天带来\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"\",\"auto_added\":true,\"change\":\"new\",\"goal\":\"英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\\n一、看图选词第1—3题。\\n二、标星单词 under、near 各抄写一遍。\\n不需要录音。\",\"origin_basis\":{\"message:qa-qq-a4:h18-m05\":\"466fec11d3f41a3dc8802b248d09bffd060995a63c602418525e1f1631fbc15e\"},\"original_actions_revision\":2,\"pdf_evidence\":{\"documents\":[{\"conversion\":\"\",\"groups\":1,\"mime\":\"application/pdf\",\"name\":\"英语每日练习.pdf\",\"omitted\":[],\"original\":\"pdf\",\"page_count\":1,\"ref\":\"message:qa-qq-a4:h18-m05\",\"sent\":1,\"truncated\":[],\"upload_id\":\"cc896144d31133dc615d6200ad6b3075\"}],\"fingerprint\":\"2ea6cf3ad84740ea4aa886c4985fafd54dd9ba95e2a6cb9b0ee9a3cd639decce\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"消息与附件已读清，明确要求今晚完成并明天带来；与已保存的同一英语《每日练习》事项对象、范围、完成标准一致，属再次提醒。 已参考PDF原件整理：英语每日练习.pdf（共1页已逐组整理，送核1/1组）。页组摘要是Agent整理的参考，不是老师原文，也不说明孩子完成情况；动态、音频、手写内容未读取。\",\"state\":\"ready\",\"target_id\":\"\",\"title\":\"英语：完成《每日练习》并明天带来\"}}"
+   },
+   {
+    "id": "agent-602b344bde374f9e19cd837a2268489b",
+    "job_id": "messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6",
+    "child_id": "child-1",
+    "kind": "school",
+    "title": "朗读《风经过小巷》第2、3自然段",
+    "body": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听",
+    "evidence": "[{\"ref\":\"message:qa-qq-a4:h18-m02\",\"text\":\"虚构四年级A班 · 2026-11-04T15:45:00+08:00\\n今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听。\"}]",
+    "due": "2026-11-04",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:00:00+08:00",
+    "updated": "2026-11-04T20:14:00+08:00",
+    "task_id": "AGENT-160c6c9c820698a880291826",
+    "plan": "{\"school_folded\":[{\"at\":\"2026-11-04T20:07:00+08:00\",\"item_id\":\"agent-fc7084f0f0161b640c8d9b8d78cd1520\",\"refs\":[\"message:qa-qq-a4:h18-m18\"]},{\"at\":\"2026-11-04T20:14:00+08:00\",\"item_id\":\"agent-fb405f0e826bec92ed47e93b57de4ce8\",\"refs\":[\"message:qa-manual-a:h18-m10\"]}],\"school_generated_snapshot\":\"313d114de2ce6111df66f55fa623dd6164eee3a0c6b446d18ec0125031dc3631\",\"school_goal_id\":\"goal-47b93177aabb4f3f89a919a79121db81\",\"school_learning\":{\"goal_id\":\"\",\"subject\":\"语文\"},\"school_messages\":[{\"message_id\":\"h18-m02\",\"source_id\":\"qa-qq-a4\"}],\"school_native_action\":{\"changes\":[],\"header\":\"\",\"id\":\"native:cf9d992aa1e566a1195fd6a4\",\"primary\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听\",\"publisher\":\"publisher:a340f1fe73d00466b5b3\",\"purpose\":\"learning\",\"quote\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\",\"ref\":\"message:qa-qq-a4:h18-m02\",\"subject\":\"\",\"supplements\":[],\"time\":\"2026-11-04T15:45:00+08:00\"},\"school_original_action\":{\"anchors\":[{\"pages\":[],\"quote\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\",\"ref\":\"message:qa-qq-a4:h18-m02\",\"upload_ids\":[]}],\"identity\":\"59aab3de26c966c5327063fea72be87a2e46ec997e746e5155593e5906ed31be\"},\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"可分段朗读，每段读两遍给家长听，注意读准字音和停顿。\",\"change\":\"new\",\"goal\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\",\"purpose\":\"learning\",\"reason\":\"老师明确要求朗读指定段落并读给家长听，同时说明不用录音和上传。\",\"state\":\"ready\",\"submission\":\"\",\"target_id\":\"\",\"title\":\"朗读《风经过小巷》第2、3自然段\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可分段朗读，每段读两遍给家长听，注意读准字音和停顿。\",\"auto_added\":true,\"change\":\"new\",\"goal\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\",\"origin_basis\":{\"message:qa-qq-a4:h18-m02\":\"fb31b53430b2fb486ad7acf54c28b8e87d1b6ea5a22ec3b464e6592988756c24\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"老师明确要求朗读指定段落并读给家长听，同时说明不用录音和上传。\",\"state\":\"ready\",\"target_id\":\"\",\"title\":\"朗读《风经过小巷》第2、3自然段\"}}"
+   },
+   {
+    "id": "agent-f95d8805ae24997da44f15f2f94e68d6",
+    "job_id": "messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6",
+    "child_id": "child-1",
+    "kind": "school",
+    "title": "数学：完成《每日练习》第26页第1—3题",
+    "body": "完成数学《每日练习》第26页第1—3题，第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学周老师。\n提交要求：请家长签字，周五交给数学周老师。",
+    "evidence": "[{\"ref\":\"message:qa-qq-a4:h18-m01\",\"text\":\"虚构四年级A班 · 2026-11-04T15:40:00+08:00\\n数学《每日练习》第26页第1—4题，今晚完成。每题写出算式并验算，请家长签字，周五交给我。\"},{\"ref\":\"message:qa-qq-a4:h18-m09\",\"text\":\"虚构四年级A班 · 2026-11-04T17:00:00+08:00\\n更正今天数学《每日练习》的范围：第26页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。\"}]",
+    "due": "2026-11-06",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:00:00+08:00",
+    "updated": "2026-11-04T23:51:57.386023+08:00",
+    "task_id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+    "plan": "{\"school_date_quote\":\"数学《每日练习》第26页第1—4题，今晚完成。\",\"school_folded\":[{\"at\":\"2026-11-04T20:00:00+08:00\",\"change\":\"update\",\"originals\":[{\"publisher\":null,\"ref\":\"message:qa-wx-a4:h18-m04\",\"sender\":null,\"text\":\"虚构四年级A班提醒群 · 2026-11-04T16:00:00+08:00\\n再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。\",\"time\":null}],\"refs\":[\"message:qa-wx-a4:h18-m04\"]}],\"school_generated_snapshot\":\"857db56beb213ce89d25145f041c229c4c583247ffa36221363ff90032f8198e\",\"school_goal_id\":\"goal-abb032574f6a363eeb620734538938c2\",\"school_learning\":{\"goal_id\":\"\",\"subject\":\"数学\"},\"school_messages\":[{\"message_id\":\"h18-m01\",\"source_id\":\"qa-qq-a4\"},{\"message_id\":\"h18-m09\",\"source_id\":\"qa-qq-a4\"}],\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"可先逐题列式并验算，再请家长检查签字，周五带回交给老师。\",\"change\":\"new\",\"goal\":\"完成数学《每日练习》第26页第1—3题，第4题不做。\\n每题写出算式并验算。\\n请家长签字。\\n周五交给数学周老师。\",\"purpose\":\"learning\",\"reason\":\"老师明确布置全班数学练习，后续更正缩小范围并保留算式、验算、签字和周五交回要求。\",\"state\":\"ready\",\"submission\":\"请家长签字，周五交给数学周老师。\",\"target_id\":\"\",\"title\":\"数学：完成《每日练习》第26页第1—3题\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可先逐题列式并验算，再请家长检查签字，周五带回交给老师。\",\"auto_added\":true,\"change\":\"new\",\"goal\":\"完成数学《每日练习》第26页第1—3题，第4题不做。\\n每题写出算式并验算。\\n请家长签字。\\n周五交给数学周老师。\\n提交要求：请家长签字，周五交给数学周老师。\",\"origin_basis\":{\"message:qa-qq-a4:h18-m01\":\"60ffa91a536754a1bfc48ef4390183b218c6d367cb93d5ca4f1e1b8c5d1b35a4\",\"message:qa-qq-a4:h18-m09\":\"a57294c726ebe62804679c417da955f5c283fb445dd473abb648b41b66639cfa\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"老师明确布置全班数学练习，后续更正缩小范围并保留算式、验算、签字和周五交回要求。\",\"state\":\"ready\",\"submission\":\"请家长签字，周五交给数学周老师。\",\"target_id\":\"\",\"title\":\"数学：完成《每日练习》第26页第1—3题\"}}"
+   },
+   {
+    "id": "agent-71f9b78d5a940d15cb543ec39784eebb",
+    "job_id": "messages:c2092072f092fc9c8049e8c269721cd8a84ff610",
+    "child_id": "child-2",
+    "kind": "school",
+    "title": "带一张一寸证件照交班主任",
+    "body": "明早带一张一寸证件照，交给班主任，用于更新学生卡。\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+    "evidence": "[{\"ref\":\"message:qa-qq-b2:h18-m06\",\"text\":\"虚构二年级B班 · 2026-11-04T16:10:00+08:00\\n明早请孩子带一张一寸证件照，交给班主任，用于更新学生卡。\"},{\"ref\":\"message:qa-qq-b2:h18-m14\",\"text\":\"虚构二年级B班 · 2026-11-04T17:30:00+08:00\\n明早带证件照，一张就够，不用重新拍；现有的蓝底或白底照片都可以。\"}]",
+    "due": "2026-11-05",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:07:00+08:00",
+    "updated": "2026-11-04T23:52:06.650780+08:00",
+    "task_id": "AGENT-f818953082a70e7e66799bd4",
+    "plan": "{\"school_date_quote\":\"明早请孩子带一张一寸证件照，交给班主任，用于更新学生卡。\",\"school_generated_snapshot\":\"0b9861b5237d2cca9b356b85d568a776e186cc0041c813be73432dc683bcb09c\",\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"可今晚把照片放进书包，避免明早遗忘。\",\"change\":\"new\",\"goal\":\"明早带一张一寸证件照，交给班主任，用于更新学生卡。\\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。\",\"purpose\":\"admin\",\"reason\":\"已读文字明确要求带一张一寸证件照交班主任，后续补充说明数量、不用重拍及底色要求。\",\"state\":\"ready\",\"submission\":\"明早交给班主任\",\"target_id\":\"\",\"title\":\"带一张一寸证件照交班主任\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可今晚把照片放进书包，避免明早遗忘。\",\"auto_added\":true,\"change\":\"new\",\"goal\":\"明早带一张一寸证件照，交给班主任，用于更新学生卡。\\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。\",\"origin_basis\":{\"message:qa-qq-b2:h18-m06\":\"5f0a41299ccc9d2b7b082c9cb68314f01db77f93e7ba1a36453d0b11cb107346\",\"message:qa-qq-b2:h18-m14\":\"cf3109d4cd60ea7db8349de9d611e41b4800ab3205baca6db2818378b6da7e5b\"},\"policy\":10,\"purpose\":\"admin\",\"reason\":\"已读文字明确要求带一张一寸证件照交班主任，后续补充说明数量、不用重拍及底色要求。\",\"state\":\"ready\",\"target_id\":\"\",\"title\":\"带一张一寸证件照交班主任\"}}"
+   },
+   {
+    "id": "agent-8b5abea6a93079245b124c94868024c8",
+    "job_id": "messages:c2092072f092fc9c8049e8c269721cd8a84ff610",
+    "child_id": "child-2",
+    "kind": "school",
+    "title": "数学：完成《计算小卡》第4页1—6题",
+    "body": "完成数学《计算小卡》第4页第1—6题。\n不用抄题，直接写得数。\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。",
+    "evidence": "[{\"ref\":\"message:qa-qq-b2:h18-m03\",\"text\":\"虚构二年级B班 · 2026-11-04T15:50:00+08:00\\n数学《计算小卡》第4页第1—6题，今晚做完。不用抄题，直接写得数，明天交。\"},{\"ref\":\"message:qa-qq-b2:h18-m16\",\"text\":\"虚构二年级B班 · 2026-11-04T17:40:00+08:00\\n计算小卡还是第4页1—6题，不用抄题。做过的就不用再做一遍。\"}]",
+    "due": "2026-11-05",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:07:00+08:00",
+    "updated": "2026-11-04T20:14:00+08:00",
+    "task_id": "AGENT-45400257d2f61992fd05ddb2",
+    "plan": "{\"school_date_quote\":\"数学《计算小卡》第4页第1—6题，今晚做完。不用抄题，直接写得数，明天交。\",\"school_folded\":[{\"at\":\"2026-11-04T20:14:00+08:00\",\"item_id\":\"agent-b2a3cc2e545c71080694e0dc3a8e0d83\",\"refs\":[\"message:qa-wx-b2:h18-m11\"]}],\"school_generated_snapshot\":\"c25f3b9efd6c03fc4c94204f80227dad0372f9fdc98184515b423a0bf9c7707e\",\"school_goal_id\":\"goal-210f888e9fdf844e1824c360781efd01\",\"school_learning\":{\"goal_id\":\"\",\"subject\":\"数学\"},\"school_messages\":[{\"message_id\":\"h18-m03\",\"source_id\":\"qa-qq-b2\"},{\"message_id\":\"h18-m16\",\"source_id\":\"qa-qq-b2\"}],\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"可先按题号逐题写得数，做完后检查一遍是否漏题。\",\"change\":\"new\",\"goal\":\"完成数学《计算小卡》第4页第1—6题。\\n不用抄题，直接写得数。\\n今晚做完，明天交给老师。\\n后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\",\"purpose\":\"learning\",\"reason\":\"已读文字明确要求完成第4页1—6题并明天交，后续消息确认范围且说明做过的不用重做。\",\"state\":\"ready\",\"submission\":\"明天交给老师\",\"target_id\":\"\",\"title\":\"数学：完成《计算小卡》第4页1—6题\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可先按题号逐题写得数，做完后检查一遍是否漏题。\",\"auto_added\":true,\"change\":\"new\",\"goal\":\"完成数学《计算小卡》第4页第1—6题。\\n不用抄题，直接写得数。\\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\",\"origin_basis\":{\"message:qa-qq-b2:h18-m03\":\"3a525a080bb9ea6d63195e9bb4a78993f5e4d35dfbf0e21b369850dc047e61a3\",\"message:qa-qq-b2:h18-m16\":\"1ae8a262d2231cc7ff8bf7b5b1be5656e4453341b788a68a190350d63260e4ce\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"已读文字明确要求完成第4页1—6题并明天交，后续消息确认范围且说明做过的不用重做。\",\"state\":\"ready\",\"target_id\":\"\",\"title\":\"数学：完成《计算小卡》第4页1—6题\"}}"
+   },
+   {
+    "id": "agent-e1724f1f59a63ae55e7c30c18367cf8a",
+    "job_id": "messages:c2092072f092fc9c8049e8c269721cd8a84ff610",
+    "child_id": "child-2",
+    "kind": "school",
+    "title": "语文：完成《识字小卡》练习并家长签名",
+    "body": "完成附件《识字小卡》上的练习。\n完成后请家长在卡片下方签名。\n明早交给语文老师。\n提交要求：明早交给语文老师，卡片下方需家长签名",
+    "evidence": "[{\"ref\":\"message:qa-qq-b2:h18-m08\",\"text\":\"虚构二年级B班 · 2026-11-04T16:20:00+08:00\\n今晚完成附件这张《识字小卡》上的练习，明早交给我。\"},{\"ref\":\"message:qa-qq-b2:h18-m15\",\"text\":\"虚构二年级B班 · 2026-11-04T17:35:00+08:00\\n刚才的《识字小卡》，完成后还请家长在卡片下方签名，明早交给我。\"}]",
+    "due": "2026-11-05",
+    "care_id": "",
+    "record_id": null,
+    "state": "pending",
+    "created": "2026-11-04T20:07:00+08:00",
+    "updated": "2026-11-04T20:07:00+08:00",
+    "task_id": "",
+    "plan": "{\"school_date_quote\":\"今晚完成附件这张《识字小卡》上的练习，明早交给我。\",\"school_generated_snapshot\":\"4ecd6e1641218b251b84fdb250ad5e5c53a6f7733c383c57579538bfe0642b65\",\"school_goal_id\":\"goal-4388ffaff365b1a487187edff8edde95\",\"school_learning\":{\"goal_id\":\"\",\"subject\":\"语文\"},\"school_messages\":[{\"message_id\":\"h18-m08\",\"source_id\":\"qa-qq-b2\"},{\"message_id\":\"h18-m15\",\"source_id\":\"qa-qq-b2\"}],\"school_pending_seen\":[],\"school_selection_receipt\":{\"advice\":\"可先完成卡片练习，再请家长检查并在下方签名。\",\"change\":\"new\",\"goal\":\"完成附件《识字小卡》上的练习。\\n完成后请家长在卡片下方签名。\\n明早交给语文老师。\",\"purpose\":\"learning\",\"reason\":\"正文已明确完成《识字小卡》练习、家长签名并明早交，但附件图片内容未读，具体练习题目未知。\",\"state\":\"review\",\"submission\":\"明早交给语文老师，卡片下方需家长签名\",\"target_id\":\"\",\"title\":\"语文：完成《识字小卡》练习并家长签名\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可先完成卡片练习，再请家长检查并在下方签名。\",\"change\":\"new\",\"goal\":\"完成附件《识字小卡》上的练习。\\n完成后请家长在卡片下方签名。\\n明早交给语文老师。\\n提交要求：明早交给语文老师，卡片下方需家长签名\",\"origin_basis\":{\"message:qa-qq-b2:h18-m08\":\"58f54ccd8bd7e664156d0b0b36ee9dfb6f8dc3be221fbddefef9ab4b886613a3\",\"message:qa-qq-b2:h18-m15\":\"4431995c644b12639c4c31765d32299590c462d0e862986054be0b3e5e4f6d92\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"正文已明确完成《识字小卡》练习、家长签名并明早交，但附件图片内容未读，具体练习题目未知。\",\"state\":\"review\",\"submission\":\"明早交给语文老师，卡片下方需家长签名\",\"target_id\":\"\",\"title\":\"语文：完成《识字小卡》练习并家长签名\"}}"
+   },
+   {
+    "id": "agent-fc7084f0f0161b640c8d9b8d78cd1520",
+    "job_id": "messages:63400213ac96466ca080659d09fe3e7ad6ed8de7",
+    "child_id": "child-1",
+    "kind": "school",
+    "title": "语文：朗读《风经过小巷》第2、3自然段",
+    "body": "朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n明早抽听。",
+    "evidence": "[{\"ref\":\"message:qa-qq-a4:h18-m18\",\"text\":\"虚构四年级A班 · 2026-11-04T18:15:00+08:00\\n朗读仍是《风经过小巷》第2、3自然段各两遍，不用背诵，明早抽听。\"}]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:07:00+08:00",
+    "updated": "2026-11-04T20:07:00+08:00",
+    "task_id": "AGENT-160c6c9c820698a880291826",
+    "plan": "{\"school_date_quote\":\"朗读仍是《风经过小巷》第2、3自然段各两遍，不用背诵，明早抽听\",\"school_duplicate_of\":\"agent-602b344bde374f9e19cd837a2268489b\",\"school_generated_snapshot\":\"fac4dfd8c1d3caa86bbb857b34edd088539b2c6d14ace8923c71c807b3b02a7b\",\"school_native_notice\":[{\"id\":\"native:739c67ec3ce2860d615c7c1b\",\"quote\":\"朗读仍是《风经过小巷》第2、3自然段各两遍，不用背诵，明早抽听\",\"ref\":\"message:qa-qq-a4:h18-m18\"}],\"school_pending_seen\":[\"pending:agent-4a14fa58a20ce5fd04716d99246c3f67\",\"pending:agent-0049f82473af2b6a7ea940d7503d5835\"],\"school_same_receipt\":{\"folded_at\":\"2026-11-04T20:07:00+08:00\",\"input_basis\":{\"message:qa-qq-a4:h18-m18\":\"07d6ab502262fb49f3fdd93418cd99e9217d47dbb918e058565394a5c554aede\"},\"link\":{},\"task_id\":\"AGENT-160c6c9c820698a880291826\"},\"school_selection_receipt\":{\"advice\":\"可分两次朗读，每次读一个自然段两遍，读顺即可，不必背。\",\"change\":\"same\",\"goal\":\"朗读《风经过小巷》第2、3自然段，各读两遍。\\n不用背诵。\\n明早抽听。\",\"purpose\":\"learning\",\"reason\":\"本条是同一发布者对已保存朗读事项的再次提醒，对象、范围、次数与“不用背诵、明早抽听”均与原事项一致，无新增或改变要求。\",\"state\":\"ready\",\"submission\":\"\",\"target_id\":\"AGENT-160c6c9c820698a880291826\",\"title\":\"语文：朗读《风经过小巷》第2、3自然段\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可分两次朗读，每次读一个自然段两遍，读顺即可，不必背。\",\"change\":\"same\",\"goal\":\"朗读《风经过小巷》第2、3自然段，各读两遍。\\n不用背诵。\\n明早抽听。\",\"input_basis\":{\"message:qa-qq-a4:h18-m18\":\"07d6ab502262fb49f3fdd93418cd99e9217d47dbb918e058565394a5c554aede\"},\"origin_basis\":{\"message:qa-qq-a4:h18-m18\":\"07d6ab502262fb49f3fdd93418cd99e9217d47dbb918e058565394a5c554aede\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"本条是同一发布者对已保存朗读事项的再次提醒，对象、范围、次数与“不用背诵、明早抽听”均与原事项一致，无新增或改变要求。\",\"state\":\"ready\",\"target_basis\":{\"canonical_id\":\"agent-602b344bde374f9e19cd837a2268489b\",\"canonical_updated\":\"2026-11-04T23:51:57.380849+08:00\",\"due\":\"2026-11-04\",\"fingerprint\":\"8ba490d56a1dc26b8d75a4199df5f036bd56c46653e813882adffc831e0d2fb6\",\"title\":\"朗读《风经过小巷》第2、3自然段\",\"updated\":\"\",\"version\":0},\"target_id\":\"AGENT-160c6c9c820698a880291826\",\"title\":\"语文：朗读《风经过小巷》第2、3自然段\"}}"
+   },
+   {
+    "id": "agent-b2a3cc2e545c71080694e0dc3a8e0d83",
+    "job_id": "messages:60bd35a44591132422d5defabcec8b45ea6f7c59",
+    "child_id": "child-2",
+    "kind": "school",
+    "title": "数学：完成《计算小卡》第4页1—6题",
+    "body": "完成数学《计算小卡》第4页第1—6题。\n今晚做完，明天交。\n不另加题。",
+    "evidence": "[{\"ref\":\"message:qa-wx-b2:h18-m11\",\"text\":\"虚构二年级B班提醒群 · 2026-11-04T17:15:00+08:00\\n数学《计算小卡》第4页1—6题再提醒一下，今晚做完，明天交，不另加题。\"}]",
+    "due": "2026-11-05",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:14:00+08:00",
+    "updated": "2026-11-04T20:14:00+08:00",
+    "task_id": "AGENT-45400257d2f61992fd05ddb2",
+    "plan": "{\"school_date_quote\":\"数学《计算小卡》第4页1—6题再提醒一下，今晚做完，明天交，不另加题。\",\"school_duplicate_of\":\"agent-8b5abea6a93079245b124c94868024c8\",\"school_generated_snapshot\":\"c468f73fea5339253d16a64f4d56632d4fb72783b76b0264fb5ecf1639a3a9ad\",\"school_pending_seen\":[\"pending:agent-e1724f1f59a63ae55e7c30c18367cf8a\"],\"school_same_receipt\":{\"folded_at\":\"2026-11-04T20:14:00+08:00\",\"input_basis\":{\"message:qa-wx-b2:h18-m11\":\"ab35edac5609c859e19f93e8020d388ce4d8993eb0fe8e0a8ac180a0e27aa59e\"},\"link\":{},\"task_id\":\"AGENT-45400257d2f61992fd05ddb2\"},\"school_selection_receipt\":{\"advice\":\"可先按题号顺序完成，做完后自行检查一遍再收进书包。\",\"change\":\"same\",\"goal\":\"完成数学《计算小卡》第4页第1—6题。\\n今晚做完，明天交。\\n不另加题。\",\"purpose\":\"learning\",\"reason\":\"与已保存的《计算小卡》第4页1—6题事项对象、范围、次数一致，本条为再次提醒，无新增或改变要求。\",\"state\":\"ready\",\"submission\":\"明天交给老师\",\"target_id\":\"AGENT-45400257d2f61992fd05ddb2\",\"title\":\"数学：完成《计算小卡》第4页1—6题\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可先按题号顺序完成，做完后自行检查一遍再收进书包。\",\"change\":\"same\",\"goal\":\"完成数学《计算小卡》第4页第1—6题。\\n今晚做完，明天交。\\n不另加题。\",\"input_basis\":{\"message:qa-wx-b2:h18-m11\":\"48521d46b5b9c7d466c4f9314991a04542569b26abbe0e36e964b273ef5691b4\"},\"origin_basis\":{\"message:qa-wx-b2:h18-m11\":\"48521d46b5b9c7d466c4f9314991a04542569b26abbe0e36e964b273ef5691b4\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"与已保存的《计算小卡》第4页1—6题事项对象、范围、次数一致，本条为再次提醒，无新增或改变要求。\",\"state\":\"ready\",\"target_basis\":{\"canonical_id\":\"agent-8b5abea6a93079245b124c94868024c8\",\"canonical_updated\":\"2026-11-04T23:52:06.655740+08:00\",\"due\":\"2026-11-05\",\"fingerprint\":\"446fc9ef6b0689def414f4aa0fcc334a8de9db75fd0af328b7d3a75a1f174e07\",\"title\":\"数学：完成《计算小卡》第4页1—6题\",\"updated\":\"\",\"version\":0},\"target_id\":\"AGENT-45400257d2f61992fd05ddb2\",\"title\":\"数学：完成《计算小卡》第4页1—6题\"}}"
+   },
+   {
+    "id": "agent-fb405f0e826bec92ed47e93b57de4ce8",
+    "job_id": "messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281",
+    "child_id": "child-1",
+    "kind": "school",
+    "title": "语文：朗读《风经过小巷》第2、3自然段",
+    "body": "今晚朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n不用录音，也不用上传。\n今天18:30由家长听读。\n明早老师抽听。",
+    "evidence": "[{\"ref\":\"message:qa-manual-a:h18-m10\",\"text\":\"虚构家庭手动补录（甲） · 2026-11-04T17:10:00+08:00\\n林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。\"}]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "accepted",
+    "created": "2026-11-04T20:14:00+08:00",
+    "updated": "2026-11-04T20:14:00+08:00",
+    "task_id": "AGENT-160c6c9c820698a880291826",
+    "plan": "{\"school_date_quote\":\"林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。\",\"school_duplicate_of\":\"agent-602b344bde374f9e19cd837a2268489b\",\"school_generated_snapshot\":\"46786a13cd4787be1c9ded80c0776e864338c35cc22153ab131fe6752585ef92\",\"school_pending_seen\":[\"pending:agent-4a14fa58a20ce5fd04716d99246c3f67\",\"pending:agent-0049f82473af2b6a7ea940d7503d5835\"],\"school_same_receipt\":{\"folded_at\":\"2026-11-04T20:14:00+08:00\",\"input_basis\":{\"message:qa-manual-a:h18-m10\":\"ad13e98b2f3d87c960463551e1dc9129bcdb231e5a0b1ad73bec3e243295807e\"},\"link\":{},\"task_id\":\"AGENT-160c6c9c820698a880291826\"},\"school_selection_receipt\":{\"advice\":\"可先让孩子自己通读一遍熟悉句子，再按两遍要求读给家长听。\",\"change\":\"same\",\"goal\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍。\\n不用背诵。\\n不用录音，也不用上传。\\n今天18:30由家长听读。\\n明早老师抽听。\",\"purpose\":\"learning\",\"reason\":\"家长转述同一朗读事项的再次提醒，对象、范围、次数与已保存事项一致，仅补充家长18:30听读。\",\"state\":\"ready\",\"submission\":\"\",\"target_id\":\"AGENT-160c6c9c820698a880291826\",\"title\":\"语文：朗读《风经过小巷》第2、3自然段\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可先让孩子自己通读一遍熟悉句子，再按两遍要求读给家长听。\",\"change\":\"same\",\"goal\":\"今晚朗读《风经过小巷》第2、3自然段，各读两遍。\\n不用背诵。\\n不用录音，也不用上传。\\n今天18:30由家长听读。\\n明早老师抽听。\",\"input_basis\":{\"message:qa-manual-a:h18-m10\":\"ad13e98b2f3d87c960463551e1dc9129bcdb231e5a0b1ad73bec3e243295807e\"},\"origin_basis\":{\"message:qa-manual-a:h18-m10\":\"ad13e98b2f3d87c960463551e1dc9129bcdb231e5a0b1ad73bec3e243295807e\"},\"policy\":10,\"purpose\":\"learning\",\"reason\":\"家长转述同一朗读事项的再次提醒，对象、范围、次数与已保存事项一致，仅补充家长18:30听读。\",\"state\":\"ready\",\"target_basis\":{\"canonical_id\":\"agent-602b344bde374f9e19cd837a2268489b\",\"canonical_updated\":\"2026-11-04T20:07:00+08:00\",\"due\":\"2026-11-04\",\"fingerprint\":\"472daf7b90b642b0b84aaaf53aedbc8a019232cd45a1e65000e26518e0e60ea8\",\"title\":\"朗读《风经过小巷》第2、3自然段\",\"updated\":\"\",\"version\":0},\"target_id\":\"AGENT-160c6c9c820698a880291826\",\"title\":\"语文：朗读《风经过小巷》第2、3自然段\"}}"
+   },
+   {
+    "id": "agent-ebcd63eaf52b302d3edfb6093a979087",
+    "job_id": "messages:b8866f44df2e2b00023783bd12d947d03db60ad6",
+    "child_id": "child-2",
+    "kind": "school",
+    "title": "明天带一盒彩笔",
+    "body": "明天带一盒彩笔。",
+    "evidence": "[{\"ref\":\"message:qa-manual-b:h18-m17\",\"text\":\"虚构家庭手动补录（乙） · 2026-11-04T18:10:00+08:00\\n美术老师今天课上说，明天带一盒彩笔。我没看到群里有这条通知。\"}]",
+    "due": "2026-11-05",
+    "care_id": "",
+    "record_id": null,
+    "state": "pending",
+    "created": "2026-11-04T20:21:00+08:00",
+    "updated": "2026-11-04T20:21:00+08:00",
+    "task_id": "",
+    "plan": "{\"school_date_quote\":\"明天带一盒彩笔\",\"school_generated_snapshot\":\"9a186ac8434f987c65ace9208417e2c9177b4eb3c35a4ebd5dc1b40bb0784b14\",\"school_pending_seen\":[\"pending:agent-e1724f1f59a63ae55e7c30c18367cf8a\"],\"school_selection_receipt\":{\"advice\":\"可把彩笔放进书包，避免第二天忘带。\",\"change\":\"new\",\"goal\":\"明天带一盒彩笔。\\n这是孩子转述美术老师课上口头要求，群里没有对应通知。\",\"purpose\":\"admin\",\"reason\":\"仅孩子口头转述老师课上的要求，群内无通知，发布者身份与要求是否面向全班待核。\",\"state\":\"review\",\"submission\":\"\",\"target_id\":\"\",\"title\":\"美术：带一盒彩笔\"},\"school_selection_revision\":2,\"school_task\":{\"advice\":\"可把彩笔放进书包，避免第二天忘带。\",\"change\":\"new\",\"goal\":\"明天带一盒彩笔。\",\"origin_basis\":{\"message:qa-manual-b:h18-m17\":\"b3b4673e91498a411519761754072f8cb6a2b0be6626cb0c1bdd97f47cc831b6\"},\"policy\":10,\"purpose\":\"admin\",\"reason\":\"仅孩子口头转述老师课上的要求，群内无通知，发布者身份与要求是否面向全班待核。\",\"state\":\"review\",\"target_id\":\"\",\"title\":\"明天带一盒彩笔\"}}"
+   },
+   {
+    "id": "goal-4aa066595907e486319200acadd6c92f",
+    "job_id": "manual-goal:goal-4aa066595907e486319200acadd6c92f",
+    "child_id": "child-1",
+    "kind": "care",
+    "title": "英语：学校学习要求",
+    "body": "由学校学习要求启动，尚无孩子实际作答或掌握证据。",
+    "evidence": "[]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "draft",
+    "created": "2026-11-04T23:51:57.387515+08:00",
+    "updated": "2026-11-04T23:51:57.387890+08:00",
+    "task_id": "",
+    "plan": "{\"create_hash\":\"cdb877951b0c9f31ba8e4a0dc3ef754b6ae2603ae3af950f8ee8dad9bbf40ed5\",\"goal_history\":[],\"goal_version\":1,\"learning\":{\"baseline\":\"由学校学习要求启动，尚无孩子实际作答或掌握证据。\",\"curriculum\":\"\",\"hypotheses\":\"\",\"record_ids\":[],\"resources\":\"\",\"school_target\":\"\",\"subject\":\"英语\",\"title\":\"英语：学校学习要求\",\"verification\":\"\"},\"lifecycle\":\"active\",\"school_origin\":true}"
+   },
+   {
+    "id": "goal-47b93177aabb4f3f89a919a79121db81",
+    "job_id": "manual-goal:goal-47b93177aabb4f3f89a919a79121db81",
+    "child_id": "child-1",
+    "kind": "care",
+    "title": "语文：学校学习要求",
+    "body": "由学校学习要求启动，尚无孩子实际作答或掌握证据。",
+    "evidence": "[]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "draft",
+    "created": "2026-11-04T23:51:57.390606+08:00",
+    "updated": "2026-11-04T23:51:57.391060+08:00",
+    "task_id": "",
+    "plan": "{\"create_hash\":\"0540f0c432a8f4c71632edfd93a7d9abd06ffaad8e9869fc4c5f634946907d6e\",\"goal_history\":[],\"goal_version\":1,\"learning\":{\"baseline\":\"由学校学习要求启动，尚无孩子实际作答或掌握证据。\",\"curriculum\":\"\",\"hypotheses\":\"\",\"record_ids\":[],\"resources\":\"\",\"school_target\":\"\",\"subject\":\"语文\",\"title\":\"语文：学校学习要求\",\"verification\":\"\"},\"lifecycle\":\"active\",\"school_origin\":true}"
+   },
+   {
+    "id": "goal-abb032574f6a363eeb620734538938c2",
+    "job_id": "manual-goal:goal-abb032574f6a363eeb620734538938c2",
+    "child_id": "child-1",
+    "kind": "care",
+    "title": "数学：学校学习要求",
+    "body": "由学校学习要求启动，尚无孩子实际作答或掌握证据。",
+    "evidence": "[]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "draft",
+    "created": "2026-11-04T23:51:57.404849+08:00",
+    "updated": "2026-11-04T23:51:57.405228+08:00",
+    "task_id": "",
+    "plan": "{\"create_hash\":\"3dee7b5c8c329cd1948faadf87c75cc23b030821840b6d29dd4f656fa1c2e5fc\",\"goal_history\":[],\"goal_version\":1,\"learning\":{\"baseline\":\"由学校学习要求启动，尚无孩子实际作答或掌握证据。\",\"curriculum\":\"\",\"hypotheses\":\"\",\"record_ids\":[],\"resources\":\"\",\"school_target\":\"\",\"subject\":\"数学\",\"title\":\"数学：学校学习要求\",\"verification\":\"\"},\"lifecycle\":\"active\",\"school_origin\":true}"
+   },
+   {
+    "id": "goal-210f888e9fdf844e1824c360781efd01",
+    "job_id": "manual-goal:goal-210f888e9fdf844e1824c360781efd01",
+    "child_id": "child-2",
+    "kind": "care",
+    "title": "数学：学校学习要求",
+    "body": "由学校学习要求启动，尚无孩子实际作答或掌握证据。",
+    "evidence": "[]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "draft",
+    "created": "2026-11-04T23:52:06.665795+08:00",
+    "updated": "2026-11-04T23:52:06.666259+08:00",
+    "task_id": "",
+    "plan": "{\"create_hash\":\"d6285f92a530ab8217277b45680f9952b68358ea615709cbfff589ae2514979d\",\"goal_history\":[],\"goal_version\":1,\"learning\":{\"baseline\":\"由学校学习要求启动，尚无孩子实际作答或掌握证据。\",\"curriculum\":\"\",\"hypotheses\":\"\",\"record_ids\":[],\"resources\":\"\",\"school_target\":\"\",\"subject\":\"数学\",\"title\":\"数学：学校学习要求\",\"verification\":\"\"},\"lifecycle\":\"active\",\"school_origin\":true}"
+   },
+   {
+    "id": "goal-4388ffaff365b1a487187edff8edde95",
+    "job_id": "manual-goal:goal-4388ffaff365b1a487187edff8edde95",
+    "child_id": "child-2",
+    "kind": "care",
+    "title": "语文：学校学习要求",
+    "body": "由学校学习要求启动，尚无孩子实际作答或掌握证据。",
+    "evidence": "[]",
+    "due": "",
+    "care_id": "",
+    "record_id": null,
+    "state": "draft",
+    "created": "2026-11-04T23:52:06.676752+08:00",
+    "updated": "2026-11-04T23:52:06.677154+08:00",
+    "task_id": "",
+    "plan": "{\"create_hash\":\"403b0af9017c2adbaeb2eb57c26f437c94ef59651e206071c8ee41a58a381e6e\",\"goal_history\":[],\"goal_version\":1,\"learning\":{\"baseline\":\"由学校学习要求启动，尚无孩子实际作答或掌握证据。\",\"curriculum\":\"\",\"hypotheses\":\"\",\"record_ids\":[],\"resources\":\"\",\"school_target\":\"\",\"subject\":\"语文\",\"title\":\"语文：学校学习要求\",\"verification\":\"\"},\"lifecycle\":\"active\",\"school_origin\":true}"
+   }
+  ],
+  "tasks": [
+   {
+    "id": "AGENT-160c6c9c820698a880291826",
+    "child": "示例甲",
+    "title": "朗读《风经过小巷》第2、3自然段",
+    "due": "2026-11-04",
+    "original_status": "待跟进",
+    "source": "Agent建议:agent-602b344bde374f9e19cd837a2268489b\nmessage:qa-qq-a4:h18-m02\n虚构四年级A班 · 2026-11-04T15:45:00+08:00\n今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听。",
+    "action": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\n朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n明早抽听。\n今晚朗读《风经过小巷》第2、3自然段，各读两遍。\n不用录音，也不用上传。\n今天18:30由家长听读。\n明早老师抽听。"
+   },
+   {
+    "id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+    "child": "示例甲",
+    "title": "数学：完成《每日练习》第26页第1—3题",
+    "due": "2026-11-06",
+    "original_status": "待跟进",
+    "source": "Agent建议:agent-f95d8805ae24997da44f15f2f94e68d6\nmessage:qa-qq-a4:h18-m01\n虚构四年级A班 · 2026-11-04T15:40:00+08:00\n数学《每日练习》第26页第1—4题，今晚完成。每题写出算式并验算，请家长签字，周五交给我。\n\nmessage:qa-qq-a4:h18-m09\n虚构四年级A班 · 2026-11-04T17:00:00+08:00\n更正今天数学《每日练习》的范围：第26页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。",
+    "action": "完成数学《每日练习》第26页第1—3题，第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学周老师。\n提交要求：请家长签字，周五交给数学周老师。"
+   },
+   {
+    "id": "AGENT-f818953082a70e7e66799bd4",
+    "child": "示例乙",
+    "title": "带一张一寸证件照交班主任",
+    "due": "2026-11-05",
+    "original_status": "待跟进",
+    "source": "Agent建议:agent-71f9b78d5a940d15cb543ec39784eebb\nmessage:qa-qq-b2:h18-m06\n虚构二年级B班 · 2026-11-04T16:10:00+08:00\n明早请孩子带一张一寸证件照，交给班主任，用于更新学生卡。\n\nmessage:qa-qq-b2:h18-m14\n虚构二年级B班 · 2026-11-04T17:30:00+08:00\n明早带证件照，一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+    "action": "明早带一张一寸证件照，交给班主任，用于更新学生卡。\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。"
+   },
+   {
+    "id": "AGENT-45400257d2f61992fd05ddb2",
+    "child": "示例乙",
+    "title": "数学：完成《计算小卡》第4页1—6题",
+    "due": "2026-11-05",
+    "original_status": "待跟进",
+    "source": "Agent建议:agent-8b5abea6a93079245b124c94868024c8\nmessage:qa-qq-b2:h18-m03\n虚构二年级B班 · 2026-11-04T15:50:00+08:00\n数学《计算小卡》第4页第1—6题，今晚做完。不用抄题，直接写得数，明天交。\n\nmessage:qa-qq-b2:h18-m16\n虚构二年级B班 · 2026-11-04T17:40:00+08:00\n计算小卡还是第4页1—6题，不用抄题。做过的就不用再做一遍。",
+    "action": "完成数学《计算小卡》第4页第1—6题。\n不用抄题，直接写得数。\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\n今晚做完，明天交。\n不另加题。"
+   },
+   {
+    "id": "AGENT-e9f38c84c51730cf04a9bc35",
+    "child": "示例甲",
+    "title": "英语：完成《每日练习》并明天带来",
+    "due": "2026-11-05",
+    "original_status": "待跟进",
+    "source": "Agent建议:agent-4a14fa58a20ce5fd04716d99246c3f67\nmessage:qa-qq-a4:h18-m05\n虚构四年级A班 · 2026-11-04T16:05:00+08:00\n英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。",
+    "action": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。\n不需要录音。"
+   }
+  ],
+  "messages": [
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m01",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m01",
+     "kind": "text",
+     "message_order": "1",
+     "sender": "数学周老师",
+     "sender_id": "qa-qq-a-math",
+     "text": "数学《每日练习》第26页第1—4题，今晚完成。每题写出算式并验算，请家长签字，周五交给我。",
+     "time": "2026-11-04T15:40:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m02",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m02",
+     "kind": "text",
+     "message_order": "2",
+     "sender": "语文林老师",
+     "sender_id": "qa-qq-a-chinese",
+     "text": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听。",
+     "time": "2026-11-04T15:45:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m05",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m05",
+     "kind": "text",
+     "message_order": "3",
+     "sender": "英语唐老师",
+     "sender_id": "qa-qq-a-english",
+     "text": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。",
+     "time": "2026-11-04T16:05:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m07",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m07",
+     "kind": "text",
+     "message_order": "4",
+     "sender": "美术许老师",
+     "sender_id": "qa-qq-a-art",
+     "text": "明天美术课每人带两片落叶，夹在一本旧书里带来。",
+     "time": "2026-11-04T16:15:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m09",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m09",
+     "kind": "text",
+     "message_order": "5",
+     "sender": "数学周老师",
+     "sender_id": "qa-qq-a-math",
+     "text": "更正今天数学《每日练习》的范围：第26页只做第1—3题，第4题不做。写算式、验算和家长签字、周五交回都不变。",
+     "time": "2026-11-04T17:00:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m12",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m12",
+     "kind": "text",
+     "message_order": "6",
+     "sender": "美术许老师",
+     "sender_id": "qa-qq-a-art",
+     "text": "明天美术改用教室里的材料，刚才收集并带两片落叶那一项取消，不用带叶子和夹叶子的旧书。",
+     "time": "2026-11-04T17:20:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m13",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m13",
+     "kind": "text",
+     "message_order": "7",
+     "sender": "英语唐老师",
+     "sender_id": "qa-qq-a-english",
+     "text": "补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。",
+     "time": "2026-11-04T17:25:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m18",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m18",
+     "kind": "text",
+     "message_order": "8",
+     "sender": "语文林老师",
+     "sender_id": "qa-qq-a-chinese",
+     "text": "朗读仍是《风经过小巷》第2、3自然段各两遍，不用背诵，明早抽听。",
+     "time": "2026-11-04T18:15:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-wx-a4",
+    "message_id": "h18-m04",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m04",
+     "kind": "text",
+     "message_order": "1",
+     "sender": "数学周老师",
+     "sender_id": "qa-wx-a-math",
+     "text": "再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。",
+     "time": "2026-11-04T16:00:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-b2",
+    "message_id": "h18-m03",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m03",
+     "kind": "text",
+     "message_order": "1",
+     "sender": "数学陈老师",
+     "sender_id": "qa-qq-b-math",
+     "text": "数学《计算小卡》第4页第1—6题，今晚做完。不用抄题，直接写得数，明天交。",
+     "time": "2026-11-04T15:50:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-b2",
+    "message_id": "h18-m06",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m06",
+     "kind": "text",
+     "message_order": "2",
+     "sender": "班主任吴老师",
+     "sender_id": "qa-qq-b-head",
+     "text": "明早请孩子带一张一寸证件照，交给班主任，用于更新学生卡。",
+     "time": "2026-11-04T16:10:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-b2",
+    "message_id": "h18-m08",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m08",
+     "kind": "text",
+     "message_order": "3",
+     "sender": "语文郑老师",
+     "sender_id": "qa-qq-b-chinese",
+     "text": "今晚完成附件这张《识字小卡》上的练习，明早交给我。",
+     "time": "2026-11-04T16:20:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-b2",
+    "message_id": "h18-m14",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m14",
+     "kind": "text",
+     "message_order": "4",
+     "sender": "班主任吴老师",
+     "sender_id": "qa-qq-b-head",
+     "text": "明早带证件照，一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+     "time": "2026-11-04T17:30:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-b2",
+    "message_id": "h18-m15",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m15",
+     "kind": "text",
+     "message_order": "5",
+     "sender": "语文郑老师",
+     "sender_id": "qa-qq-b-chinese",
+     "text": "刚才的《识字小卡》，完成后还请家长在卡片下方签名，明早交给我。",
+     "time": "2026-11-04T17:35:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-qq-b2",
+    "message_id": "h18-m16",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m16",
+     "kind": "text",
+     "message_order": "6",
+     "sender": "数学陈老师",
+     "sender_id": "qa-qq-b-math",
+     "text": "计算小卡还是第4页1—6题，不用抄题。做过的就不用再做一遍。",
+     "time": "2026-11-04T17:40:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-wx-b2",
+    "message_id": "h18-m11",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m11",
+     "kind": "text",
+     "message_order": "1",
+     "sender": "数学陈老师",
+     "sender_id": "qa-wx-b-math",
+     "text": "数学《计算小卡》第4页1—6题再提醒一下，今晚做完，明天交，不另加题。",
+     "time": "2026-11-04T17:15:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-manual-a",
+    "message_id": "h18-m10",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m10",
+     "kind": "text",
+     "message_order": "1",
+     "sender": "虚构家长",
+     "sender_id": "qa-parent",
+     "text": "林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。",
+     "time": "2026-11-04T17:10:00+08:00",
+     "unread": false
+    }
+   },
+   {
+    "source_id": "qa-manual-b",
+    "message_id": "h18-m17",
+    "processed": 1,
+    "payload": {
+     "id": "h18-m17",
+     "kind": "text",
+     "message_order": "1",
+     "sender": "虚构孩子乙",
+     "sender_id": "qa-child-b-speaker",
+     "text": "美术老师今天课上说，明天带一盒彩笔。我没看到群里有这条通知。",
+     "time": "2026-11-04T18:10:00+08:00",
+     "unread": false
+    }
+   }
+  ],
+  "jobs": [
+   {
+    "id": "school-audit-boundary",
+    "fingerprint": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "attempts": 0,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:9640c43dccaed13f9dd5c1bf2dec5d5ed5958bc6",
+    "fingerprint": "e4316d6a9d9d3afba13c9cb3c03bfb2f2235f1c90e604028a15e47d47fd223c6",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:3efb454d4479b3a9d449542a3122b404a72d7843",
+    "fingerprint": "9222ed2e219f07f81f0e9486cbd85cfd4343de78a4a1ca2b1776400f14a574c5",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "pdf-material:cfb525a1924ecc9e568f32b16acd655e8bc784da",
+    "fingerprint": "4185e8dfa878f91aa5f39b19df81da40d57195b719c21c799a9fb26d37a9723d",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:63400213ac96466ca080659d09fe3e7ad6ed8de7",
+    "fingerprint": "06c7577e574049c0b86172daeb02e07f4974138da3d909fcc5f48a41e2dbfb84",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:c2092072f092fc9c8049e8c269721cd8a84ff610",
+    "fingerprint": "5f67e93de85f40e2ce8461d3397edd635d0a0f38e2e5713c3e580544ea8b0432",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:60bd35a44591132422d5defabcec8b45ea6f7c59",
+    "fingerprint": "caa44a076caf9227e4b740a497278b999f3308a92a77cb1ecd2548654afdb40b",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:c3e5236d3ee2f977cc52ead63f944585ecfd9281",
+    "fingerprint": "56f1ec9af001c0e578d90b1f319569ae2612b288bd7a221c678acc2e5d4ce78f",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "messages:b8866f44df2e2b00023783bd12d947d03db60ad6",
+    "fingerprint": "83f2d4b8f79b3c832521d2fe1be0919c6830da96934139bff804ec04fb3d8b7d",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   },
+   {
+    "id": "school-task:agent-4a14fa58a20ce5fd04716d99246c3f67",
+    "fingerprint": "cb21fbd9ab8fe5184f5a38cf4b3abddbe2ddffba87a2cbe09daf39a62a17cbb7",
+    "attempts": 1,
+    "next_try": "",
+    "error": "",
+    "done": 1
+   }
+  ],
+  "pdf_material": [
+   {
+    "source_id": "qa-qq-a4",
+    "message_id": "h18-m05",
+    "fingerprint": "84122e75d50f6528567a631b019385058f497bff3d1d49b51f8ab4ec189f19d2",
+    "first_page": 1,
+    "pages": "[1]",
+    "page_count": 1,
+    "payload": "{\"kind\": \"school_material\", \"title\": \"英语《每日练习》\", \"note\": \"老师写明的英语练习要求，未见孩子作答。\", \"uncertainties\": [], \"originals\": [{\"upload_id\": \"cc896144d31133dc615d6200ad6b3075\", \"title\": \"英语《每日练习》\", \"note\": \"老师写明的英语练习要求，未见孩子作答。\", \"uncertainties\": [], \"requirements\": [\"一、看图选词第1—3题。\", \"二、标星单词 under、near 各抄写一遍。\", \"不需要录音。\"], \"deferred_contexts\": []}], \"scope_requested\": 1}",
+    "updated": "2026-11-04T20:00:00+08:00"
+   }
+  ],
+  "drafts": [],
+  "day": {
+   "events": [],
+   "timetables": [],
+   "source_error": "",
+   "agenda": [
+    {
+     "id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "task_id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "英语：完成《每日练习》并明天带来",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:05:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m05",
+        "source_name": "虚构四年级A班",
+        "sender": "英语唐老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "deadline",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "英语"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。\n不需要录音。",
+     "touched": false,
+     "day": "2026-11-04"
+    },
+    {
+     "id": "AGENT-45400257d2f61992fd05ddb2",
+     "task_id": "AGENT-45400257d2f61992fd05ddb2",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "数学：完成《计算小卡》第4页1—6题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:50:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m03",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m16",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《计算小卡》第4页第1—6题。\n不用抄题，直接写得数。\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\n今晚做完，明天交。\n不另加题。",
+     "touched": false,
+     "day": "2026-11-04"
+    },
+    {
+     "id": "AGENT-f818953082a70e7e66799bd4",
+     "task_id": "AGENT-f818953082a70e7e66799bd4",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "带一张一寸证件照交班主任",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m06",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m14",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "明早带一张一寸证件照，交给班主任，用于更新学生卡。\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+     "touched": false,
+     "day": "2026-11-04"
+    },
+    {
+     "id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "task_id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "数学：完成《每日练习》第26页第1—3题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:40:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m01",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m09",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       }
+      ],
+      "due_on": "2026-11-06",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《每日练习》第26页第1—3题，第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学周老师。\n提交要求：请家长签字，周五交给数学周老师。",
+     "touched": false,
+     "day": "2026-11-04"
+    },
+    {
+     "id": "AGENT-160c6c9c820698a880291826",
+     "task_id": "AGENT-160c6c9c820698a880291826",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "朗读《风经过小巷》第2、3自然段",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:45:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m02",
+        "source_name": "虚构四年级A班",
+        "sender": "语文林老师"
+       }
+      ],
+      "due_on": "2026-11-04",
+      "due_kind": "deadline",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "submit_on": "2026-11-05",
+      "submit_words": "明早我抽听",
+      "submit_role": "check",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\n朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n明早抽听。\n今晚朗读《风经过小巷》第2、3自然段，各读两遍。\n不用录音，也不用上传。\n今天18:30由家长听读。\n明早老师抽听。",
+     "touched": false,
+     "day": "2026-11-04"
+    },
+    {
+     "id": "agent-ebcd63eaf52b302d3edfb6093a979087",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "明天带一盒彩笔",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T18:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-manual-b:h18-m17",
+        "source_name": "虚构家庭手动补录（乙）",
+        "sender": "虚构孩子乙"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "明天带一盒彩笔。",
+     "day": "2026-11-04"
+    },
+    {
+     "id": "agent-e1724f1f59a63ae55e7c30c18367cf8a",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "语文：完成《识字小卡》练习并家长签名",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:20:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m08",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m15",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成附件《识字小卡》上的练习。\n完成后请家长在卡片下方签名。\n明早交给语文老师。\n提交要求：明早交给语文老师，卡片下方需家长签名",
+     "day": "2026-11-04"
+    },
+    {
+     "id": "agent-0049f82473af2b6a7ea940d7503d5835",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "美术：带两片落叶（已取消）",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:15:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m07",
+        "source_name": "虚构四年级A班",
+        "sender": "美术许老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m12",
+        "source_name": "虚构四年级A班",
+        "sender": "美术许老师"
+       }
+      ],
+      "due_on": "",
+      "due_kind": "",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "美术"
+      ],
+      "subject_state": "known",
+      "subject_basis": "own_words"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "原要求明天美术课每人带两片落叶，夹在一本旧书里带来；后续通知取消该项，不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。",
+     "day": "2026-11-04"
+    }
+   ],
+   "study": [],
+   "inbox": [
+    {
+     "id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "task_id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "英语：完成《每日练习》并明天带来",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:05:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m05",
+        "source_name": "虚构四年级A班",
+        "sender": "英语唐老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "deadline",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "英语"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。\n不需要录音。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-45400257d2f61992fd05ddb2",
+     "task_id": "AGENT-45400257d2f61992fd05ddb2",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "数学：完成《计算小卡》第4页1—6题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:50:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m03",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m16",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《计算小卡》第4页第1—6题。\n不用抄题，直接写得数。\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\n今晚做完，明天交。\n不另加题。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-f818953082a70e7e66799bd4",
+     "task_id": "AGENT-f818953082a70e7e66799bd4",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "带一张一寸证件照交班主任",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m06",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m14",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "明早带一张一寸证件照，交给班主任，用于更新学生卡。\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "task_id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "数学：完成《每日练习》第26页第1—3题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:40:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m01",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m09",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       }
+      ],
+      "due_on": "2026-11-06",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《每日练习》第26页第1—3题，第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学周老师。\n提交要求：请家长签字，周五交给数学周老师。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-160c6c9c820698a880291826",
+     "task_id": "AGENT-160c6c9c820698a880291826",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "朗读《风经过小巷》第2、3自然段",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:45:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m02",
+        "source_name": "虚构四年级A班",
+        "sender": "语文林老师"
+       }
+      ],
+      "due_on": "2026-11-04",
+      "due_kind": "deadline",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "submit_on": "2026-11-05",
+      "submit_words": "明早我抽听",
+      "submit_role": "check",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\n朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n明早抽听。\n今晚朗读《风经过小巷》第2、3自然段，各读两遍。\n不用录音，也不用上传。\n今天18:30由家长听读。\n明早老师抽听。",
+     "touched": false
+    },
+    {
+     "id": "agent-ebcd63eaf52b302d3edfb6093a979087",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "明天带一盒彩笔",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T18:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-manual-b:h18-m17",
+        "source_name": "虚构家庭手动补录（乙）",
+        "sender": "虚构孩子乙"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "明天带一盒彩笔。"
+    },
+    {
+     "id": "agent-e1724f1f59a63ae55e7c30c18367cf8a",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "语文：完成《识字小卡》练习并家长签名",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:20:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m08",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m15",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成附件《识字小卡》上的练习。\n完成后请家长在卡片下方签名。\n明早交给语文老师。\n提交要求：明早交给语文老师，卡片下方需家长签名"
+    },
+    {
+     "id": "agent-0049f82473af2b6a7ea940d7503d5835",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "美术：带两片落叶（已取消）",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:15:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m07",
+        "source_name": "虚构四年级A班",
+        "sender": "美术许老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m12",
+        "source_name": "虚构四年级A班",
+        "sender": "美术许老师"
+       }
+      ],
+      "due_on": "",
+      "due_kind": "",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "美术"
+      ],
+      "subject_state": "known",
+      "subject_basis": "own_words"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "原要求明天美术课每人带两片落叶，夹在一本旧书里带来；后续通知取消该项，不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。"
+    }
+   ]
+  },
+  "next_day": {
+   "events": [],
+   "timetables": [],
+   "source_error": "",
+   "agenda": [
+    {
+     "id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "task_id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "英语：完成《每日练习》并明天带来",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:05:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m05",
+        "source_name": "虚构四年级A班",
+        "sender": "英语唐老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "deadline",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "英语"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。\n不需要录音。",
+     "touched": false,
+     "day": "2026-11-05"
+    },
+    {
+     "id": "AGENT-45400257d2f61992fd05ddb2",
+     "task_id": "AGENT-45400257d2f61992fd05ddb2",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "数学：完成《计算小卡》第4页1—6题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:50:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m03",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m16",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《计算小卡》第4页第1—6题。\n不用抄题，直接写得数。\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\n今晚做完，明天交。\n不另加题。",
+     "touched": false,
+     "day": "2026-11-05"
+    },
+    {
+     "id": "AGENT-f818953082a70e7e66799bd4",
+     "task_id": "AGENT-f818953082a70e7e66799bd4",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "带一张一寸证件照交班主任",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m06",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m14",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "明早带一张一寸证件照，交给班主任，用于更新学生卡。\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+     "touched": false,
+     "day": "2026-11-05"
+    },
+    {
+     "id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "task_id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "数学：完成《每日练习》第26页第1—3题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:40:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m01",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m09",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       }
+      ],
+      "due_on": "2026-11-06",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《每日练习》第26页第1—3题，第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学周老师。\n提交要求：请家长签字，周五交给数学周老师。",
+     "touched": false,
+     "day": "2026-11-05"
+    },
+    {
+     "id": "AGENT-160c6c9c820698a880291826",
+     "task_id": "AGENT-160c6c9c820698a880291826",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "朗读《风经过小巷》第2、3自然段",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:45:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m02",
+        "source_name": "虚构四年级A班",
+        "sender": "语文林老师"
+       }
+      ],
+      "due_on": "2026-11-04",
+      "due_kind": "deadline",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "submit_on": "2026-11-05",
+      "submit_words": "明早我抽听",
+      "submit_role": "check",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\n朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n明早抽听。\n今晚朗读《风经过小巷》第2、3自然段，各读两遍。\n不用录音，也不用上传。\n今天18:30由家长听读。\n明早老师抽听。",
+     "touched": false,
+     "day": "2026-11-05"
+    },
+    {
+     "id": "agent-ebcd63eaf52b302d3edfb6093a979087",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "明天带一盒彩笔",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T18:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-manual-b:h18-m17",
+        "source_name": "虚构家庭手动补录（乙）",
+        "sender": "虚构孩子乙"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "明天带一盒彩笔。",
+     "day": "2026-11-05"
+    },
+    {
+     "id": "agent-e1724f1f59a63ae55e7c30c18367cf8a",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "语文：完成《识字小卡》练习并家长签名",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:20:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m08",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m15",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成附件《识字小卡》上的练习。\n完成后请家长在卡片下方签名。\n明早交给语文老师。\n提交要求：明早交给语文老师，卡片下方需家长签名",
+     "day": "2026-11-05"
+    }
+   ],
+   "study": [],
+   "inbox": [
+    {
+     "id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "task_id": "AGENT-e9f38c84c51730cf04a9bc35",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "英语：完成《每日练习》并明天带来",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:05:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m05",
+        "source_name": "虚构四年级A班",
+        "sender": "英语唐老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "deadline",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "英语"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。\n一、看图选词第1—3题。\n二、标星单词 under、near 各抄写一遍。\n不需要录音。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-45400257d2f61992fd05ddb2",
+     "task_id": "AGENT-45400257d2f61992fd05ddb2",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "数学：完成《计算小卡》第4页1—6题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:50:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m03",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m16",
+        "source_name": "虚构二年级B班",
+        "sender": "数学陈老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《计算小卡》第4页第1—6题。\n不用抄题，直接写得数。\n今晚做完，后续说明：仍是第4页1—6题，不用抄题；做过的不用再做一遍。\n今晚做完，明天交。\n不另加题。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-f818953082a70e7e66799bd4",
+     "task_id": "AGENT-f818953082a70e7e66799bd4",
+     "kind": "task",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "带一张一寸证件照交班主任",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m06",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m14",
+        "source_name": "虚构二年级B班",
+        "sender": "班主任吴老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "明早带一张一寸证件照，交给班主任，用于更新学生卡。\n一张就够，不用重新拍；现有的蓝底或白底照片都可以。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "task_id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "数学：完成《每日练习》第26页第1—3题",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:40:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m01",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m09",
+        "source_name": "虚构四年级A班",
+        "sender": "数学周老师"
+       }
+      ],
+      "due_on": "2026-11-06",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "数学"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成数学《每日练习》第26页第1—3题，第4题不做。\n每题写出算式并验算。\n请家长签字。\n周五交给数学周老师。\n提交要求：请家长签字，周五交给数学周老师。",
+     "touched": false
+    },
+    {
+     "id": "AGENT-160c6c9c820698a880291826",
+     "task_id": "AGENT-160c6c9c820698a880291826",
+     "kind": "task",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "朗读《风经过小巷》第2、3自然段",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T15:45:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m02",
+        "source_name": "虚构四年级A班",
+        "sender": "语文林老师"
+       }
+      ],
+      "due_on": "2026-11-04",
+      "due_kind": "deadline",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "submit_on": "2026-11-05",
+      "submit_words": "明早我抽听",
+      "submit_role": "check",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待跟进",
+     "closed": false,
+     "closed_on": "",
+     "body": "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；不用录音，也不用上传，明早我抽听\n朗读《风经过小巷》第2、3自然段，各读两遍。\n不用背诵。\n明早抽听。\n今晚朗读《风经过小巷》第2、3自然段，各读两遍。\n不用录音，也不用上传。\n今天18:30由家长听读。\n明早老师抽听。",
+     "touched": false
+    },
+    {
+     "id": "agent-ebcd63eaf52b302d3edfb6093a979087",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "明天带一盒彩笔",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T18:10:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-manual-b:h18-m17",
+        "source_name": "虚构家庭手动补录（乙）",
+        "sender": "虚构孩子乙"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "arranged",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [],
+      "subject_state": "unknown",
+      "subject_basis": ""
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "明天带一盒彩笔。"
+    },
+    {
+     "id": "agent-e1724f1f59a63ae55e7c30c18367cf8a",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-2"
+     ],
+     "title": "语文：完成《识字小卡》练习并家长签名",
+     "agenda": {
+      "category": "homework",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:20:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-b2:h18-m08",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       },
+       {
+        "ref": "message:qa-qq-b2:h18-m15",
+        "source_name": "虚构二年级B班",
+        "sender": "语文郑老师"
+       }
+      ],
+      "due_on": "2026-11-05",
+      "due_kind": "handback",
+      "complete_on": "2026-11-04",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "语文"
+      ],
+      "subject_state": "known",
+      "subject_basis": "saved"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "完成附件《识字小卡》上的练习。\n完成后请家长在卡片下方签名。\n明早交给语文老师。\n提交要求：明早交给语文老师，卡片下方需家长签名"
+    },
+    {
+     "id": "agent-0049f82473af2b6a7ea940d7503d5835",
+     "task_id": "",
+     "kind": "school",
+     "child_ids": [
+      "child-1"
+     ],
+     "title": "美术：带两片落叶（已取消）",
+     "agenda": {
+      "category": "todo",
+      "published_on": "2026-11-04",
+      "published_at": "2026-11-04T16:15:00+08:00",
+      "publications": [
+       {
+        "ref": "message:qa-qq-a4:h18-m07",
+        "source_name": "虚构四年级A班",
+        "sender": "美术许老师"
+       },
+       {
+        "ref": "message:qa-qq-a4:h18-m12",
+        "source_name": "虚构四年级A班",
+        "sender": "美术许老师"
+       }
+      ],
+      "due_on": "",
+      "due_kind": "",
+      "complete_on": "",
+      "scheduled_on": "",
+      "category_confirmed": false,
+      "publication_known": true,
+      "box": "inbox",
+      "subjects": [
+       "美术"
+      ],
+      "subject_state": "known",
+      "subject_basis": "own_words"
+     },
+     "status": "待核对",
+     "closed": false,
+     "closed_on": "",
+     "body": "原要求明天美术课每人带两片落叶，夹在一本旧书里带来；后续通知取消该项，不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。"
+    }
+   ]
+  }
+ }
+}

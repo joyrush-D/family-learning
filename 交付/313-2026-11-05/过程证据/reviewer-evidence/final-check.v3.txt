@@ -1,0 +1,64 @@
+==========================================================================================
+CORPUS (repo fixtures)
+  [corpus test_daily_list_expression.py:94] title='语文：A' action='读第3课，读第3课。'
+      out=['读第3课。']
+      LOSS '读第3课，读第3课。' unreachable='读第3课'
+  [corpus test_daily_list_expression.py:99] title='语文：A' action='读第3课，读第3课，家长签字。'
+      out=['读第3课，家长签字。']
+      LOSS '读第3课，读第3课，家长签字。' unreachable='读第3课家长签字'
+  [corpus test_daily_list_expression.py:115] title='英语：完成《每日练习》' action='完成英语《每日练习》。'
+      out=[]
+      LOSS '完成英语《每日练习》。' unreachable='英语每日练习'
+  [corpus test_daily_list_expression.py:116] title='英语：完成《每日练习》' action='补充要求：完成英语《每日练习》。'
+      out=[]
+      LOSS '补充要求：完成英语《每日练习》。' unreachable='英语每日练习'
+  [corpus test_homework_print_change_basis.py:28] title='数学：完成练习三第1至5题' action='完成数学练习三第1至5题。11月5日交。'
+      out=['11月5日交。']
+      LOSS '完成数学练习三第1至5题。' unreachable='数学练习三第1至5题'
+  -> flagged 5/64
+==========================================================================================
+H18 ORACLE (8 matters)
+  -> flagged 0/8
+==========================================================================================
+ADVERSARIAL (invented fictional strings)
+  [A5a order-blind multiset: line is the title with the negation moved] title='语文：不用抄写，要朗读两遍' action='要抄写，不用朗读两遍'
+      out=[]
+      LOSS '要抄写，不用朗读两遍' unreachable='抄写不用朗读两遍'
+  [P4 middle clause dropped: separator kept?] title='语文：A' action='读第3课，读第3课，读第3课两遍。'
+      out=['读第3课，读第3课两遍。']
+      LOSS '读第3课，读第3课，读第3课两遍。' unreachable='读第3课两遍'
+  [P16 order-blind multiset opposite claim (old A5a)] title='语文：不用抄写，要朗读两遍' action='要抄写，不用朗读两遍'
+      out=[]
+      LOSS '要抄写，不用朗读两遍' unreachable='抄写不用朗读两遍'
+  -> flagged 3/34
+==========================================================================================
+TOTAL FLAGGED CASES: 8 | corpus 64 | h18 8 | adversarial 34
+
+EXACT OUTPUTS FOR CITED CASES:
+  P4 middle clause dropped: separator kept?
+    in : title='语文：A' action='读第3课，读第3课，读第3课两遍。'
+    out: ['读第3课，读第3课两遍。']
+  P5 fold-key particles (和/再) equality across two lines
+    in : title='语文：A' action='明天不再带练习册。\n明天不带练习册。'
+    out: ['明天不再带练习册。']
+  P6 positive clause inside a shown negation
+    in : title='语文：读课文' action='不用抄写课文。\n抄写课文'
+    out: ['不用抄写课文。']
+  P9 title-only line with extra number (old A1e)
+    in : title='数学：完成练习册第20页第1题' action='完成练习册第20页第1、2题'
+    out: ['完成练习册第20页第1、2题']
+  P10 extension line (old B1)
+    in : title='数学：练习' action='明天交练习册。\n明天交练习册和卷子。'
+    out: ['明天交练习册。', '明天交练习册和卷子。']
+  P11 quantity extension (old B2)
+    in : title='语文：读课文' action='读第3课。\n读第3课两遍。'
+    out: ['读第3课。', '读第3课两遍。']
+  P14 correction negation hidden (old A3c)
+    in : title='语文：抄写' action='抄写课文。\n不用抄写课文。'
+    out: ['抄写课文。', '不用抄写课文。']
+  P15 transposed page/question (old A1c)
+    in : title='语文：完成练习册第2页第3题' action='完成练习册第3页第2题'
+    out: ['完成练习册第3页第2题']
+  P16 order-blind multiset opposite claim (old A5a)
+    in : title='语文：不用抄写，要朗读两遍' action='要抄写，不用朗读两遍'
+    out: []

@@ -1,0 +1,5 @@
+=== demo.py 启动 2026-11-04T17:07:39Z ===
+REPO=/Users/joyrush/.local/share/family-learning/public-integration-20260926
+PORT=8766 PID=31291
+--- 启动输出（demo.py stdout）---
+虚构演示 http://127.0.0.1:8766 — 退出后清除演示记录

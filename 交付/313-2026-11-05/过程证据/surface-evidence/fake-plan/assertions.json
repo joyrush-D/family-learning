@@ -1,0 +1,11 @@
+{
+  "base": "http://127.0.0.1:8791",
+  "fakePlan": true,
+  "expectClean": false,
+  "planExpected": true,
+  "failures": [],
+  "notes": [
+    "w360 未要求「提交要求/补充要求」清零（投影未落地时旧 payload 仍带这些行）",
+    "w1440 未要求「提交要求/补充要求」清零（投影未落地时旧 payload 仍带这些行）"
+  ]
+}

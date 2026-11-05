@@ -1,0 +1,2 @@
+AssertionError [ERR_ASSERTION]: homework source is visible before expanding details
+    at /private/tmp/repo-head/test_today_ui.cjs:69:128

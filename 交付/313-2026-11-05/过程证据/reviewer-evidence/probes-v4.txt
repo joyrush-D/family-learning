@@ -1,0 +1,97 @@
+## 1 fold chars: does a real particle difference count as repetition?
+F0: title='语文：A'
+     action='今天交练习册。\n今天还要交练习册。'
+     OUT=['今天交练习册。', '今天还要交练习册。']
+F1: title='语文：A'
+     action='明天带练习册。\n明天再带练习册。'
+     OUT=['明天带练习册。']
+F2: title='语文：A'
+     action='语文要交。\n语文也要交。'
+     OUT=['语文要交。']
+F3: title='语文：A'
+     action='数学都做。\n数学做。'
+     OUT=['数学都做。']
+F4: title='语文：A'
+     action='他自己做。\n他做。'
+     OUT=['他自己做。', '他做。']
+F5: title='语文：A'
+     action='家长陪着读。\n家长读。'
+     OUT=['家长陪着读。', '家长读。']
+F6: title='语文：A'
+     action='明天不带练习册。\n明天不再带练习册。'
+     OUT=['明天不带练习册。']
+F7: title='语文：A'
+     action='读一遍。\n再读一遍。'
+     OUT=['读一遍。']
+F8: title='语文：A'
+     action='交或不交。\n交。'
+     OUT=['交或不交。']
+F9: title='语文：A'
+     action='和不和。\n和。'
+     OUT=['和不和。']
+
+## 2 title trim / whole-line guard: same chars, different order or number
+P0: title='数学：完成第3课第2题'
+     action='完成第2课第3题'
+     OUT=['完成第2课第3题']
+P1: title='数学：完成第1—3题'
+     action='完成第13题'
+     OUT=[]
+P2: title='数学：完成第1至3题'
+     action='完成第13题'
+     OUT=['完成第13题']
+P3: title='语文：朗读第1、2段'
+     action='朗读第12段'
+     OUT=[]
+P4: title='数学：第20页第1题'
+     action='第1页第20题'
+     OUT=['第1页第20题']
+P5: title='语文：完成练习册第2页第3题'
+     action='完成练习册第3页第2题'
+     OUT=['完成练习册第3页第2题']
+P6: title='数学：完成第1—3题'
+     action='完成第13题，其他不用做'
+     OUT=['完成第13题，其他不用做']
+P7: title='语文：读第2段'
+     action='读第2段和第3段'
+     OUT=['读第2段和第3段']
+P8: title='语文：读第2段'
+     action='读第3段'
+     OUT=['读第3段']
+
+## 3 empty / dead zone
+E0: title='数学：完成《每日练习》'
+     action='完成《每日练习》。'
+     OUT=[]
+E1: title='数学：完成《每日练习》'
+     action=''
+     OUT=[]
+E2: title='英语：跟读'
+     action='英语：'
+     OUT=[]
+E3: title='数学：A'
+     action='；。'
+     OUT=[]
+E4: title='数学：A'
+     action='完成。'
+     OUT=['完成。']
+
+## 4 plan_lines matcher reach and the appended line
+  _PLAN_LINE.match(teacher text): True -> ('带水彩笔',)
+  _PLAN_LINE.match(normal teacher line): False
+  day_view arranged block:
+ngement of this same item, as the family's, on its plan day; the school's words and dates
+        # stay in lines, the family's arrange reads in plan_lines (C7: the two are never one breath).
+        arranged = str(((task or {}).get('focus') or {}).get('next_action') or '').strip()
+        plan_lines = []
+        if arranged: lines = list(lines) + ['家庭安排（计划 ' + (exact_day(a.get('scheduled_on')) or '日期未定') + '）：' + arranged]
+        kept = []
+        for line in lines:
+            family = _PLAN_LINE.match(str(line))
+            if family: plan_lines.extend(x.strip() for x in family[1].splitlines() if x.strip())
+            else: kept.append(line)
+        lines = kept
+        # A past lesson or arranged day the 
+
+## 5 expression hygiene over corpus outputs
+  dangling-；/label-start lines: [('test_daily_list_expression.py:138', '完成练习册第18页第2、4、6题；每题先列式，再写完整计算过程，算完后逐题验算。', ['完成练习册第18页第2、4、6题；', '每题先列式，再写完整计算过程，算完后逐题验算。']), ('test_goals.py:21', '家长请孩子选一道已有题，说说看到的时间线索；不愿继续就停止。', ['家长请孩子选一道已有题，说说看到的时间线索；', '不愿继续就停止。']), ('test_school_completion_today.py:1652', '完成《秋日观察》第2页，摘录两句；每句写一句理由。', ['完成《秋日观察》第2页，摘录两句；', '每句写一句理由。'])] count= 3

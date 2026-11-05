@@ -1,0 +1,31 @@
+{
+  "file_sha1_family_agenda": "6c1574d7cc474542b2656214879c9615c77aebd7",
+  "today": "2026-11-04",
+  "plan_cards": [
+    {
+      "id": "MANUAL-f0582fac26519f9bee60",
+      "title": "语文：朗读《风经过小巷》第2、3自然段",
+      "plan_lines": [
+        "林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。"
+      ],
+      "facts": [
+        {
+          "role": "due",
+          "kind": "deadline",
+          "label": "截止",
+          "value": "2026-11-04",
+          "known": true,
+          "state": ""
+        },
+        {
+          "role": "scheduled",
+          "label": "计划",
+          "value": "2026-11-04",
+          "known": true
+        }
+      ],
+      "scheduled_value": "2026-11-04",
+      "rendered_label": "家庭安排（计划 2026-11-04）"
+    }
+  ]
+}

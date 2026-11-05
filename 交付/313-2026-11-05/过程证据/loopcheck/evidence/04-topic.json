@@ -1,0 +1,2075 @@
+{
+  "state_open": {
+    "ok": true,
+    "record": {
+      "id": 2,
+      "day": "2026-11-04",
+      "subject": "数学",
+      "title": "数学错题：第2题",
+      "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+      "basis": "63fb9bd1fe81031072e67efa8b0d7027e5523b50d673e9bd6151538be81c7005"
+    },
+    "links": [],
+    "diagnoses": [],
+    "seen_qids": [],
+    "original_identity": {
+      "status": "no_topic",
+      "qids": []
+    },
+    "task": {
+      "id": "AGENT-46d7f691d45e2af7a8132331",
+      "title": "数学：完成练习册第12页第2至4题"
+    },
+    "reviews": [],
+    "hint": {
+      "text": "5以内加法计算",
+      "status": "none",
+      "candidates": []
+    },
+    "diagnosis_hints": [],
+    "pack": {
+      "installed": true,
+      "sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+      "review_status": "AI初稿，未经教师审核",
+      "problems": [],
+      "message": ""
+    },
+    "deeptutor": {
+      "available": false,
+      "message": "新题判定组件未配置；可以先做诊断和看说明，复测稍后再记"
+    },
+    "topics": {}
+  },
+  "searches": [
+    {
+      "query": "5以内加法计算",
+      "status": 200,
+      "response": {
+        "status": "none",
+        "candidates": [],
+        "total": 0,
+        "groups": [],
+        "grade": null,
+        "review_status": "AI初稿，未经教师审核",
+        "child_grades": [
+          4
+        ]
+      }
+    },
+    {
+      "query": "10以内加法",
+      "status": 200,
+      "response": {
+        "status": "ambiguous",
+        "candidates": [
+          {
+            "id": "cnm_p010",
+            "name": "10以内的加法",
+            "grade": 1,
+            "semester": "上",
+            "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+            "mastery_criteria": [
+              "能口算 10 以内的加法",
+              "能解决把两部分合起来的简单问题"
+            ]
+          },
+          {
+            "id": "cnm_p031",
+            "name": "100以内口算加法",
+            "grade": 1,
+            "semester": "下",
+            "chapter": "一年级下册 第4单元 100以内的口算加、减法",
+            "mastery_criteria": [
+              "能口算两位数加一位数",
+              "进位时知道个位满十向十位进 1"
+            ]
+          },
+          {
+            "id": "cnm_p033",
+            "name": "100以内笔算加法",
+            "grade": 1,
+            "semester": "下",
+            "chapter": "一年级下册 第5单元 100以内的笔算加、减法",
+            "mastery_criteria": [
+              "能把相同数位对齐再相加",
+              "个位满十会向十位进 1"
+            ]
+          }
+        ],
+        "total": 3,
+        "groups": [
+          {
+            "grade": 1,
+            "label": "一年级",
+            "count": 3,
+            "child": false
+          }
+        ],
+        "grade": null,
+        "review_status": "AI初稿，未经教师审核",
+        "child_grades": [
+          4
+        ]
+      }
+    }
+  ],
+  "chosen_topic": {
+    "id": "cnm_p010",
+    "name": "10以内的加法",
+    "grade": 1,
+    "semester": "上",
+    "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+    "mastery_criteria": [
+      "能口算 10 以内的加法",
+      "能解决把两部分合起来的简单问题"
+    ]
+  },
+  "engine_check": {
+    "status": 200,
+    "served_bytes": 47863,
+    "served_sha256": "b4a48814213a5b50a49c86e39afcc6a6c81142cf4a8243cdfdc55dea397a017e",
+    "pack_sha256": "b4a48814213a5b50a49c86e39afcc6a6c81142cf4a8243cdfdc55dea397a017e",
+    "identical": true
+  },
+  "link_response": {
+    "ok": true,
+    "record": {
+      "id": 2,
+      "day": "2026-11-04",
+      "subject": "数学",
+      "title": "数学错题：第2题",
+      "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+      "basis": "63fb9bd1fe81031072e67efa8b0d7027e5523b50d673e9bd6151538be81c7005"
+    },
+    "links": [
+      {
+        "topic_id": "cnm_p010",
+        "state": "confirmed",
+        "pack_sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+        "note": "家长确认：错在「10以内的加法」",
+        "created_at": 1793806902.021982,
+        "basis": "current"
+      }
+    ],
+    "diagnoses": [],
+    "seen_qids": [],
+    "original_identity": {
+      "status": "unidentified",
+      "qids": []
+    },
+    "task": {
+      "id": "AGENT-46d7f691d45e2af7a8132331",
+      "title": "数学：完成练习册第12页第2至4题"
+    },
+    "reviews": [],
+    "hint": {
+      "text": "5以内加法计算",
+      "status": "none",
+      "candidates": []
+    },
+    "diagnosis_hints": [],
+    "pack": {
+      "installed": true,
+      "sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+      "review_status": "AI初稿，未经教师审核",
+      "problems": [],
+      "message": ""
+    },
+    "deeptutor": {
+      "available": false,
+      "message": "新题判定组件未配置；可以先做诊断和看说明，复测稍后再记"
+    },
+    "topics": {
+      "cnm_p010": {
+        "id": "cnm_p010",
+        "name": "10以内的加法",
+        "grade": 1,
+        "semester": "上",
+        "chapter": "一年级上册 第2单元 6～10的认识和加、减法"
+      }
+    },
+    "graph": {
+      "topics": [
+        {
+          "id": "cnm_p001",
+          "name": "1到5各数的认识",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第1单元 5以内数的认识和加、减法",
+          "type": "conceptual",
+          "description": "能在数量和数字之间来回，认读并写出 1 到 5。",
+          "mastery_criteria": [
+            "能按顺序数出 1 到 5",
+            "能说出一个数的前一个和后一个"
+          ],
+          "diagnostic_question": {
+            "question": "3 的后面一个数是几？",
+            "answer": "4"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.01",
+              "confidence": "exact"
+            }
+          ],
+          "root_reason": "一年级认数从 1 到 5 开始，前面没有更早的小学知识点。"
+        },
+        {
+          "id": "cnm_p004",
+          "name": "5以内数的分与合",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第1单元 5以内数的认识和加、减法",
+          "type": "procedural",
+          "description": "知道 5 以内的数可以分成哪两个数，又可以合起来。",
+          "mastery_criteria": [
+            "能把 5 分成两个数",
+            "能把两个数合成一个数"
+          ],
+          "diagnostic_question": {
+            "question": "5 可以分成 2 和几？",
+            "answer": "3"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.04",
+              "confidence": "exact"
+            }
+          ]
+        },
+        {
+          "id": "cnm_p006",
+          "name": "5以内的加法",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第1单元 5以内数的认识和加、减法",
+          "type": "procedural",
+          "description": "会计算得数不超过 5 的加法。",
+          "mastery_criteria": [
+            "能算出 5 以内的加法",
+            "知道加法是把两部分合起来"
+          ],
+          "diagnostic_question": {
+            "question": "计算：2＋3＝？",
+            "answer": "5"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.04",
+              "confidence": "exact"
+            },
+            {
+              "id": "cms-2022:1.NA.03",
+              "confidence": "exact"
+            }
+          ]
+        },
+        {
+          "id": "cnm_p008",
+          "name": "6～10各数的认识",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+          "type": "conceptual",
+          "description": "能认、读、写 6 到 10，知道 10 是由 10 个一组成的。",
+          "mastery_criteria": [
+            "能按顺序从 6 数到 10",
+            "知道 9 的后面是 10"
+          ],
+          "diagnostic_question": {
+            "question": "9 的后面一个数是几？",
+            "answer": "10"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.01",
+              "confidence": "exact"
+            }
+          ]
+        },
+        {
+          "id": "cnm_p010",
+          "name": "10以内的加法",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+          "type": "procedural",
+          "description": "会计算得数不超过 10 的加法。",
+          "mastery_criteria": [
+            "能口算 10 以内的加法",
+            "能解决把两部分合起来的简单问题"
+          ],
+          "diagnostic_question": {
+            "question": "计算：6＋3＝？",
+            "answer": "9"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.04",
+              "confidence": "exact"
+            },
+            {
+              "id": "cms-2022:1.NA.07",
+              "confidence": "exact"
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        {
+          "topicId": "cnm_p004",
+          "prerequisiteId": "cnm_p001",
+          "strength": "hard",
+          "reason": "学习「5以内数的分与合」需要先掌握「1到5各数的认识」。"
+        },
+        {
+          "topicId": "cnm_p006",
+          "prerequisiteId": "cnm_p004",
+          "strength": "hard",
+          "reason": "学习「5以内的加法」需要先掌握「5以内数的分与合」。"
+        },
+        {
+          "topicId": "cnm_p008",
+          "prerequisiteId": "cnm_p001",
+          "strength": "hard",
+          "reason": "学习「6～10各数的认识」需要先掌握「1到5各数的认识」。"
+        },
+        {
+          "topicId": "cnm_p010",
+          "prerequisiteId": "cnm_p006",
+          "strength": "hard",
+          "reason": "学习「10以内的加法」需要先掌握「5以内的加法」。"
+        },
+        {
+          "topicId": "cnm_p010",
+          "prerequisiteId": "cnm_p008",
+          "strength": "hard",
+          "reason": "学习「10以内的加法」需要先掌握「6～10各数的认识」。"
+        }
+      ],
+      "questions": [
+        {
+          "id": "cnm_p001_q1",
+          "topicId": "cnm_p001",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "3 的后面一个数是几？",
+          "answer": "4",
+          "explanation": "3 的后面是 4。",
+          "verify": "3+1"
+        },
+        {
+          "id": "cnm_p001_q2",
+          "topicId": "cnm_p001",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "4 的前面一个数是几？",
+          "answer": "3",
+          "explanation": "4 的前面是 3。",
+          "verify": "4-1"
+        },
+        {
+          "id": "cnm_p001_q3",
+          "topicId": "cnm_p001",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "2 的后面一个数是几？",
+          "answer": "3",
+          "explanation": "从 2 再数一个就是 3。",
+          "verify": "2+1"
+        },
+        {
+          "id": "cnm_p001_q4",
+          "topicId": "cnm_p001",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "第几是看顺序，从 1 开始数。排队时左边第 1 个，表示的是什么？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "顺序，从 1 开始数"
+            },
+            {
+              "key": "B",
+              "text": "一共有多少个"
+            },
+            {
+              "key": "C",
+              "text": "比别人多几个"
+            }
+          ],
+          "answer": "A",
+          "explanation": "第几说的是位置顺序，不是总数。",
+          "verify": "'顺序，从 1 开始数'"
+        },
+        {
+          "id": "cnm_p004_q1",
+          "topicId": "cnm_p004",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "5 可以分成 2 和几？",
+          "answer": "3",
+          "explanation": "5 分成 2 和 3，因为 2＋3＝5。",
+          "verify": "5-2"
+        },
+        {
+          "id": "cnm_p004_q2",
+          "topicId": "cnm_p004",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：1＋4＝？",
+          "answer": "5",
+          "explanation": "1＋4＝5。",
+          "verify": "1+4"
+        },
+        {
+          "id": "cnm_p004_q3",
+          "topicId": "cnm_p004",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "有 4 个圆片，又放进来 1 个。一共有多少个？计算：4＋1＝？",
+          "answer": "5",
+          "explanation": "把两部分合起来，4＋1＝5。",
+          "verify": "4+1"
+        },
+        {
+          "id": "cnm_p004_q4",
+          "topicId": "cnm_p004",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "3＋2 的得数是哪一个？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "6"
+            },
+            {
+              "key": "B",
+              "text": "4"
+            },
+            {
+              "key": "C",
+              "text": "7"
+            },
+            {
+              "key": "D",
+              "text": "5"
+            }
+          ],
+          "answer": "D",
+          "explanation": "3＋2＝5。",
+          "verify": "3+2"
+        },
+        {
+          "id": "cnm_p006_q1",
+          "topicId": "cnm_p006",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：2＋3＝？",
+          "answer": "5",
+          "explanation": "2＋3＝5。",
+          "verify": "2+3"
+        },
+        {
+          "id": "cnm_p006_q2",
+          "topicId": "cnm_p006",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：1＋3＝？",
+          "answer": "4",
+          "explanation": "1＋3＝4。",
+          "verify": "1+3"
+        },
+        {
+          "id": "cnm_p006_q3",
+          "topicId": "cnm_p006",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "有 2 朵花，又放进来 2 朵。一共有多少朵？计算：2＋2＝？",
+          "answer": "4",
+          "explanation": "把两部分合起来，2＋2＝4。",
+          "verify": "2+2"
+        },
+        {
+          "id": "cnm_p006_q4",
+          "topicId": "cnm_p006",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "4＋1 的得数是哪一个？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "6"
+            },
+            {
+              "key": "B",
+              "text": "5"
+            },
+            {
+              "key": "C",
+              "text": "4"
+            },
+            {
+              "key": "D",
+              "text": "7"
+            }
+          ],
+          "answer": "B",
+          "explanation": "4＋1＝5。",
+          "verify": "4+1"
+        },
+        {
+          "id": "cnm_p008_q1",
+          "topicId": "cnm_p008",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "9 的后面一个数是几？",
+          "answer": "10",
+          "explanation": "9 再添 1 是 10。",
+          "verify": "9+1"
+        },
+        {
+          "id": "cnm_p008_q2",
+          "topicId": "cnm_p008",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "8 的前面一个数是几？",
+          "answer": "7",
+          "explanation": "8 的前面是 7。",
+          "verify": "8-1"
+        },
+        {
+          "id": "cnm_p008_q3",
+          "topicId": "cnm_p008",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "6 的后面一个数是几？",
+          "answer": "7",
+          "explanation": "6 的后面是 7。",
+          "verify": "6+1"
+        },
+        {
+          "id": "cnm_p008_q4",
+          "topicId": "cnm_p008",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "计算：10－1＝？",
+          "answer": "9",
+          "explanation": "10 的前面一个数是 9。",
+          "verify": "10-1"
+        },
+        {
+          "id": "cnm_p010_q1",
+          "topicId": "cnm_p010",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：6＋3＝？",
+          "answer": "9",
+          "explanation": "6＋3＝9。",
+          "verify": "6+3"
+        },
+        {
+          "id": "cnm_p010_q2",
+          "topicId": "cnm_p010",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：7＋2＝？",
+          "answer": "9",
+          "explanation": "7＋2＝9。",
+          "verify": "7+2"
+        },
+        {
+          "id": "cnm_p010_q3",
+          "topicId": "cnm_p010",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "有 4 支铅笔，又放进来 5 支。一共有多少支？计算：4＋5＝？",
+          "answer": "9",
+          "explanation": "把两部分合起来，4＋5＝9。",
+          "verify": "4+5"
+        },
+        {
+          "id": "cnm_p010_q4",
+          "topicId": "cnm_p010",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "8＋2 的得数是哪一个？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "11"
+            },
+            {
+              "key": "B",
+              "text": "9"
+            },
+            {
+              "key": "C",
+              "text": "12"
+            },
+            {
+              "key": "D",
+              "text": "10"
+            }
+          ],
+          "answer": "D",
+          "explanation": "8＋2＝10。",
+          "verify": "8+2"
+        }
+      ],
+      "target": "cnm_p010"
+    },
+    "replayed": false
+  },
+  "start_response_keys": [
+    "deeptutor",
+    "diagnoses",
+    "diagnosis_hints",
+    "graph",
+    "hint",
+    "links",
+    "ok",
+    "original_identity",
+    "pack",
+    "record",
+    "replayed",
+    "reviews",
+    "seen_qids",
+    "task",
+    "topics"
+  ],
+  "diagnosis_initial": {
+    "id": 1,
+    "topic_id": "cnm_p010",
+    "opts": {
+      "limit": 8,
+      "seed": "3d3e24e8b0314942a9d15d09fcdd199e"
+    },
+    "state": "active",
+    "version": 0,
+    "summary": null,
+    "items": [],
+    "retries": [],
+    "shown": [],
+    "retry_offer": null,
+    "pack_sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+    "engine_sha256": "b4a48814213a5b50a49c86e39afcc6a6c81142cf4a8243cdfdc55dea397a017e",
+    "void": null,
+    "basis": "current"
+  },
+  "engine_drive": {
+    "ok": true,
+    "steps": [
+      {
+        "seq": 1,
+        "topic_id": "cnm_p010",
+        "qid": "cnm_p010_q4",
+        "prompt": "8＋2 的得数是哪一个？",
+        "type": "choice",
+        "expected": "D",
+        "text": "A",
+        "verdict": "wrong",
+        "engine_result": "wrong",
+        "session": {
+          "targets": [
+            "cnm_p010"
+          ],
+          "limit": 8,
+          "confirm": 3,
+          "order": [
+            "cnm_p001",
+            "cnm_p004",
+            "cnm_p006",
+            "cnm_p008",
+            "cnm_p010"
+          ],
+          "stack": [
+            "cnm_p010"
+          ],
+          "status": {},
+          "answers": [
+            {
+              "id": "cnm_p010",
+              "qid": "cnm_p010_q4",
+              "result": "wrong",
+              "text": "A"
+            }
+          ],
+          "attempts": {
+            "cnm_p010": [
+              {
+                "qid": "cnm_p010_q4",
+                "result": "wrong"
+              }
+            ]
+          },
+          "seed": "3d3e24e8b0314942a9d15d09fcdd199e",
+          "avoid": [],
+          "mode": "target",
+          "scope": null
+        },
+        "summary": {
+          "mode": "target",
+          "targets": [
+            "cnm_p010"
+          ],
+          "asked": 1,
+          "limit": 8,
+          "finished": false,
+          "limitReached": false,
+          "mastered": [],
+          "shaky": [],
+          "weak": [
+            "cnm_p010"
+          ],
+          "unconfirmed": [
+            "cnm_p010"
+          ],
+          "untested": [
+            "cnm_p001",
+            "cnm_p004",
+            "cnm_p006",
+            "cnm_p008"
+          ],
+          "roots": [
+            {
+              "id": "cnm_p010",
+              "pendingPrereqs": [
+                "cnm_p006",
+                "cnm_p008"
+              ],
+              "outOfScopePrereqs": [],
+              "externalPrereqs": []
+            }
+          ],
+          "path": [
+            {
+              "id": "cnm_p010",
+              "status": "weak",
+              "isRoot": true,
+              "isTarget": true
+            }
+          ]
+        }
+      },
+      {
+        "seq": 2,
+        "topic_id": "cnm_p010",
+        "qid": "cnm_p010_q1",
+        "prompt": "计算：6＋3＝？",
+        "type": "numeric",
+        "expected": "9",
+        "text": "9",
+        "verdict": "correct",
+        "engine_result": "correct",
+        "session": {
+          "targets": [
+            "cnm_p010"
+          ],
+          "limit": 8,
+          "confirm": 3,
+          "order": [
+            "cnm_p001",
+            "cnm_p004",
+            "cnm_p006",
+            "cnm_p008",
+            "cnm_p010"
+          ],
+          "stack": [
+            "cnm_p010"
+          ],
+          "status": {
+            "cnm_p010": {
+              "s": "shaky",
+              "src": "direct"
+            }
+          },
+          "answers": [
+            {
+              "id": "cnm_p010",
+              "qid": "cnm_p010_q4",
+              "result": "wrong",
+              "text": "A"
+            },
+            {
+              "id": "cnm_p010",
+              "qid": "cnm_p010_q1",
+              "result": "correct",
+              "text": "9"
+            }
+          ],
+          "attempts": {
+            "cnm_p010": [
+              {
+                "qid": "cnm_p010_q4",
+                "result": "wrong"
+              },
+              {
+                "qid": "cnm_p010_q1",
+                "result": "correct"
+              }
+            ]
+          },
+          "seed": "3d3e24e8b0314942a9d15d09fcdd199e",
+          "avoid": [],
+          "mode": "target",
+          "scope": null
+        },
+        "summary": {
+          "mode": "target",
+          "targets": [
+            "cnm_p010"
+          ],
+          "asked": 2,
+          "limit": 8,
+          "finished": true,
+          "limitReached": false,
+          "mastered": [],
+          "shaky": [
+            "cnm_p010"
+          ],
+          "weak": [],
+          "unconfirmed": [],
+          "untested": [
+            "cnm_p001",
+            "cnm_p004",
+            "cnm_p006",
+            "cnm_p008"
+          ],
+          "roots": [],
+          "path": [
+            {
+              "id": "cnm_p010",
+              "status": "shaky",
+              "isRoot": false,
+              "isTarget": true
+            }
+          ]
+        }
+      }
+    ],
+    "summary": {
+      "mode": "target",
+      "targets": [
+        "cnm_p010"
+      ],
+      "asked": 2,
+      "limit": 8,
+      "finished": true,
+      "limitReached": false,
+      "mastered": [],
+      "shaky": [
+        "cnm_p010"
+      ],
+      "weak": [],
+      "unconfirmed": [],
+      "untested": [
+        "cnm_p001",
+        "cnm_p004",
+        "cnm_p006",
+        "cnm_p008"
+      ],
+      "roots": [],
+      "path": [
+        {
+          "id": "cnm_p010",
+          "status": "shaky",
+          "isRoot": false,
+          "isTarget": true
+        }
+      ]
+    }
+  },
+  "answers": [
+    {
+      "sent": {
+        "seq": 1,
+        "qid": "cnm_p010_q4",
+        "topic_id": "cnm_p010",
+        "text": "A",
+        "verdict": "wrong"
+      },
+      "status": 200,
+      "response_ok": true,
+      "error": null
+    },
+    {
+      "sent": {
+        "seq": 2,
+        "qid": "cnm_p010_q1",
+        "topic_id": "cnm_p010",
+        "text": "9",
+        "verdict": "correct"
+      },
+      "status": 200,
+      "response_ok": true,
+      "error": null
+    }
+  ],
+  "state_final": {
+    "ok": true,
+    "record": {
+      "id": 2,
+      "day": "2026-11-04",
+      "subject": "数学",
+      "title": "数学错题：第2题",
+      "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+      "basis": "63fb9bd1fe81031072e67efa8b0d7027e5523b50d673e9bd6151538be81c7005"
+    },
+    "links": [
+      {
+        "topic_id": "cnm_p010",
+        "state": "confirmed",
+        "pack_sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+        "note": "家长确认：错在「10以内的加法」",
+        "created_at": 1793806902.021982,
+        "basis": "current"
+      }
+    ],
+    "diagnoses": [
+      {
+        "id": 1,
+        "topic_id": "cnm_p010",
+        "opts": {
+          "limit": 8,
+          "seed": "3d3e24e8b0314942a9d15d09fcdd199e"
+        },
+        "state": "finished",
+        "version": 2,
+        "summary": {
+          "mode": "target",
+          "targets": [
+            "cnm_p010"
+          ],
+          "asked": 2,
+          "limit": 8,
+          "finished": true,
+          "limitReached": false,
+          "mastered": [],
+          "shaky": [
+            "cnm_p010"
+          ],
+          "weak": [],
+          "unconfirmed": [],
+          "untested": [
+            "cnm_p001",
+            "cnm_p004",
+            "cnm_p006",
+            "cnm_p008"
+          ],
+          "roots": [],
+          "path": [
+            {
+              "id": "cnm_p010",
+              "status": "shaky",
+              "isRoot": false,
+              "isTarget": true
+            }
+          ]
+        },
+        "items": [
+          {
+            "seq": 1,
+            "topic_id": "cnm_p010",
+            "qid": "cnm_p010_q4",
+            "kind": "answer",
+            "answer": "A",
+            "verdict": "wrong",
+            "engine_result": "wrong",
+            "help": ""
+          },
+          {
+            "seq": 2,
+            "topic_id": "cnm_p010",
+            "qid": "cnm_p010_q1",
+            "kind": "answer",
+            "answer": "9",
+            "verdict": "correct",
+            "engine_result": "correct",
+            "help": ""
+          }
+        ],
+        "retries": [],
+        "shown": [],
+        "retry_offer": null,
+        "pack_sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+        "engine_sha256": "b4a48814213a5b50a49c86e39afcc6a6c81142cf4a8243cdfdc55dea397a017e",
+        "void": null,
+        "basis": "current"
+      }
+    ],
+    "seen_qids": [
+      "cnm_p010_q1",
+      "cnm_p010_q4"
+    ],
+    "original_identity": {
+      "status": "unidentified",
+      "qids": []
+    },
+    "task": {
+      "id": "AGENT-46d7f691d45e2af7a8132331",
+      "title": "数学：完成练习册第12页第2至4题"
+    },
+    "reviews": [],
+    "hint": {
+      "text": "5以内加法计算",
+      "status": "none",
+      "candidates": []
+    },
+    "diagnosis_hints": [],
+    "pack": {
+      "installed": true,
+      "sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+      "review_status": "AI初稿，未经教师审核",
+      "problems": [],
+      "message": ""
+    },
+    "deeptutor": {
+      "available": false,
+      "message": "新题判定组件未配置；可以先做诊断和看说明，复测稍后再记"
+    },
+    "topics": {
+      "cnm_p010": {
+        "id": "cnm_p010",
+        "name": "10以内的加法",
+        "grade": 1,
+        "semester": "上",
+        "chapter": "一年级上册 第2单元 6～10的认识和加、减法"
+      }
+    },
+    "graph": {
+      "topics": [
+        {
+          "id": "cnm_p001",
+          "name": "1到5各数的认识",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第1单元 5以内数的认识和加、减法",
+          "type": "conceptual",
+          "description": "能在数量和数字之间来回，认读并写出 1 到 5。",
+          "mastery_criteria": [
+            "能按顺序数出 1 到 5",
+            "能说出一个数的前一个和后一个"
+          ],
+          "diagnostic_question": {
+            "question": "3 的后面一个数是几？",
+            "answer": "4"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.01",
+              "confidence": "exact"
+            }
+          ],
+          "root_reason": "一年级认数从 1 到 5 开始，前面没有更早的小学知识点。"
+        },
+        {
+          "id": "cnm_p004",
+          "name": "5以内数的分与合",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第1单元 5以内数的认识和加、减法",
+          "type": "procedural",
+          "description": "知道 5 以内的数可以分成哪两个数，又可以合起来。",
+          "mastery_criteria": [
+            "能把 5 分成两个数",
+            "能把两个数合成一个数"
+          ],
+          "diagnostic_question": {
+            "question": "5 可以分成 2 和几？",
+            "answer": "3"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.04",
+              "confidence": "exact"
+            }
+          ]
+        },
+        {
+          "id": "cnm_p006",
+          "name": "5以内的加法",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第1单元 5以内数的认识和加、减法",
+          "type": "procedural",
+          "description": "会计算得数不超过 5 的加法。",
+          "mastery_criteria": [
+            "能算出 5 以内的加法",
+            "知道加法是把两部分合起来"
+          ],
+          "diagnostic_question": {
+            "question": "计算：2＋3＝？",
+            "answer": "5"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.04",
+              "confidence": "exact"
+            },
+            {
+              "id": "cms-2022:1.NA.03",
+              "confidence": "exact"
+            }
+          ]
+        },
+        {
+          "id": "cnm_p008",
+          "name": "6～10各数的认识",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+          "type": "conceptual",
+          "description": "能认、读、写 6 到 10，知道 10 是由 10 个一组成的。",
+          "mastery_criteria": [
+            "能按顺序从 6 数到 10",
+            "知道 9 的后面是 10"
+          ],
+          "diagnostic_question": {
+            "question": "9 的后面一个数是几？",
+            "answer": "10"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.01",
+              "confidence": "exact"
+            }
+          ]
+        },
+        {
+          "id": "cnm_p010",
+          "name": "10以内的加法",
+          "domain": "数与代数",
+          "grade": 1,
+          "semester": "上",
+          "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+          "type": "procedural",
+          "description": "会计算得数不超过 10 的加法。",
+          "mastery_criteria": [
+            "能口算 10 以内的加法",
+            "能解决把两部分合起来的简单问题"
+          ],
+          "diagnostic_question": {
+            "question": "计算：6＋3＝？",
+            "answer": "9"
+          },
+          "external": false,
+          "standards": [
+            {
+              "id": "cms-2022:1.NA.04",
+              "confidence": "exact"
+            },
+            {
+              "id": "cms-2022:1.NA.07",
+              "confidence": "exact"
+            }
+          ]
+        }
+      ],
+      "dependencies": [
+        {
+          "topicId": "cnm_p004",
+          "prerequisiteId": "cnm_p001",
+          "strength": "hard",
+          "reason": "学习「5以内数的分与合」需要先掌握「1到5各数的认识」。"
+        },
+        {
+          "topicId": "cnm_p006",
+          "prerequisiteId": "cnm_p004",
+          "strength": "hard",
+          "reason": "学习「5以内的加法」需要先掌握「5以内数的分与合」。"
+        },
+        {
+          "topicId": "cnm_p008",
+          "prerequisiteId": "cnm_p001",
+          "strength": "hard",
+          "reason": "学习「6～10各数的认识」需要先掌握「1到5各数的认识」。"
+        },
+        {
+          "topicId": "cnm_p010",
+          "prerequisiteId": "cnm_p006",
+          "strength": "hard",
+          "reason": "学习「10以内的加法」需要先掌握「5以内的加法」。"
+        },
+        {
+          "topicId": "cnm_p010",
+          "prerequisiteId": "cnm_p008",
+          "strength": "hard",
+          "reason": "学习「10以内的加法」需要先掌握「6～10各数的认识」。"
+        }
+      ],
+      "questions": [
+        {
+          "id": "cnm_p001_q1",
+          "topicId": "cnm_p001",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "3 的后面一个数是几？",
+          "answer": "4",
+          "explanation": "3 的后面是 4。",
+          "verify": "3+1"
+        },
+        {
+          "id": "cnm_p001_q2",
+          "topicId": "cnm_p001",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "4 的前面一个数是几？",
+          "answer": "3",
+          "explanation": "4 的前面是 3。",
+          "verify": "4-1"
+        },
+        {
+          "id": "cnm_p001_q3",
+          "topicId": "cnm_p001",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "2 的后面一个数是几？",
+          "answer": "3",
+          "explanation": "从 2 再数一个就是 3。",
+          "verify": "2+1"
+        },
+        {
+          "id": "cnm_p001_q4",
+          "topicId": "cnm_p001",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "第几是看顺序，从 1 开始数。排队时左边第 1 个，表示的是什么？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "顺序，从 1 开始数"
+            },
+            {
+              "key": "B",
+              "text": "一共有多少个"
+            },
+            {
+              "key": "C",
+              "text": "比别人多几个"
+            }
+          ],
+          "answer": "A",
+          "explanation": "第几说的是位置顺序，不是总数。",
+          "verify": "'顺序，从 1 开始数'"
+        },
+        {
+          "id": "cnm_p004_q1",
+          "topicId": "cnm_p004",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "5 可以分成 2 和几？",
+          "answer": "3",
+          "explanation": "5 分成 2 和 3，因为 2＋3＝5。",
+          "verify": "5-2"
+        },
+        {
+          "id": "cnm_p004_q2",
+          "topicId": "cnm_p004",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：1＋4＝？",
+          "answer": "5",
+          "explanation": "1＋4＝5。",
+          "verify": "1+4"
+        },
+        {
+          "id": "cnm_p004_q3",
+          "topicId": "cnm_p004",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "有 4 个圆片，又放进来 1 个。一共有多少个？计算：4＋1＝？",
+          "answer": "5",
+          "explanation": "把两部分合起来，4＋1＝5。",
+          "verify": "4+1"
+        },
+        {
+          "id": "cnm_p004_q4",
+          "topicId": "cnm_p004",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "3＋2 的得数是哪一个？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "6"
+            },
+            {
+              "key": "B",
+              "text": "4"
+            },
+            {
+              "key": "C",
+              "text": "7"
+            },
+            {
+              "key": "D",
+              "text": "5"
+            }
+          ],
+          "answer": "D",
+          "explanation": "3＋2＝5。",
+          "verify": "3+2"
+        },
+        {
+          "id": "cnm_p006_q1",
+          "topicId": "cnm_p006",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：2＋3＝？",
+          "answer": "5",
+          "explanation": "2＋3＝5。",
+          "verify": "2+3"
+        },
+        {
+          "id": "cnm_p006_q2",
+          "topicId": "cnm_p006",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：1＋3＝？",
+          "answer": "4",
+          "explanation": "1＋3＝4。",
+          "verify": "1+3"
+        },
+        {
+          "id": "cnm_p006_q3",
+          "topicId": "cnm_p006",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "有 2 朵花，又放进来 2 朵。一共有多少朵？计算：2＋2＝？",
+          "answer": "4",
+          "explanation": "把两部分合起来，2＋2＝4。",
+          "verify": "2+2"
+        },
+        {
+          "id": "cnm_p006_q4",
+          "topicId": "cnm_p006",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "4＋1 的得数是哪一个？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "6"
+            },
+            {
+              "key": "B",
+              "text": "5"
+            },
+            {
+              "key": "C",
+              "text": "4"
+            },
+            {
+              "key": "D",
+              "text": "7"
+            }
+          ],
+          "answer": "B",
+          "explanation": "4＋1＝5。",
+          "verify": "4+1"
+        },
+        {
+          "id": "cnm_p008_q1",
+          "topicId": "cnm_p008",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "9 的后面一个数是几？",
+          "answer": "10",
+          "explanation": "9 再添 1 是 10。",
+          "verify": "9+1"
+        },
+        {
+          "id": "cnm_p008_q2",
+          "topicId": "cnm_p008",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "8 的前面一个数是几？",
+          "answer": "7",
+          "explanation": "8 的前面是 7。",
+          "verify": "8-1"
+        },
+        {
+          "id": "cnm_p008_q3",
+          "topicId": "cnm_p008",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "6 的后面一个数是几？",
+          "answer": "7",
+          "explanation": "6 的后面是 7。",
+          "verify": "6+1"
+        },
+        {
+          "id": "cnm_p008_q4",
+          "topicId": "cnm_p008",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "计算：10－1＝？",
+          "answer": "9",
+          "explanation": "10 的前面一个数是 9。",
+          "verify": "10-1"
+        },
+        {
+          "id": "cnm_p010_q1",
+          "topicId": "cnm_p010",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：6＋3＝？",
+          "answer": "9",
+          "explanation": "6＋3＝9。",
+          "verify": "6+3"
+        },
+        {
+          "id": "cnm_p010_q2",
+          "topicId": "cnm_p010",
+          "difficulty": "basic",
+          "type": "numeric",
+          "prompt": "计算：7＋2＝？",
+          "answer": "9",
+          "explanation": "7＋2＝9。",
+          "verify": "7+2"
+        },
+        {
+          "id": "cnm_p010_q3",
+          "topicId": "cnm_p010",
+          "difficulty": "standard",
+          "type": "numeric",
+          "prompt": "有 4 支铅笔，又放进来 5 支。一共有多少支？计算：4＋5＝？",
+          "answer": "9",
+          "explanation": "把两部分合起来，4＋5＝9。",
+          "verify": "4+5"
+        },
+        {
+          "id": "cnm_p010_q4",
+          "topicId": "cnm_p010",
+          "difficulty": "standard",
+          "type": "choice",
+          "prompt": "8＋2 的得数是哪一个？",
+          "choices": [
+            {
+              "key": "A",
+              "text": "11"
+            },
+            {
+              "key": "B",
+              "text": "9"
+            },
+            {
+              "key": "C",
+              "text": "12"
+            },
+            {
+              "key": "D",
+              "text": "10"
+            }
+          ],
+          "answer": "D",
+          "explanation": "8＋2＝10。",
+          "verify": "8+2"
+        }
+      ],
+      "target": "cnm_p010"
+    }
+  },
+  "db_links": [
+    {
+      "id": 1,
+      "child_id": "child-1",
+      "record_id": "2",
+      "record_hash": "63fb9bd1fe81031072e67efa8b0d7027e5523b50d673e9bd6151538be81c7005",
+      "topic_id": "cnm_p010",
+      "state": "confirmed",
+      "pack_sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+      "note": "家长确认：错在「10以内的加法」",
+      "request_id": "297ce43ab2f44d46b740a77d88d8a890",
+      "created_at": 1793806902.021982
+    }
+  ],
+  "db_diagnoses": [
+    {
+      "id": 1,
+      "topic_id": "cnm_p010",
+      "state": "finished",
+      "summary": "{\"mode\": \"target\", \"targets\": [\"cnm_p010\"], \"asked\": 2, \"limit\": 8, \"finished\": true, \"limitReached\": false, \"mastered\": [], \"shaky\": [\"cnm_p010\"], \"weak\": [], \"unconfirmed\": [], \"untested\": [\"cnm_p001\", \"cnm_p004\", \"cnm_p006\", \"cnm_p008\"], \"roots\": [], \"path\": [{\"id\": \"cnm_p010\", \"status\": \"shaky\", \"isRoot\": false, \"isTarget\": true}]}"
+    }
+  ],
+  "db_items": [
+    {
+      "diagnosis_id": 1,
+      "seq": 1,
+      "topic_id": "cnm_p010",
+      "qid": "cnm_p010_q4",
+      "verdict": "wrong"
+    },
+    {
+      "diagnosis_id": 1,
+      "seq": 2,
+      "topic_id": "cnm_p010",
+      "qid": "cnm_p010_q1",
+      "verdict": "correct"
+    }
+  ],
+  "day_view": {
+    "today": "2026-11-04",
+    "day": "2026-11-04",
+    "child_id": "child-1",
+    "child_name": "示例甲",
+    "children": [
+      {
+        "id": "child-1",
+        "name": "示例甲"
+      },
+      {
+        "id": "child-2",
+        "name": "示例乙"
+      }
+    ],
+    "source_error": "",
+    "groups": [
+      {
+        "subject": "数学",
+        "items": [
+          {
+            "id": "AGENT-46d7f691d45e2af7a8132331",
+            "kind": "task",
+            "task_id": "AGENT-46d7f691d45e2af7a8132331",
+            "title": "数学：完成练习册第12页第2至4题",
+            "subject": "数学",
+            "category": "homework",
+            "status": "待跟进",
+            "closed": false,
+            "pending_review": false,
+            "origin": "school",
+            "origin_label": "学校消息",
+            "lines": [
+              "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+            ],
+            "plan_lines": [],
+            "complete_words": "",
+            "facts": [
+              {
+                "role": "published",
+                "label": "发布",
+                "value": "2026-11-04 16:01",
+                "known": true
+              },
+              {
+                "role": "complete",
+                "label": "完成",
+                "value": "2026-11-04",
+                "known": true,
+                "today": true
+              },
+              {
+                "role": "due",
+                "kind": "handback",
+                "label": "交回",
+                "value": "2026-11-05",
+                "known": true,
+                "state": "next_morning"
+              }
+            ],
+            "today": true,
+            "when": "today",
+            "publications": [
+              {
+                "ref": "message:synthetic-group:502",
+                "source_name": "虚构班级",
+                "sender": "虚构数学老师"
+              }
+            ],
+            "published_at": "2026-11-04T16:01:00+08:00",
+            "publisher": "虚构数学老师",
+            "progress": {
+              "feedback": 1,
+              "wrong": 1,
+              "wrong_ids": [
+                2
+              ],
+              "clues": 1,
+              "retries": 0,
+              "history": 0
+            },
+            "records": [
+              {
+                "id": 1,
+                "day": "2026-11-04",
+                "created": "2026-11-04T23:41:12.068764",
+                "title": "反馈：数学：完成练习册第12页第2至4题",
+                "subject": "数学",
+                "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+                "note_truncated": false,
+                "attachments": [
+                  "08c4bc142f73286b4a7f9470dc6116cd"
+                ],
+                "followup_kind": "",
+                "related_record_id": null,
+                "assistance": "",
+                "practice_relation": "",
+                "task_id": "AGENT-46d7f691d45e2af7a8132331"
+              },
+              {
+                "id": 3,
+                "day": "2026-11-04",
+                "created": "2026-11-04T23:41:41.929950",
+                "title": "订正：练习册第12页第2题 2+3",
+                "subject": "数学",
+                "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+                "note_truncated": false,
+                "attachments": [],
+                "followup_kind": "订正",
+                "related_record_id": 2,
+                "assistance": "",
+                "practice_relation": "",
+                "task_id": "AGENT-46d7f691d45e2af7a8132331"
+              }
+            ],
+            "wrong": [
+              {
+                "id": 2,
+                "day": "2026-11-04",
+                "created": "2026-11-04T23:41:41.855275",
+                "title": "数学错题：第2题",
+                "subject": "数学",
+                "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                "note_truncated": false,
+                "attachments": [
+                  "08c4bc142f73286b4a7f9470dc6116cd"
+                ],
+                "followup_kind": "",
+                "related_record_id": 1,
+                "assistance": "",
+                "practice_relation": "",
+                "followups": [
+                  {
+                    "id": 3,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:41:41.929950",
+                    "title": "订正：练习册第12页第2题 2+3",
+                    "subject": "数学",
+                    "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+                    "note_truncated": false,
+                    "attachments": [],
+                    "followup_kind": "订正",
+                    "related_record_id": 2,
+                    "assistance": "",
+                    "practice_relation": ""
+                  }
+                ],
+                "state": "已订正",
+                "task_id": "AGENT-46d7f691d45e2af7a8132331",
+                "task_title": "数学：完成练习册第12页第2至4题"
+              }
+            ]
+          }
+        ],
+        "undated": 0
+      },
+      {
+        "subject": "英语",
+        "items": [
+          {
+            "id": "AGENT-1b4daaf39d91304f58931622",
+            "kind": "task",
+            "task_id": "AGENT-1b4daaf39d91304f58931622",
+            "title": "英语：跟读Unit 7第3至10个单词",
+            "subject": "英语",
+            "category": "homework",
+            "status": "待跟进",
+            "closed": false,
+            "pending_review": false,
+            "origin": "school",
+            "origin_label": "学校消息",
+            "lines": [
+              "今晚听音频跟读Unit 7第3至10个单词。",
+              "每词3遍。",
+              "不用抄写。"
+            ],
+            "plan_lines": [],
+            "complete_words": "",
+            "facts": [
+              {
+                "role": "published",
+                "label": "发布",
+                "value": "2026-11-04 16:02",
+                "known": true
+              },
+              {
+                "role": "complete",
+                "label": "完成",
+                "value": "2026-11-04",
+                "known": true,
+                "today": true
+              },
+              {
+                "role": "due",
+                "label": "截止",
+                "value": "日期未写明，不猜",
+                "known": false
+              }
+            ],
+            "today": true,
+            "when": "today",
+            "publications": [
+              {
+                "ref": "message:synthetic-group:503",
+                "source_name": "虚构班级",
+                "sender": "虚构英语老师"
+              }
+            ],
+            "published_at": "2026-11-04T16:02:00+08:00",
+            "publisher": "虚构英语老师",
+            "progress": null,
+            "records": [],
+            "wrong": []
+          }
+        ],
+        "undated": 0
+      },
+      {
+        "subject": "语文",
+        "items": [
+          {
+            "id": "AGENT-245cb9e8e5f0ddb0e10a7661",
+            "kind": "task",
+            "task_id": "AGENT-245cb9e8e5f0ddb0e10a7661",
+            "title": "语文：朗读《晚照》2遍",
+            "subject": "语文",
+            "category": "homework",
+            "status": "待跟进",
+            "closed": false,
+            "pending_review": false,
+            "origin": "school",
+            "origin_label": "学校消息",
+            "lines": [
+              "今晚朗读《晚照》2遍，请家长签字，明天早读检查"
+            ],
+            "plan_lines": [],
+            "complete_words": "",
+            "facts": [
+              {
+                "role": "published",
+                "label": "发布",
+                "value": "2026-11-04 16:00",
+                "known": true
+              },
+              {
+                "role": "complete",
+                "label": "完成",
+                "value": "2026-11-04",
+                "known": true,
+                "today": true
+              },
+              {
+                "role": "due",
+                "kind": "inspection",
+                "label": "检查",
+                "value": "2026-11-05",
+                "known": true,
+                "state": ""
+              }
+            ],
+            "today": true,
+            "when": "today",
+            "publications": [
+              {
+                "ref": "message:synthetic-group:501",
+                "source_name": "虚构班级",
+                "sender": "虚构语文老师"
+              }
+            ],
+            "published_at": "2026-11-04T16:00:00+08:00",
+            "publisher": "虚构语文老师",
+            "progress": null,
+            "records": [],
+            "wrong": []
+          }
+        ],
+        "undated": 0
+      },
+      {
+        "subject": "综合事务",
+        "items": [
+          {
+            "id": "AGENT-b9a8bf8bc153184d26815f36",
+            "kind": "task",
+            "task_id": "AGENT-b9a8bf8bc153184d26815f36",
+            "title": "交回《出游回执》（家长勾选签名）",
+            "subject": "综合事务",
+            "category": "todo",
+            "status": "待跟进",
+            "closed": false,
+            "pending_review": false,
+            "origin": "school",
+            "origin_label": "学校消息",
+            "lines": [
+              "今晚请家长在《出游回执》勾选参加或不参加并签名。",
+              "下周一由孩子交回。"
+            ],
+            "plan_lines": [],
+            "complete_words": "",
+            "facts": [
+              {
+                "role": "published",
+                "label": "发布",
+                "value": "2026-11-04 16:04",
+                "known": true
+              },
+              {
+                "role": "complete",
+                "label": "完成",
+                "value": "2026-11-04",
+                "known": true,
+                "today": true
+              },
+              {
+                "role": "due",
+                "kind": "handback",
+                "label": "交回",
+                "value": "2026-11-09",
+                "known": true,
+                "state": ""
+              }
+            ],
+            "today": true,
+            "when": "today",
+            "publications": [
+              {
+                "ref": "message:synthetic-group:505",
+                "source_name": "虚构班级",
+                "sender": "虚构班主任"
+              }
+            ],
+            "published_at": "2026-11-04T16:04:00+08:00",
+            "publisher": "虚构班主任",
+            "progress": null,
+            "records": [],
+            "wrong": []
+          }
+        ],
+        "undated": 0
+      }
+    ],
+    "closed": [],
+    "wrong": [
+      {
+        "subject": "数学",
+        "items": [
+          {
+            "id": 2,
+            "day": "2026-11-04",
+            "created": "2026-11-04T23:41:41.855275",
+            "title": "数学错题：第2题",
+            "subject": "数学",
+            "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+            "note_truncated": false,
+            "attachments": [
+              "08c4bc142f73286b4a7f9470dc6116cd"
+            ],
+            "followup_kind": "",
+            "related_record_id": 1,
+            "assistance": "",
+            "practice_relation": "",
+            "followups": [
+              {
+                "id": 3,
+                "day": "2026-11-04",
+                "created": "2026-11-04T23:41:41.929950",
+                "title": "订正：练习册第12页第2题 2+3",
+                "subject": "数学",
+                "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+                "note_truncated": false,
+                "attachments": [],
+                "followup_kind": "订正",
+                "related_record_id": 2,
+                "assistance": "",
+                "practice_relation": ""
+              }
+            ],
+            "state": "已订正",
+            "task_id": "AGENT-46d7f691d45e2af7a8132331",
+            "task_title": "数学：完成练习册第12页第2至4题"
+          }
+        ]
+      }
+    ],
+    "upcoming": [
+      {
+        "id": "AGENT-bb8551dbb459852787fd6bcd",
+        "task_id": "AGENT-bb8551dbb459852787fd6bcd",
+        "title": "英语：明天带《单词听写本》",
+        "subject": "英语",
+        "pending_review": false,
+        "change": "",
+        "day": "2026-11-05"
+      },
+      {
+        "id": "AGENT-8cf20b890ab7c179e47f2704",
+        "task_id": "AGENT-8cf20b890ab7c179e47f2704",
+        "title": "英语：明天英语课听写",
+        "subject": "英语",
+        "pending_review": false,
+        "change": "",
+        "day": "2026-11-05"
+      }
+    ],
+    "undated": [],
+    "materials": [],
+    "counts": {
+      "open": 4,
+      "closed": 0,
+      "upcoming": 2,
+      "material": 0,
+      "undated": 0,
+      "today": 4,
+      "overdue": 0,
+      "later": 0,
+      "earlier": 0,
+      "unknown": 0,
+      "passed": 0
+    },
+    "schedule": {
+      "lessons": [],
+      "plans": [],
+      "cancelled": 0,
+      "completed": 0
+    },
+    "schedule_error": "",
+    "week": [
+      {
+        "day": "2026-11-02",
+        "open": 0,
+        "today": 0,
+        "overdue": 0,
+        "closed": 0,
+        "upcoming": 0,
+        "schedule": 0
+      },
+      {
+        "day": "2026-11-03",
+        "open": 0,
+        "today": 0,
+        "overdue": 0,
+        "closed": 0,
+        "upcoming": 0,
+        "schedule": 0
+      },
+      {
+        "day": "2026-11-04",
+        "open": 4,
+        "today": 4,
+        "overdue": 0,
+        "closed": 0,
+        "upcoming": 2,
+        "schedule": 0
+      },
+      {
+        "day": "2026-11-05",
+        "open": 6,
+        "today": 4,
+        "overdue": 0,
+        "closed": 0,
+        "upcoming": 0,
+        "schedule": 0
+      },
+      {
+        "day": "2026-11-06",
+        "open": 4,
+        "today": 0,
+        "overdue": 2,
+        "closed": 0,
+        "upcoming": 0,
+        "schedule": 0
+      },
+      {
+        "day": "2026-11-07",
+        "open": 4,
+        "today": 0,
+        "overdue": 2,
+        "closed": 0,
+        "upcoming": 0,
+        "schedule": 0
+      },
+      {
+        "day": "2026-11-08",
+        "open": 4,
+        "today": 0,
+        "overdue": 2,
+        "closed": 0,
+        "upcoming": 0,
+        "schedule": 0
+      }
+    ],
+    "learning": {
+      "subjects": [
+        {
+          "subject": "数学",
+          "course": [],
+          "evidence": [
+            {
+              "kind": "wrong",
+              "record_id": 2,
+              "subject": "数学",
+              "day": "2026-11-04",
+              "title": "数学错题：第2题",
+              "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+              "note_truncated": false,
+              "state": "已订正",
+              "task_id": "AGENT-46d7f691d45e2af7a8132331",
+              "task_title": "数学：完成练习册第12页第2至4题",
+              "topics": [
+                {
+                  "topic_id": "cnm_p010",
+                  "name": "10以内的加法",
+                  "known": true,
+                  "basis": "current",
+                  "state": "diagnosed"
+                }
+              ],
+              "lines": [
+                [
+                  "原错题",
+                  "2026-11-04 · 已订正"
+                ],
+                [
+                  "知识点诊断",
+                  "10以内的加法 · 2026-11-04 · 答了2题"
+                ]
+              ],
+              "next": "已有知识点线索，还没有独立再试。"
+            }
+          ]
+        }
+      ],
+      "pack": {
+        "installed": true,
+        "message": ""
+      }
+    },
+    "school_pending": 0,
+    "school_read_gaps": [
+      {
+        "name": "虚构班级",
+        "status": "读取待核对"
+      }
+    ]
+  }
+}

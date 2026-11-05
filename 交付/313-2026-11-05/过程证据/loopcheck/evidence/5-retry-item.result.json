@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "item": {
+    "qid": "cnm_p010_q3",
+    "topic_id": "cnm_p010",
+    "prompt": "有 4 支铅笔，又放进来 5 支。一共有多少支？计算：4＋5＝？",
+    "type": "numeric",
+    "answer": "9"
+  },
+  "remaining": 18
+}

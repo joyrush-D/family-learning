@@ -1,0 +1,68 @@
+family_agent.py recreated build-311 tree; target sha1 de6859a3454b0ee01bc21b5f7a38c7faf9552d98
+sha1 of /tmp/merge18_audit/family_agent.py: de6859a3454b0ee01bc21b5f7a38c7faf9552d98
+
+== P1 _school_same_due: reminder states a different day from the card ==
+  card due='2026-11-06'
+  明天交 (no move word)           new -> None  RAISED AttributeError: 'str' object has no attribute 'search'
+                               HEAD -> '提醒的日期与原事项不一致或原事项没有明确截止，是否同一次待核对；原事项和提醒原文都保留。'
+  ^ _school_same_due L3205 calls _SCHOOL_MOVED.search(said) although _SCHOOL_MOVED is a raw string (L3881):
+    the very branch that judges a differing reminder day raises AttributeError before any review is written.
+  改到11月10日 (with move word)    new -> None  RAISED AttributeError: 'str' object has no attribute 'search'
+                               HEAD -> '提醒的日期与原事项不一致或原事项没有明确截止，是否同一次待核对；原事项和提醒原文都保留。'
+  ^ _school_same_due L3205 calls _SCHOOL_MOVED.search(said) although _SCHOOL_MOVED is a raw string (L3881):
+    the very branch that judges a differing reminder day raises AttributeError before any review is written.
+  same day 周五                  new -> ''
+                               HEAD -> ''
+[FAIL] P1 differing-day reminder is judged (no exception): got=('AttributeError', "'str' object has no attribute 'search'") expected=()
+  reachability: _select L8325 (same/ready proposals) and _reconcile_school_same L3459/L3530.
+  run_once catches only (LLMDraftError, AgentError, ValueError) around _select (L10305):
+  an AttributeError escapes, the batch is not saved and its messages get no card.
+
+== P2 _publisher_cross_channel: display name only identifies the person ==
+  wechat 王老师 publisher: publisher:0fe4951aa5a670a7044c
+  qq     林老师 publisher: publisher:0fe4951aa5a670a7044c   (different display name -> different publisher)
+  same child, other platform, same display name 王老师 but sender_id qq-9999: publisher:9cc489699c5ef19c9f4d
+  native per-source publisher would be: publisher:ba38abe395538173ba36
+  -> one publisher:hash(sender,child,name) for every 王老师 of that child on both platforms
+[PASS] P2 two different 王老师 accounts of one child read as ONE publisher: got=True expected=True  # publisher is name-only; sender_id is discarded once the peer name matches
+  same display name on the other child c2: publisher:34d1acdc3e90101b4107  (child in the hash -> no cross-child merge)
+[PASS] P2b cross-child same-name publisher ids differ: got=True expected=True
+
+== P3 folded card (evidence from two channels) loses its publisher ==
+  school_pending_targets -> [{'id': 'pending:p-folded', 'title': '数学：《每日练习》第26页第1—4题', 'goal': '完成《每日练习》第26页第1—4题。\n每题写算式。', 'due': '2026-11-06', 'state': 'pending', 'source_id': '', 'publisher': '', 'refs': ['message:s-wechat:m1', 'message:s-qq:m3'], 'latest': '2026-11-04T16:30:00+08:00', 'first': '2026-11-04T10:00:00+08:00'}]
+[FAIL] P3 folded card target keeps a publisher: got=False expected=True  # len(publishers)==2 because (source_id,publisher) pairs differ -> ("","")
+  _school_pending_link for a third notice -> None
+[FAIL] P3b third notice can link to the folded card: got=False expected=True  # no publisher -> link None -> duplicate pending card instead of folding
+  impact: _save calls _school_fold_pending only when plan.school_pending_of is set at selection;
+  the same publisher=""/append_eligible=False path also blocks a third channel supplement on accepted tasks.
+
+== P4 two pending cards sharing an object: first match wins ==
+  pending targets (newest first): [('pending:p-math', '数学：《每日练习》第26页第1—4题', 'publisher:0fe495'), ('pending:p-chinese', '语文：《每日练习》第26页朗读', 'publisher:0fe495')]
+  _school_pending_link per card -> [{'item_id': 'p-math', 'change': 'same', 'publisher': 'publisher:0fe4951aa5a670a7044c'}, {'item_id': 'p-chinese', 'change': 'same', 'publisher': 'publisher:0fe4951aa5a670a7044c'}]
+  _select L8125-8133 picks the first proving card -> pending:p-math
+  the notice itself says 数学; the two cards are 数学/语文; no subject/ambiguity check here
+[FAIL] P4 an ambiguous notice is refused (both cards prove -> no unique link): got=False expected=True  # two independent affairs share 《每日练习》 and the program links to whichever card it listed first
+
+== P5 _school_fold_pending keeps the old day and title of a moved/narrowed notice ==
+  folded=True; card title='数学：《每日练习》第26页第1—4题'; card due='2026-11-06'; body='完成《每日练习》第26页第1—4题。\n更正：只做《每日练习》第26页第1—3题，改到11月10日交。'
+  school_folded=[{'at': '2026-11-04T18:00:00', 'change': 'update', 'refs': ['message:s-wechat:m5']}]
+  notice own due was 2026-11-10 and it says 改到11月10日交 -> card day still '2026-11-06'
+[FAIL] P5 the card day follows a notice that moves it: got=False expected=True  # UPDATE sets due=row["due"] or item due -> the existing day always wins
+[FAIL] P5b the card title keeps a narrowed scope out of its headline: got=False expected=True  # title is never updated by the fold
+
+== P6 fold of a cancellation notice: card state/due untouched ==
+  card state='pending' due='2026-11-06' body='带两片落叶。\n美术课取消，叶子不用带了。'
+  family_agenda _one_pending_affair shows version.reasons 含取消或停止原要求 and keeps the card pending
+
+== P7 formed split residue whose wording has no whitelisted verb ==
+  message='数学：口算第12页第1—3题。\n语文：预习《成长手册》第3页。'
+  -> 2 proposals, marks=[1]
+    [0] mark=[] title='数学：口算第12页' goal='完成口算第12页第1—3题。' -> new filter KEEPS
+    [1] mark=['formed'] title='语文：预习《成长手册》第3页' goal='语文：预习《成长手册》第3页' -> new filter SKIPS
+[FAIL] P7 formed requirement '语文：预习《成长手册》第3页' survives the split filter: got=False expected=True  # the formed proposal is the only carrier; _select L8264 continues past it
+  message='数学：口算第12页第1—3题。体检表：家长签字后交回。'
+  -> 1 proposals, marks=[]
+    [0] mark=[] title='数学：口算第12页' goal='完成口算第12页第1—3题。' -> new filter KEEPS
+  code: _select L8263-8270 `if "formed" in mark and not _SCHOOL_SPLIT_REQUIREMENT.search(...): continue`;
+  _school_separate_outcomes L912-917 builds the formed proposal from the original run text,
+  and L982 already removed the split object lines from the home proposal goal.

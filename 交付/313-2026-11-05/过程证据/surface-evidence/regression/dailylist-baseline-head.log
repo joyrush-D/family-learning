@@ -1,0 +1,10 @@
+AssertionError [ERR_ASSERTION]: 360 future items are 以后安排
+    at /private/tmp/repo-head/test_daily_list_actual_scope_ui.cjs:52:126 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+TERMINAL exit=1

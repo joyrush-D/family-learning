@@ -1,0 +1,223 @@
+{
+  "ok": true,
+  "steps": [
+    {
+      "seq": 1,
+      "topic_id": "cnm_p010",
+      "qid": "cnm_p010_q4",
+      "prompt": "8＋2 的得数是哪一个？",
+      "type": "choice",
+      "expected": "D",
+      "text": "A",
+      "verdict": "wrong",
+      "engine_result": "wrong",
+      "session": {
+        "targets": [
+          "cnm_p010"
+        ],
+        "limit": 8,
+        "confirm": 3,
+        "order": [
+          "cnm_p001",
+          "cnm_p004",
+          "cnm_p006",
+          "cnm_p008",
+          "cnm_p010"
+        ],
+        "stack": [
+          "cnm_p010"
+        ],
+        "status": {},
+        "answers": [
+          {
+            "id": "cnm_p010",
+            "qid": "cnm_p010_q4",
+            "result": "wrong",
+            "text": "A"
+          }
+        ],
+        "attempts": {
+          "cnm_p010": [
+            {
+              "qid": "cnm_p010_q4",
+              "result": "wrong"
+            }
+          ]
+        },
+        "seed": "3d3e24e8b0314942a9d15d09fcdd199e",
+        "avoid": [],
+        "mode": "target",
+        "scope": null
+      },
+      "summary": {
+        "mode": "target",
+        "targets": [
+          "cnm_p010"
+        ],
+        "asked": 1,
+        "limit": 8,
+        "finished": false,
+        "limitReached": false,
+        "mastered": [],
+        "shaky": [],
+        "weak": [
+          "cnm_p010"
+        ],
+        "unconfirmed": [
+          "cnm_p010"
+        ],
+        "untested": [
+          "cnm_p001",
+          "cnm_p004",
+          "cnm_p006",
+          "cnm_p008"
+        ],
+        "roots": [
+          {
+            "id": "cnm_p010",
+            "pendingPrereqs": [
+              "cnm_p006",
+              "cnm_p008"
+            ],
+            "outOfScopePrereqs": [],
+            "externalPrereqs": []
+          }
+        ],
+        "path": [
+          {
+            "id": "cnm_p010",
+            "status": "weak",
+            "isRoot": true,
+            "isTarget": true
+          }
+        ]
+      }
+    },
+    {
+      "seq": 2,
+      "topic_id": "cnm_p010",
+      "qid": "cnm_p010_q1",
+      "prompt": "计算：6＋3＝？",
+      "type": "numeric",
+      "expected": "9",
+      "text": "9",
+      "verdict": "correct",
+      "engine_result": "correct",
+      "session": {
+        "targets": [
+          "cnm_p010"
+        ],
+        "limit": 8,
+        "confirm": 3,
+        "order": [
+          "cnm_p001",
+          "cnm_p004",
+          "cnm_p006",
+          "cnm_p008",
+          "cnm_p010"
+        ],
+        "stack": [
+          "cnm_p010"
+        ],
+        "status": {
+          "cnm_p010": {
+            "s": "shaky",
+            "src": "direct"
+          }
+        },
+        "answers": [
+          {
+            "id": "cnm_p010",
+            "qid": "cnm_p010_q4",
+            "result": "wrong",
+            "text": "A"
+          },
+          {
+            "id": "cnm_p010",
+            "qid": "cnm_p010_q1",
+            "result": "correct",
+            "text": "9"
+          }
+        ],
+        "attempts": {
+          "cnm_p010": [
+            {
+              "qid": "cnm_p010_q4",
+              "result": "wrong"
+            },
+            {
+              "qid": "cnm_p010_q1",
+              "result": "correct"
+            }
+          ]
+        },
+        "seed": "3d3e24e8b0314942a9d15d09fcdd199e",
+        "avoid": [],
+        "mode": "target",
+        "scope": null
+      },
+      "summary": {
+        "mode": "target",
+        "targets": [
+          "cnm_p010"
+        ],
+        "asked": 2,
+        "limit": 8,
+        "finished": true,
+        "limitReached": false,
+        "mastered": [],
+        "shaky": [
+          "cnm_p010"
+        ],
+        "weak": [],
+        "unconfirmed": [],
+        "untested": [
+          "cnm_p001",
+          "cnm_p004",
+          "cnm_p006",
+          "cnm_p008"
+        ],
+        "roots": [],
+        "path": [
+          {
+            "id": "cnm_p010",
+            "status": "shaky",
+            "isRoot": false,
+            "isTarget": true
+          }
+        ]
+      }
+    }
+  ],
+  "summary": {
+    "mode": "target",
+    "targets": [
+      "cnm_p010"
+    ],
+    "asked": 2,
+    "limit": 8,
+    "finished": true,
+    "limitReached": false,
+    "mastered": [],
+    "shaky": [
+      "cnm_p010"
+    ],
+    "weak": [],
+    "unconfirmed": [],
+    "untested": [
+      "cnm_p001",
+      "cnm_p004",
+      "cnm_p006",
+      "cnm_p008"
+    ],
+    "roots": [],
+    "path": [
+      {
+        "id": "cnm_p010",
+        "status": "shaky",
+        "isRoot": false,
+        "isTarget": true
+      }
+    ]
+  }
+}

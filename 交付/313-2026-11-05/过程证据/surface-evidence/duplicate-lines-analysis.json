@@ -1,0 +1,44 @@
+{
+  "note": "判断英语卡两条近义要求的来源：只依据 payload 的 publications/records/origin/publisher 与任务原文（逐字定位），不猜测。",
+  "payload_sha1_of_family_agenda_py": "6c1574d7cc474542b2656214879c9615c77aebd7",
+  "task": {
+    "id": "MANUAL-8b49b865b9c7594c734d",
+    "title": "英语：完成《每日练习》",
+    "source": "家长录入",
+    "action": "完成英语《每日练习》：一、看图选词第1—3题；二、标星单词 under、near 各抄写一遍。不需要录音。做完放进英语夹里，明天带来。\n提交要求：做完放进英语夹，明天带来。补充要求：完成英语《每日练习》。完成后放进英语夹里，明天带到学校。不用在群里发照片。"
+  },
+  "day_item": {
+    "id": "MANUAL-8b49b865b9c7594c734d",
+    "origin": "family",
+    "origin_label": "家长录入",
+    "publisher": "",
+    "published_at": "",
+    "publications": [],
+    "records": [],
+    "lines": [
+      "一、看图选词第1—3题",
+      "二、标星单词 under、near 各抄写一遍。",
+      "不需要录音。",
+      "做完放进英语夹里，明天带来。",
+      "完成后放进英语夹里，明天带到学校。",
+      "不用在群里发照片。"
+    ],
+    "plan_lines": []
+  },
+  "source_message_count": 0,
+  "matching": [
+    {
+      "line": "做完放进英语夹里，明天带来。",
+      "found_in_same_task_action": true,
+      "char_offset": 53,
+      "which_section": "正文段（第一行）"
+    },
+    {
+      "line": "完成后放进英语夹里，明天带到学校。",
+      "found_in_same_task_action": true,
+      "char_offset": 102,
+      "which_section": "提交要求/补充要求段（第二行）"
+    }
+  ],
+  "conclusion": "两条行都只在同一条任务原文（同一条家长录入事项、payload 的 publications 与 records 均为空、publisher 为空）里出现：「做完放进英语夹里，明天带来。」来自正文段末尾，「完成后放进英语夹里，明天带到学校。」来自补充要求段，没有任何第二条来源消息可归属。按契约这是**同一来源的不同句子**且语义重复，属“同义重复未收干净”，交回 projection 处理，客户端不改。"
+}

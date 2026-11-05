@@ -1,0 +1,2294 @@
+"""Calendar views of existing tasks, school inbox and study sessions; no copied tasks."""
+import collections
+import datetime as dt
+import functools
+import json
+import re
+import unicodedata
+import family_agent
+import family_calendar
+import family_study
+
+
+def date(value):
+    try:
+        if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',value or ''): return ''
+        return dt.date.fromisoformat(value).isoformat()
+    except (ValueError,TypeError): return ''
+
+def sent_at(value):
+    try:
+        stamp=dt.datetime.fromisoformat(value.replace('Z','+00:00'))
+        return stamp.replace(tzinfo=stamp.tzinfo or family_agent.TZ).astimezone(family_agent.TZ).isoformat()
+    except (ValueError,TypeError,AttributeError):return ''
+
+def sent_day(value):
+    return sent_at(value)[:10]
+
+
+_WEEKDAYS={'一':0,'二':1,'三':2,'四':3,'五':4,'六':5,'日':6,'天':6}
+
+
+def _relative_weekday(text,anchor):
+    """Ground 本周X/下周X/周X against the sending day; recurring (每周), past (上周) or unknown anchors stay as written."""
+    if not anchor: return text
+    # A date restating its own weekday (2026-11-10（周二）, from 11月10日（周二）) names that one day; a weekday the date does
+    # not fall on stays written beside it, so the clause keeps two days and is read as unknown, never guessed.
+    text=re.sub(r'(\d{4}-\d{2}-\d{2})\s*[（(]\s*(?:周|星期|礼拜)([一二三四五六日天])\s*[）)]',
+                lambda m:m[1] if date(m[1]) and dt.date.fromisoformat(m[1]).weekday()==_WEEKDAYS[m[2]] else m[0],text)
+    sent=dt.date.fromisoformat(anchor); monday=sent-dt.timedelta(days=sent.weekday())
+    def resolve(match):
+        if match.group('range') or (match.group('prefix') or '').startswith(('每','上')) or re.search(r'[每上本这下个]\s+$',text[:match.start()]): return match[0]
+        prefix,name=match.group('prefix') or '',_WEEKDAYS[match.group('day')]
+        if prefix in ('本','这','这个','本个'): value=monday+dt.timedelta(days=name)
+        elif prefix in ('下','下个'): value=monday+dt.timedelta(days=7+name)
+        else: value=monday+dt.timedelta(days=name+(7 if name<sent.weekday() else 0))
+        # A day already gone this week is not a usable deadline; leave the phrase for review.
+        return value.isoformat() if value>=sent else match[0]
+    return re.sub(r'(?<![每上本这下个])(?P<prefix>每个|上个|本个|这个|下个|每|上|本|这|下)?(?:周|星期|礼拜)(?P<day>[一二三四五六日天])(?P<range>\s*(?:到|至|[-–—~～])\s*(?:本个|这个|下个|本|这|下)?(?:周|星期|礼拜)?[一二三四五六日天])?(?![周月年])',resolve,text)
+
+
+def _grounded_text(text,anchor):
+    def chinese_date(match):
+        year,month,day=match.groups()
+        # ponytail: an omitted year is grounded only within the sending month; other cases need review.
+        if not year and (not anchor or int(month)!=int(anchor[5:7])): return match[0]
+        value=f'{int(year or anchor[:4]):04d}-{int(month):02d}-{int(day):02d}'
+        return value if date(value) else match[0]
+    return re.sub(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*日',chinese_date,text or '')
+
+
+def deadlines(text,published):
+    """Every date the text ties to a required action or dated school event, grounded on the sending day."""
+    return _action_deadlines(text,published)|event_days(text,published)
+
+
+def _in_title(text,index):
+    """A 《》 title is an object's name, not a sentence: a day or verb written inside it is not one the text states."""
+    return text.count('《',0,index)>text.count('》',0,index)
+
+
+def _titles_read_as_objects(text):
+    """The text as its actions are read: each 《》 title's own words are blanked to the same length, keeping its
+    clause marks, so a title can neither give a day or verb of its own nor hide the real one written after it."""
+    out=[];opened=closed=0
+    for ch in text:
+        out.append('_' if opened>closed and ch not in '《》。；;，,\n' else ch)
+        opened+=ch=='《';closed+=ch=='》'
+    return ''.join(out)
+
+
+# The direct negation of the predicate that follows it (不、不用、无需再…); 不晚于/不迟于/不超过 bound a day instead, and
+# 别 ending another word (分别、特别、区别) negates nothing.
+_NEGATED_LEAD=(r'(?:不(?!晚于|迟于|超过)|没有?|未|无需|无须|免|(?<![分区特告个差识辨离派级类性])别|勿)'
+               r'(?:用|必|需要?|要求?|得)?\s*(?:再|额外|另行)?\s*')
+# A negation itself negated (不是不需要、不能不、并非不用、没有不) grants no leave: the predicate stands as required.
+_NEGATION_HEAD=r'(?:不是|并非|并不是|绝非|决非|不能|不可以?|不得|不许|不准|没有|没)\s*(?:说)?\s*'
+_NEGATION_NEGATED=re.compile(_NEGATION_HEAD+r'$')
+
+
+def _negation_negated(before):
+    return bool(_NEGATION_NEGATED.search(before))
+
+
+# A negation itself negated is the predicate required (不是不需要提交 = 需要提交、不能不交 = 需要交、并非不用带 = 需要带): every reader
+# of an action's time role reads that affirmative, so the action and its day are neither a leave nor lost.
+_DOUBLE_NEGATION=re.compile(_NEGATION_HEAD+r'(?:不(?!晚于|迟于|超过)|没有?|未|无需|无须|免|别|勿)(?:用|必|需要?|要求?|得)?')
+
+
+def affirmed(text):
+    """text with each double negation read as the requirement it states."""
+    return _DOUBLE_NEGATION.sub('需要',text or '')
+
+
+def _negates(before):
+    """Whether the words right before a predicate negate it (不用、无需再), never a negation that is itself negated."""
+    m=re.search(_NEGATED_LEAD+r'$',before)
+    return bool(m) and not _negation_negated(before[:m.start()])
+
+
+def _action_deadlines(text,published):
+    """Every date the text ties to a required action, grounded on the sending day."""
+    anchor=date(published)
+    text=_grounded_text(affirmed(text),anchor)
+    if date(text): return {text}
+    text=_relative_weekday(text,anchor)
+    candidates=set()
+    # 把 right after the day names the object its own verb acts on. A complete name ending in its own noun
+    # (把校内参观活动回执签字交回) is one object however long, so only that noun counts toward the window below; a
+    # state, another day or a clause word inside the name (把已取消的活动回执), or a day that is itself written inside a
+    # 《》 title (资料标题为《明天把…回执交回指南》), leaves the text as it was.
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
+                r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z0-9])*?'
+                r'('+_EVENT_OBJECT_NOUN+r')(?=签字|盖章|交|带|上交|提交)',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+m[2],text or '')
+    action=r'(?:前|截止|完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|听[^。；;，,\n]{0,12}录音|带|穿|交(?!流|通|换|谈)|测验|考试|听写|默写|检测)'
+    # A 《》 title ends at its own closing bracket, and a page/lesson number ends a plain book name the same way, so
+    # 把《图形与证明综合练习》的第4页完成, 把《单位换算强化训练》练习第2页订正 or 把数学练习册第4页完成 is likewise one object
+    # for the same action list below; a state or another day inside it, a clause word in the plain name, or anything
+    # else before the action leaves the text as it was.
+    locator=r'(?:[、和]?的?第?[0-9一二三四五六七八九十百]+(?:[-–~～至到]第?[0-9一二三四五六七八九十百]+)?(?:页|题|课|单元|章|节))'
+    plain=r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[一-鿿A-Za-z])'
+    text=re.sub(r'((?:\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?:(?:由家长|由孩子|由学生|家长|孩子|学生|请)[ \t]*){0,2}把)'
+                r'(?:《(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r')[^《》。；;，,\n])+》(?:'+plain+r'*?'+locator+r'+)?'
+                r'|'+plain+r'+?'+locator+r'+)'
+                r'(?:(?:签字|签名|盖章|填好|填写)(?:并|后)?)*(?='+action+r')',lambda m:m[0] if _in_title(m.string,m.start()) else m[1]+'《》',text)
+    text=_titles_read_as_objects(text)
+    # A date alone is not a deadline; it must be tied to an explicit action or dated school event.
+    pattern=r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)([^。；;，,\n]{0,8}?)'+action
+    for match in re.finditer(pattern,text or ''):
+        # A direct negation right before the action (今晚不交纸质作业、明天不用带) ties the day to no action of its own.
+        if _negates(match[2]):continue
+        token=match[1];value=date(token)
+        if not value and published and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    for match in re.finditer(r'截止(?:时间|日期)?\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})',text):
+        if date(match[1]): candidates.add(match[1])
+    # A directly dated revision/parent action is just as explicit as 完成 or
+    # 提交. Keep this grammar narrow: do not turn 公布复习资料, 打印机指南 or
+    # 签字安排 into a deadline by searching arbitrarily past the date.
+    direct_prefix=r'[ \t：:]*(?:(?:需要|务必|由家长|同学们|家长|孩子|学生|请|需|须|要|先)[ \t]*){0,2}(?:(?:语文|数学|英语|科学|历史|地理|生物|物理|化学)[ \t：:]*)?'
+    direct_action=r'(?:复习|打印|签字|盖章)(?!资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况|方式|入口|功能|机)'
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)'+direct_prefix+direct_action,text):
+        token=match[1];value=date(token)
+        if not value and anchor and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    # A day directly heading one of the child's own learning activities, after at most its asker and subject (今晚跟读Unit 5、
+    # 语文今晚阅读《晨星故事》、数学今晚口算第1题、英语明天跟读、今晚读《长叶读本》), ties it just as 今晚复习 does: the native
+    # reader's activities and the completion verbs, no list of its own. A report or question after the verb (读了、读过的、
+    # 跟读吗), a negation or condition (not an asker word), or a question or condition in its clause states no requirement.
+    # A counted exercise (今晚原地高抬腿30次) is such an activity too (_COUNTED_ACT).
+    learning=(r'(?:(?:'+family_agent._SCHOOL_LEARNING_ACTS+'|'+_COMPLETION_VERB+r')(?![了过的着吗册本卷]|资料|材料|计划|安排|通知|要求|时间|指南|方法|建议|结果|情况)'
+              r'|'+_COUNTED_ACT+r')')
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)'+direct_prefix+learning,text):
+        clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
+        # A day offered as one option (今晚或明晚跳绳100下) leaves the day to choose.
+        if re.search(r'吗|[？?]|如果|假如|若是|要是|是否',clause) or re.search(r'(?:或者?|或是|还是)\s*$',text[:match.start()]):continue
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[match[1]]
+        if not anchor:continue
+        try:candidates.add((dt.date.fromisoformat(anchor)+dt.timedelta(days=offset)).isoformat())
+        except OverflowError:pass
+    # A day directly heading the child's own preparation of a thing (明天准备好一条短绳、周四请家长准备齐三支彩笔) ties it as
+    # 明天带 does. A negation (不用准备好), an option (可以准备、自愿准备) or a question or condition in its clause (如果下雨、
+    # 是否准备好) states no requirement, and a name or state after the word (准备活动、准备好的材料) is no predicate (_PREPARE).
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)([^。；;，,\n]{0,8}?)'+_PREPARE,text):
+        clause=re.split(r'[。；;，,\n]',text[:match.start()])[-1]+re.split(r'[。；;，,\n]',text[match.start():])[0]
+        if (_negates(match[2]) or re.search(r'可|自愿|自选|酌情|视情况|建议|尽量|最好|如有|有条件',match[2])
+                or re.search(r'吗|[？?]|如果|假如|若是|要是|是否|万一|如需|仅供参考',clause)):continue
+        value=date(match[1])
+        if not value and anchor:
+            try:value=(dt.date.fromisoformat(anchor)+dt.timedelta(days={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[match[1]])).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    for match in re.finditer(r'(?:报名|填报|选课|提交|上交)时间\s*[：:为是]*\s*(\d{4}-\d{2}-\d{2})([^。；;\n]*)',text):
+        day,tail=match.groups()
+        clock=r'(?:[01]?\d|2[0-3])[:：][0-5]\d'
+        if date(day) and not re.search(r'\d{4}-\d{2}-\d{2}|起|开始|持续',tail) and re.fullmatch(r'\s*'+clock+r'\s*[-–—‑~～至到]\s*'+clock+r'[！!❗‼️\s]*',tail):
+            start,end=[tuple(map(int,t)) for t in re.findall(r'(\d{1,2})[:：](\d{2})',tail)]
+            if start<=end:candidates.add(day)
+    # A dated test the child sits: the subject and unit name (e.g. 英语Unit1-3单元) often sit between the
+    # date and the exam word, past the tight window above. Allow that gap but stop before another date
+    # or a clause break so separate items keep their own dates. 测试/检测 stay out here: 设备测试/核酸检测
+    # are not tests the child sits, and the tight pass already covers their own phrasings.
+    span=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)[^。；;，,\n]){0,16}?'
+    reading_event=r'读(?=[一二两三四五六七八九十百0-9]+(?:遍|次))'
+    # Unit/title names can separate the date from the reading action. Do not
+    # cross a different date or clause, or treat a material's name as an action.
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)'+span+r'(?:'+reading_event+r')',text or ''):
+        token=match[1];value=date(token)
+        if not value and published and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    # A conflicting relative/explicit parenthetical is uncertainty, not a
+    # reason to silently prefer one date. A mere date label remains no action.
+    for match in re.finditer(r'(今天|今日|今晚|明天|明日|明早|明晚|后天)\s*[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]',text or ''):
+        if not published or not re.match(span+r'(?:完成|订正|提交|上交|交齐|带到|带来|交作业|朗读|背诵|抄写|预习|'+reading_event+r')',text[match.end():]):continue
+        offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[match[1]]
+        try:relative=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+        except OverflowError:continue
+        if date(match[2]):candidates.update((relative,match[2]))
+    # A dated pickup the family is asked to do: when and where (放学、东门) stand between the day and 接孩子, past the
+    # tight window above. It stays inside its clause; another day or a negation (不用接) before it leaves the day unread.
+    pickup=r'(?:(?!\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天|不|无|勿|别|免|未|没)[^。；;，,\n]){0,16}?接\s*(?:'+_PARTICIPANTS['学生']+r')'
+    exam_event=r'单元测|体育测试|小测|月考|期中|期末|测验|考试|统考|联考|水平测|质检|摸底'
+    for match in re.finditer(r'(\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|明早|明晚|后天)(?:'+span+r'(?:'+exam_event+r')|'+pickup+r')',text or ''):
+        token=match[1];value=date(token)
+        if not value and published and token in ('今天','今日','今晚','明天','明日','明早','明晚','后天'):
+            offset={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'明早':1,'明晚':1,'后天':2}[token]
+            try:value=(dt.date.fromisoformat(published)+dt.timedelta(days=offset)).isoformat()
+            except OverflowError:pass
+        if value:candidates.add(value)
+    return candidates
+
+
+_EVENT_DAY=r'\d{4}-\d{2}-\d{2}|今天|今日|今晚|明天|明日|后天'
+# Preparing a thing as the predicate: 准备 completed by 好/齐 or taking a counted thing (准备好一条短绳、准备两支彩笔), never a
+# name or state it stands in (准备活动、准备好的材料、准备好了吗).
+_PREPARE=r'准备(?:好|齐|(?=[一二两三四五六七八九十几0-9]+\s*[个条支张本份根把件双套盒包瓶块片枚只袋副]))(?![了过的着吗])'
+_DAY_WORDS=r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}|今天|今日|今晚|明天|明日|明早|明晚|后天|昨天|前天|(?:周|星期|礼拜)[一二三四五六日天]'
+# Who is asked to attend: everyone, a counted few (一位家长、两名学生) or a named group.
+_ATTENDEE=r'(?:各位|全体|(?:至少)?[一二两1-2]\s*(?:位|名))?(?:家长|学生|同学们?|孩子们?)?'
+_ATTEND_REQUEST=r'(?:请|务必|必须|须|需|每(?:家|户))'+_ATTENDEE+r'(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)(?!安排|通知|方式|时间|人员|名单)'
+# Excusing someone from attending or coming (孩子不用来、可不参加).
+_EXCUSE=r'(?:可以?不|不必|无需|无须|不用|不需要?)\s*(?:参加|出席|到场|参会|来|到校)'
+# The two kinds of participant a notice asks or excuses (家长 / 孩子、学生).
+_PARTICIPANTS={'家长':r'家长|父母|爸爸|妈妈','学生':r'孩子们?|学生|同学们?|小朋友'}
+# Not (yet) held on that day, or attending it is optional.
+_EVENT_STATE=(r'取消|延期|改期|推迟|暂停|停办|改为|改到|改至|原定|已于|已经|已举行|已召开|已结束|回顾|暂定|初定|拟(?:于|在|定)|待定|待确定|尚未确定|未定'
+              r'|另行(?:通知|告知|安排)|(?:后续|稍后|随后|再行|届时)(?:通知|告知|公布)|待通知'
+              r'|自愿|自由|可选|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制|非强制|非必须|不作(?:统一|强制)?要求|酌情|视情况|仅供参考|选择性')
+# A state word that can take what follows as its object: 取消打印材料 cancels the printing, 可不参加 the attending.
+_EVENT_STATE_OBJECT=r'取消|暂停|停办|推迟|延期|改期|改为|改到|改至|可以?不|不必|无需|无须|不用|不需要?|不要求|不强制'
+# Of those, one whose object is what it acts on (取消安全讲座), not the new value it gives (改为安全讲座).
+_EVENT_STATE_ON=r'(?:(?!改为|改到|改至)(?:'+_EVENT_STATE_OBJECT+r'))'
+# Another object's own noun. A Chinese name ends in its noun, so it is the last word before the state or the clause end.
+_EVENT_OBJECT_NOUN=r'回执|资料|材料|座位|车位|表|单|册|书|证|卡|票|物品|用品'
+# Words that open a clause around a name rather than sit inside it: a cause or agent (因单位安排、由…), a place or
+# time preposition, a conjunction joining another predicate (并退费), an adverb or a negation.
+_EVENT_CLAUSE_WORD=r'因|由|被|把|将|于|在|从|据|经|并|且|而|已|未|没|仍|还|再|又|均|都|也|不|无|非'
+# The only words that make the event's words a modifier of another object: what follows them is that object's
+# complete name ending in its own noun (家长会回执、会议资料、家长会安排表), then only how that object stands
+# (家长会回执已经取消). A noun inside a cause or another word (因单位安排、因书面通知、因书面材料), or any other words
+# between them and the state (原本已经、因故、已), leaves the state on the event itself, so a relation that cannot be
+# read from the original stays unconfirmed.
+_EVENT_OTHER_OBJECT=(r'的?(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[^，,])*?(?:'+_EVENT_OBJECT_NOUN+r')'
+                     r'(?:'+_EVENT_STATE+r'|已|均|都|也|亦|一律|全部|暂时?)*')
+# What can report an event: a document or material carrying its content, never a seat, a ticket or a book.
+_EVENT_DOCUMENT=r'资料|材料|回执|通知书?|告知书|告家长书|倡议书|说明书|公告|文件|简报|来函|海报|消息|邮件|表格|清单|手册'
+# A day labelling an edition (2026年10月10日版), or one whose 的 phrase names a document that reports the event before it
+# is held (10月10日的家长会资料说明家长会将…举行), dates that edition or document, not when the event is held. The
+# reporting word must be the predicate of that complete document name, followed by a complete reported clause: the
+# holding itself or a nameable event of its own before it. A reporting word inside the held event's own name, after
+# anything but a document (2026年10月18日的学校说明会、学校科创成果介绍交流会在报告厅举行), leaves the day on that event.
+_EVENT_OTHER_DAY=(r'(?:'+_EVENT_DAY+r')\s*(?:[（(][^）)]*[）)])?\s*版(?!画)'
+                  r'|(?:'+_EVENT_DAY+r')\s*的(?:(?!'+_EVENT_DAY+r'|[将定拟于在]|举行|召开|举办)[^，,])*?(?:'+_EVENT_DOCUMENT+r')'
+                  r'(?:说明|显示|表示|指出|提到|写明|写道|告知|介绍|载明|注明)'
+                  r'(?:(?:(?!'+_EVENT_DAY+r'|[将定拟于在]|举行|召开|举办)[^，,]){2,})?(?:[将定拟于在]|举行|召开|举办)')
+
+
+def _event_names(event):
+    """The held event's own names in its clause: the words before its day or place (家长会定于… → 家长会) and after 举行."""
+    cut=r'(?:'+_EVENT_DAY+r')|[\d\s：:（）()]|(?:定|将|拟|计划|安排|暂定|初定|原定)?(?:于|在)|暂定|初定|原定|举行|召开|举办|不是|并非|不'
+    return [p for p in re.split(cut,event) if len(p)>=2][:1]+re.findall(r'(?:举行|召开|举办)([^\d\s：:（）()]{2,})',event)
+
+
+def _event_mention(event):
+    """What still means this held event in another clause: its own name (家长会定于… → 家长会), attending or holding it, or its time."""
+    own=sorted({name[i:] for name in _event_names(event) for i in range(len(name)-1)},key=len,reverse=True)
+    return '|'.join([re.escape(x) for x in own]+[r'参加|出席|到场|参会|举行|召开|举办|活动|会议|^的?(?:时间|日期)|(?:具体|准确|确切|详细)的?(?:时间|日期)'])
+
+
+# A word pointing back at what the notice already named (该、本次、上述).
+_EVENT_POINTER=r'(?:该|此|本|这|上述|以上)(?:次|项|场|个)?'
+# One negation word right before a predicate or another negation (不取消、并未延期、没有被取消、无需取消、不能不取消).
+_EVENT_NEGATION=r'(?:不必|无需|无须|不用|不需要?|不得|不能|不会|不再|无法|没有?|不是|并非|不|未)被?'
+
+
+def _negated(before):
+    """Whether the negations right before a predicate state its opposite. They are read together as one chain, each negating
+    what follows it: one states the opposite (不取消、不能取消、无需取消), a second restores the predicate (不得不取消、不能不取消、
+    并非不取消), and so on by their count. A negation still left just before the chain (未必不取消、不可能不取消) makes the
+    chain unreadable, so the predicate is never read as negated and its event stays unconfirmed."""
+    count=0
+    while True:
+        m=re.search(_EVENT_NEGATION+r'$',before)
+        if not m:break
+        count+=1;before=before[:m.start()]
+    return count%2==1 and not re.search(r'(?:不|没|未|无|非|别|莫|勿)\S{0,2}$',before)
+# Where a whole name ends: the words after it open a predicate, a clause, a day or a joined name (安全讲座取消、安全讲座因故
+#延期、安全讲座和运动会取消), or name its time. Any other word goes on naming a longer object it only heads (安全讲座筹备会议).
+_EVENT_NAME_END=(r'(?!(?!'+_EVENT_STATE+r'|'+_EVENT_CLAUSE_WORD+r'|'+_DAY_WORDS+r'|[和与及或跟同等了]|的?(?:时间|日期))'
+                 r'[^\s，,、；;：:。！!？?])')
+
+
+def _event_named(event,whole=False):
+    """What names this held event itself outside its own sentence or in an item's title: its name or a tail of at least three of
+    its words (学校开放日 → 开放日), or a word pointing back at it (该活动、本次会议). Attending, a time, or 活动 ending another
+    name (开放日活动取消) can belong to another action or event there, so they never stand for this one.
+
+    In another sentence of the notice (whole) a shortened tail is the event only as a whole object, where its words begin,
+    right after a pointer back, or right after a state predicate taking it as its object (开放日取消、该开放日延期、取消安全讲座);
+    words before it make it the tail of another complete name, so 道路安全讲座取消 and 取消道路安全讲座 never cancel
+    校园安全讲座. The whole object also ends with the tail: name words after it make the tail the head of another complete
+    object, so 取消安全讲座筹备会议 and 安全讲座筹备会议取消 keep 校园安全讲座 as they keep it from 取消安全讲座回执. Its full
+    name stays the event wherever it stands (现通知该学校开放日取消)."""
+    names=set(_event_names(event))
+    own=sorted({name[i:] for name in names for i in range(len(name)-min(3,len(name))+1)},key=len,reverse=True)
+    lead=r'(?:^\s*|'+_EVENT_POINTER+'|'+_EVENT_STATE_ON+r'\s*)' if whole else ''
+    end=_EVENT_NAME_END if whole else ''
+    return '|'.join([re.escape(x) if x in names else lead+re.escape(x)+end for x in own]+[_EVENT_POINTER+r'(?:活动|会议)'])
+
+
+def _modifies_event(part,mention):
+    """A state word modifies the event when its own object, else the clause it predicates, still means the event.
+
+    参加由家长自愿决定、本次家长会已取消、家长会原本已经取消 are about the event; 取消打印材料、座位可选、无需带材料 are
+    about another object; a clause holding nothing but the state (不作统一要求) can only be about the event. The event's
+    words only modify another object when the words from them to the state (or to the clause's end) complete that object's
+    own name, so 家长会回执可选、家长会回执取消、家长会安排表可选 keep the meeting while 家长会安排可选、家长会因单位安排取消
+    do not. What follows a state is its object only when it names one (取消打印材料、取消家长会、可不参加); a joined
+    predicate or a complement (本次家长会取消并退费、延期至下周、取消了) leaves the state on the subject before it.
+    Before or after its subject or object, a negated predicate (不取消安全讲座、家长会并未延期、安全讲座不能取消) states the
+    opposite, and a state whose object is another predicate (无需取消、可以不改期) only sets that predicate's polarity, so
+    neither is a state; a negated negation (不能不取消安全讲座、安全讲座不得不取消) is the state again.
+    """
+    for m in re.finditer(_EVENT_STATE,part):
+        before=re.sub(r'[\s、：:]','',part[:m.start()]);after=re.sub(r'[\s、：:]','',part[m.end():])
+        if _negated(before) or (re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and re.match(_EVENT_STATE_OBJECT,after)):continue
+        if re.fullmatch(_EVENT_STATE_OBJECT,m[0]) and (re.search(mention,after) or re.fullmatch(r'了?(?:'+_EVENT_OTHER_OBJECT+r')',after)):before=''
+        if not before+after:return True
+        if any(not re.fullmatch(_EVENT_OTHER_OBJECT,side[x.end():]) for side in (before,after) for x in re.finditer(mention,side)):return True
+    return False
+
+
+def event_days(text,published):
+    """The arranged day of a held school event the family is directly asked to attend (家长会定于10月15日举行，请家长参加).
+
+    It is that item's own arranged day, not a completion deadline. One sentence states one grounded day, one clause
+    holding the event and a direct request to attend (明日 grounds on the sending day; 务必/须参加 is as direct as
+    请参加); ！？ end a sentence, so a notice's own date never reaches a later event. A negation, state or option counts
+    on what it modifies: the event's own clause (不是10月15日举行、暂定、原定…取消、按10月9日通知), the request (自愿参加)
+    or another clause whose state's object or subject is still the event (本次家长会已取消、参加由家长自愿决定、准确时间后续告知)
+    or which states nothing else (不作统一要求). 座位可选、取消打印材料、无需带材料、家长会回执可选 keep the meeting; a past day
+    stays out, and so does a day that dates an edition or a material reporting the event (2026年10月10日版的家长会资料说明…举行).
+    A later sentence of the same original still states the event's own state when it names the event itself or points back at
+    it (现通知该家长会取消、本次活动因故取消); cancelling another event (运动会取消、开放日活动取消) or another object of it
+    (家长会回执取消) does not.
+    """
+    return {value for value,_ in _held_events(text,published)}
+
+
+def _excused_others(sentence):
+    """The clauses that only excuse the other kind of participant than the one the sentence asks to attend.
+
+    请一位家长参加，孩子不用参加 still asks a parent to attend: 孩子不用参加 neither cancels the meeting nor makes the parent's
+    attending optional. A request naming no participant, or an excuse of the same one (请家长参加，家长不用参加), stays a state.
+    """
+    asked=re.search(_ATTEND_REQUEST,sentence)
+    kinds=[words for words in _PARTICIPANTS.values() if asked and re.search(words,asked[0])]
+    if len(kinds)!=1:return set()
+    other=next(words for words in _PARTICIPANTS.values() if words!=kinds[0])
+    return {c.strip() for c in re.split(r'[，,]',sentence) if re.fullmatch(r'\s*(?:'+other+r')\s*'+_EXCUSE+r'\s*',c)}
+
+
+def _held_events(text,published):
+    """Each arranged day event_days keeps, with the clause holding its event."""
+    anchor=date(published)
+    text=_relative_weekday(_grounded_text(text,anchor),anchor)
+    relative={'今天':0,'今日':0,'今晚':0,'明天':1,'明日':1,'后天':2}
+    found=[];sentences=re.split(r'[。；;！!？?\n]',text)
+    for at,sentence in enumerate(sentences):
+        values={date(d) or (anchor and d in relative and (dt.date.fromisoformat(anchor)+dt.timedelta(days=relative[d])).isoformat()) or '' for d in re.findall(_DAY_WORDS,sentence)}
+        clauses=[c for c in re.split(r'[，,]',sentence) if c.strip()]
+        # A long place or gathering note between the day and 举行 is still the same clause; another day is not.
+        # The event is held on its day (…举行/召开), or its day is fixed (家长会定在10月24日14:20).
+        held=[n for n,c in enumerate(clauses) if re.search(r'(?:'+_EVENT_DAY+r')(?:(?!'+_EVENT_DAY+r').)*?(?:举行|召开|举办)'
+                                                           r'|^\s*[^，,]{2,12}?(?:定在|定于)\s*(?:'+_EVENT_DAY+r')',c)]
+        # Who attends may be asked in the very next sentence when it names no day (…学校报告厅。每家一位家长参加，孩子不用来。).
+        following=sentences[at+1] if at+1<len(sentences) else ''
+        if (not re.search(_ATTEND_REQUEST,sentence) and re.search(_ATTEND_REQUEST,following) and not re.search(_DAY_WORDS,following)
+                and len(held)==1
+                # …unless it names another event (讲座定在…。另一个家长会每家一位家长参加): that attending is not this event's.
+                and not re.search(r'(?<!参)会|讲座|活动|典礼|仪式|比赛|开放日',re.sub('|'.join(map(re.escape,_event_names(clauses[held[0]]))) or '$^','',following))):
+            sentence=sentence+'，'+following;clauses=clauses+[c for c in re.split(r'[，,]',following) if c.strip()]
+        if len(values)!=1 or '' in values or len(held)!=1 or not re.search(_ATTEND_REQUEST,sentence):continue
+        value=next(iter(values));event=clauses[held[0]]
+        if (anchor and value<anchor or re.search(_EVENT_STATE,event) or re.search(_EVENT_OTHER_DAY,event)
+                or re.search(r'(?:不是|并非|而非|并不在|不在|不于|不会在)\s*(?:于|在)?\s*(?:'+_EVENT_DAY+r')|(?:不|未|没有?|无法|不能|不会|不再)\s*(?:如期|按时|正常)?\s*(?:举行|召开|举办)',event)
+                or re.search(r'(?:根据|依据|按照|参照|参见|据|按|见|同)\s*(?:'+_EVENT_DAY+r')|(?:'+_EVENT_DAY+r')[^，,]{0,6}?(?:通知|公告|文件|来函|消息|发布|发出)',event)):continue
+        mention=_event_mention(event);excused=_excused_others(sentence)
+        # Excusing the asked attendee, or anyone unnamed, from coming leaves the event unconfirmed (家长不用来).
+        if any(re.search(_EXCUSE,c) and c.strip() not in excused for n,c in enumerate(clauses) if n!=held[0]):continue
+        if any(_modifies_event(part,mention) for n,c in enumerate(clauses) if n!=held[0] and c.strip() not in excused
+               for part in re.split(r'、|(?<!\d)[：:]|[：:](?!\d)',c)):continue
+        # A sentence end does not end the same notice: a later part naming the event itself, as a whole object, is read by the same rule.
+        named=_event_named(event,True)
+        if any(re.search(named,part) and _modifies_event(part,named) for later in sentences[at+1:]
+               for c in re.split(r'[，,]',later) for part in re.split(r'、|(?<!\d)[：:]|[：:](?!\d)',c)):continue
+        found.append((value,event))
+    return found
+
+
+# Who attends and how, before an item's own predicate of attending (请家长准时参加、按时出席、到场参加).
+_ATTEND_TITLE=r'(?:请|务必|必须|须|需)?'+_ATTENDEE+r'(?:准时|按时|届时|务必|必须|须|需)?(?:参加|出席|到场|参会)+'
+
+
+def _attends(title,event):
+    """True when an item's title is attending this held event itself, so the event's arranged day is its own action's day.
+
+    Its own predicate attends the event and comes first, taking the event as its object, with any joined predicate after it
+    (参加家长会、准时参加学校开放日、按时出席家长会并签到); or the title is the event's name, alone or followed only by
+    attending it (学校开放日、家长会，请准时参加). Another predicate before the name (确认是否参加学校开放日、报名参加) or
+    after it (学校开放日，确认是否参加) is the item's own action, and words after the name other than a joined predicate make
+    it a modifier of another object (寄出家长会回执原件). A colon ends a label, so attending never reaches across it to the
+    name (参加意向确认：学校开放日 labels the open day with another action).
+    """
+    words=re.sub(r'[（(][^）)]*[）)]|\s','',re.sub(r'^\s*待核对[：:]?','',title or ''))
+    name=r'(?:'+_event_named(event)+r')';joined=r'(?:(?:[，,、；;。！!？?]|并|且|然后|同时|再).*)?'
+    return bool(re.fullmatch(_ATTEND_TITLE+r'[^，,、；;。！!？?：:]*?'+name+joined+r'|'+name+r'(?:[，,、；;：:]*'+_ATTEND_TITLE+joined+r')?',words))
+
+
+_CARRIED=r'(?:带(?:上|好|齐)?|携带)(?![回到去来领着读])\s*[^\s，,]'
+_CARRIED_VERB=r'填|写|做|完成|交|签|订正|背|读|练|准备'
+# A name ends in its own object noun, as 把…回执 reads it in _action_deadlines, so a verb's character inside the name (英语练习册、
+# 读书记录表、书写练习本) is none of its predicates. One taking its complement (填好、写完、交给), a modal, state, day or clause
+# word, or any word after that noun is another predicate; without such a noun ending the name, the verb's character stays one.
+_CARRIED_NAME=(r'(?:(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r'|要|需|须|请|应|(?:'+_CARRIED_VERB+r')(?:好|完|进|入|到|给|回|在|上|齐|成|了|过|着))'
+               r'[^\s，,])*?(?:'+_EVENT_OBJECT_NOUN+r'|'+family_agent._SCHOOL_NATIVE_WORKSHEET+r')')
+# The same carrying with the lesson named first (T06: 附件是明天带去课堂的实验观察表): a thing of its own after 的, no other predicate.
+_CARRIED_TO=(r'(?:(?:附件|这份?|此表)(?:是|为)\s*)?(?:'+family_agent._SCHOOL_NATIVE_DATE+r'|明早)\s*(?:(?:早上|上午|中午|下午)\s*)?(?:要|需|须|请)?\s*'
+             r'带去(?:课堂|教室|学校|[一-鿿]{1,4}课)上?的\s*(?:(?:(?!'+_CARRIED_VERB+r')[^\s，,])+|'+_CARRIED_NAME+r')')
+# Who is asked, before a clause's day or its predicate (请家长今晚…、明天请孩子…), and how firmly (要、须、记得).
+_PREPARED_ASKER=r'\s*(?:请\s*)?(?:(?:家长|孩子|学生|同学们?)\s*)?(?:(?:要|需|须|务必|记得)\s*)?'
+# One thing a clause prepares as its own object (两张实验观察表、一条短绳、《_____》): its count, then a name ending in its own
+# noun or a plain name with no other predicate, carrying, state, day or clause word in it.
+_PREPARED_THING=(r'(?:[一二两三四五六七八九十几0-9]+\s*[个条支张本份根把件双套盒包瓶块片枚只袋副]\s*)?'
+                 r'(?:'+_CARRIED_NAME+r'|(?:(?!'+_CARRIED_VERB+r'|带|'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|'+_EVENT_CLAUSE_WORD+r')[^\s，,])+)')
+
+
+def _own_clauses(sentence):
+    """One sentence's clauses as _day_clauses reads them: 《》 titles as objects, each after its own course label."""
+    course=_subject_patterns()[2].pattern
+    label=r'^\s*(?:'+course+r')(?:\s*[和与及、]\s*(?:'+course+r'))*\s*[：:]\s*'
+    return [re.sub(label,'',_titles_read_as_objects(c)) for c in re.split(r'[，,]',sentence or '')]
+
+
+def prepared_carry(sentence,published):
+    """(i, i+1) when clause i of one sentence prepares one thing at home on its own day by the proven preparation predicate
+    (_PREPARE) and the directly following clause only carries it (bare 带去) to its lesson or school on a later own day.
+
+    今晚准备好两张实验观察表，明天科学课带去 is one item's two phases, as 今晚请家长签字，明天交回 is: the carried thing is the
+    one this sentence proves, never guessed as handed in. Another object or a second thing, a negated, optional or conditional
+    preparation, another predicate or role in either clause, a question, condition or change anywhere in the sentence, or a
+    carrying day not after the preparation day gives None.
+    """
+    if not date(published) or re.search(r'如果|假如|若|要是|是否|吗|[？?]|万一|如需|可能|或许|也许|或|'+_EVENT_STATE,
+                                        _titles_read_as_objects(sentence or '')):return None
+    raw=re.split(r'[，,]',sentence);own=_own_clauses(sentence)
+    day=family_agent._SCHOOL_ROLE_DAY
+    for i in range(len(own)-1):
+        prep=re.fullmatch(_PREPARED_ASKER+r'('+day+r')\s*(?:早上|上午|中午|下午|晚上)?'+_PREPARED_ASKER+_PREPARE+r'\s*('+_PREPARED_THING+r')\s*',own[i])
+        carry=re.fullmatch(_PREPARED_ASKER+r'('+day+r')(?:'+family_agent._SCHOOL_LESSON_PLACE+r'(?:上|时)?|\s*(?:早上|上午|到校后?))?'
+                           +_PREPARED_ASKER+r'带去(?:课堂|教室|学校)?\s*',own[i+1])
+        if not prep or not carry or re.search(r'和|及|与|、',prep[2]):continue
+        done=family_agent._school_clause_day(raw[i],published);due=family_agent._school_clause_day(raw[i+1],published)
+        if done and due and done<due and _action_deadlines(raw[i],published)=={done}:return i,i+1
+    return None
+
+
+def _day_clauses(quote,due,published):
+    """The quote's own clauses naming due for themselves on their sending day, 《》 titles read as objects.
+
+    A clause's own course label (英语：、体育：、语文和数学：) names the item, not its predicate, as _school_clause_roles and
+    completion_day read it: each clause is read after it, so a quote keeping its subject header reads the same role as the
+    same words without it. Any other heading stays part of its clause.
+    """
+    course=_subject_patterns()[2].pattern
+    label=r'^\s*(?:'+course+r')(?:\s*[和与及、]\s*(?:'+course+r'))*\s*[：:]\s*'
+    return [re.sub(label,'',_titles_read_as_objects(c)) for c in re.split(r'[，,。；;！!？?\n]',quote or '')
+            if date(published) and family_agent._school_clause_day(c,published)==due]
+
+
+def date_meaning(quote,due,published,title='',goal=''):
+    """'event' when due is the arranged day of the held event this item's own action attends.
+
+    The same day can also be a sibling action's deadline in that notice (2026年10月18日前寄出家长会回执); it stays that
+    action's. The item's own action decides: the quoted clauses its goal restates (family_agent._school_own_words) mean an
+    event unless they tie the day to an action of their own (请家长2026年10月22日前确认是否参加学校开放日), however the title
+    is shown (参加意向确认：学校开放日、落实家长会参会安排). Unplaced, its title's own predicate decides, not an event name
+    its title ends with or holds: only a title whose own
+    predicate attends the event (参加家长会、准时参加学校开放日、按时出席家长会并签到) or which is the event's name itself
+    keeps the arranged day. A Chinese object ends in its own noun, so words after the event's name other than a joined
+    predicate (并签到) make it a modifier of another object (寄出家长会回执原件); and a title whose own predicate comes first
+    and takes attending or the event as its object (确认是否参加学校开放日、报名参加、回复是否参加) acts on that day as a
+    deadline, as does one naming the event before another predicate (学校开放日，确认是否参加) or not naming it.
+    """
+    if not date(due):return ''
+    held=[event for value,event in _held_events(quote,published) if value==due]
+    if not held:
+        # Read by the item's own clauses naming this day and their own predicates (《》 titles are objects): only checking
+        # (明天早读检查、明天上课检查) makes it the teacher's check, and only handing it in on that day itself (由孩子明早交给班主任、明天早上
+        # 交) makes it the teacher's handback. A day it must come before (于10月22日前交回), a negation ahead of the predicate
+        # (不用明天交回), any other or a second role on that day stays the ordinary deadline it was.
+        own=_day_clauses(quote,due,published)
+        roles=[family_agent._school_clause_roles(c) for c in own]
+        if roles and all(r=={'check'} for r in roles):return 'inspection'
+        if (roles and all(r=={'handback'} for r in roles) and not any(re.search(r'之前|以前|前',c) for c in own)
+                and not any(re.search(r'不|没|无|未|别|勿|免',c[:re.search(r'上交|提交|交',c).start()]) for c in own)):return 'handback'
+        # Only carrying a thing of its own on that day, at its lesson or arrival (明天体育课带跳绳), is the day's arrangement:
+        # a day it must come before (11月5日前带跳绳), a negation, another predicate (准备好、不用带) or the work itself (明天带来)
+        # stays the deadline, and the parent's own plan day is never touched.
+        # A bare 带去 carries what its own sentence proved prepared just before it (今晚准备好两张实验观察表，明天科学课带去): the same.
+        carried=[_own_clauses(s)[pair[1]] for s in re.split(r'[。；;！!？?\n]',quote or '') if (pair:=prepared_carry(s,published))]
+        if own and not any(roles) and all(family_agent._school_native_errand(c,()) and re.search(_CARRIED,c) or re.fullmatch(_CARRIED_TO,c.strip())
+                                          or c in carried for c in own):return 'arranged'
+        # So is a lesson its own day directly heads (周五课堂用时间轴口头讲述、周五历史课…): what is done there is that lesson's,
+        # never a home completion or deadline. A negated clause, a check, test or handing in there (明天英语课听写、周四数学课
+        # 交练习册), a thing prepared at home for it or a bound before it (明天体育课前准备好短绳) or another role on that day
+        # stays as it was.
+        if own and not any(roles) and all(re.search(family_agent._SCHOOL_ROLE_DAY+family_agent._SCHOOL_LESSON_PLACE,c)
+                                          and not re.search(family_agent._SCHOOL_ARRANGEMENT+r'|完成|做完|写完|读完|'+family_agent._SCHOOL_SIGN+'|'+_EVENT_STATE_OBJECT
+                                                            +'|'+_PREPARE+r'|(?:之前|以前|前)(?![一二两三四五六七八九十\d])',c)
+                                          and not family_agent._school_negated_day(c) for c in own):return 'arranged'
+        # An assessment held at that lesson or 早读 (明天英语课听写、周五数学课测验、下周一早读抽背《山野》) is the teacher's check
+        # there, as 明天上课检查 is, never a home completion. A day it must come before, a negation, a change, a completion or
+        # another role on that day stays the deadline it was.
+        if own and not any(roles) and all(family_agent._school_lesson_assessment(c)
+                                          and not re.search(r'(?:之前|以前|前)(?![一二两三四五六七八九十\d])|完成|做完|写完|读完|'
+                                                            +family_agent._SCHOOL_SIGN+'|'+_EVENT_STATE+'|'+family_agent._SCHOOL_CHANGE,c)
+                                          and not family_agent._school_negated_day(c) for c in own):return 'inspection'
+        return 'deadline'
+    if due not in _action_deadlines(quote,published):return 'event'
+    words,placed=family_agent._school_own_words(quote,0,len(quote.rstrip('。；;！!？? \n')),title,goal)
+    if placed:return 'deadline' if any(due in _action_deadlines(own,published) for s,own in words) else 'event'
+    return 'event' if any(_attends(title,event) for event in held) else 'deadline'
+
+
+def later_dropped_days(quote,text,published,own=None,title=''):
+    """Event days quote holds on its own that its original text, read from quote to the end, no longer holds.
+
+    A model may quote only 家长会定于2026年10月18日在体育馆举行，请家长参加。 while the same notice goes on 现通知该家长会取消。;
+    that later state still binds the meeting the quote holds. Cancelling another event or another object of it (运动会取消、
+    家长会回执取消) keeps the day. Only a day the item's own words (own, else quote) tie to an action of its own stays that
+    action's: a sibling's same-day deadline in the quoted sentence (并请家长2026年10月18日前寄出退款回执原件) is not the
+    meeting item's, and an item whose title attends the event (参加家长会) has no other action of its own on that day.
+    """
+    kept=set(_held_events(text,published));mine=_action_deadlines(quote if own is None else own,published)
+    return {value for value,event in _held_events(quote,published) if (value,event) not in kept and (value not in mine or _attends(title,event))}
+
+
+_COMPLETION_VERB=r'背诵|背熟|抄写|默写|朗读|预习|复习|订正|完成|练习|阅读|读|写|做|背'
+# A counted exercise is its own predicate (原地高抬腿30次、跳绳100下、仰卧起坐20个、慢跑3圈), with no list of activities: the
+# child's work for the day directly heading it. A name holding a negation, state, another day, an ordinal, an option or a
+# report or possession word (今晚有3次机会、第2次提醒、已练30次、练了30次、共3个) is none, nor is a count something else holds
+# or the casual 一下 (明天准备一下).
+# Its predicate may open with one ordinary method of doing it (按四拍节奏拍手3组、跟着音乐跳绳100下、用左手拍球20下): one
+# method word and its own words, each held to the same exclusions and kept inside the clause, before that 2-6 character name.
+# A 的 there joins an attributive to a method word of its own after it (按照老师上节课讲过的左右交替方法), so that attributive's own
+# aspect right before it (讲过的、说好了的) is the method's history, not this act's state; the name before the count stays free of it.
+_COUNTED_FREE=r'(?!'+_EVENT_STATE+r'|'+_DAY_WORDS+r'|[不没无未免别勿有是共约第已了过的每或])'
+_COUNTED_METHOD=(r'(?:按照?|照着|跟着|随着|和着|伴着|对着|看着|听着|用)(?:(?:[过了]?的)?'+_COUNTED_FREE+r'[一-鿿0-9])+?')
+_COUNTED_NAMED=(r'(?:'+_COUNTED_FREE+r'[一-鿿]){2,6}?'
+               r'(?!一\s*下)[0-9一二两三四五六七八九十百]+\s*(?:次|下|个|组|圈|遍)(?![了过的])')  # 准备一下 is no count
+_COUNTED_ACT=r'(?:'+_COUNTED_METHOD+r')?'+_COUNTED_NAMED
+
+
+def counted_method_read(text):
+    """text with each counted exercise's leading method phrase left out (按照老师上节课讲过的左右交替方法 of …踢毽子24下), read as
+    _COUNTED_ACT reads it: those are the exercise's own modifier words, never a handback (交替), check or approximation
+    (左右) of its clause. The name and count before which the method stands are kept."""
+    return re.sub(_COUNTED_METHOD+r'(?='+_COUNTED_NAMED+r')','',text or '')
+
+
+def completion_day(quote,header,time,due_on):
+    """The day this item's own original words give its work, kept apart from its handback/check day (due_on).
+
+    今天/今日/今晚 counts only when it opens the item's own work clause, after at most its own subject label whether or not
+    that label was saved as a heading (英语：今晚把Unit 5词表每个单词抄写两遍，明天交给英语老师), or is its own list heading (今天语文作业：1. 背诵《秋夜》第2自然段，明天早读抽查) while its own words check/hand it back 明天, read on its
+    own message's sending day in that message's own written timezone. Otherwise the one day that same first work clause ties
+    to its own work by the deadline parse (语文：2026年10月18日20:00前完成…；2026年10月20日早读交回) is its day. A time without
+    an offset, a heading item with a later deadline of its own (本周五交), a day inside a 《》 title, a second or handback day
+    in the work clause, a negated clause, or only a handback day (口算本第8页全部完成，明天交给课代表) stays unknown; due_on
+    is never rewritten.
+    """
+    stamp=(time or '').strip()
+    if not quote or not re.search(r'(?:[+-]\d{2}:?\d{2}|Z)$',stamp):return ''
+    try:sent=dt.datetime.fromisoformat(stamp.replace('Z','+00:00')).date()
+    except ValueError:return ''
+    words=_titles_read_as_objects(quote).strip()
+    # The item's own subject label (语文：), its saved heading or the shared subject opening its own words, names it; its
+    # work clause starts after it.
+    label='|'.join(filter(None,(re.escape((header or '').strip()),family_agent._SCHOOL_NATIVE_SUBJECTS)))
+    words=re.sub(r'^(?:'+label+r')\s*[：:]\s*','',words)
+    first,_,rest=(re.split(r'([，,。；;\n])',words,maxsplit=1)+['',''])[:3]
+    lead=re.match(r'(今天|今日|今晚)',first)
+    # The same evening opening restated with its own written day (2026年11月4日晚听音频跟读…, a read original's requirement)
+    # names that day for its work as 今晚 does; a past or invalid day, or handing in/carrying, stays unknown.
+    written=None if lead else re.match(r'(?:(\d{4})\s*年\s*)?(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]\s*(?:晚上|晚)',first)
+    own_day=written and f'{int(written[1] or sent.year):04d}-{int(written[2]):02d}-{int(written[3]):02d}'
+    if own_day and (not date(own_day) or own_day<sent.isoformat() or re.search(r'交|带',first[written.end():])):return ''
+    lead=lead or written
+    work=first[lead.end():] if lead else first
+    if not (re.search(_COMPLETION_VERB,work) or re.match(r'\s*'+_COUNTED_ACT,work)) or re.search(r'不用|不必|无需|无须|不需要?|不要求',work):return ''
+    day=own_day or sent.isoformat()
+    if lead or (re.fullmatch(r'\s*(?:今天|今日|今晚)的?[^，,。；;\n\d]{0,8}?作业\s*[：:]?\s*',header or '')
+                and re.match(r'\s*(?:明天|明日|明早)',rest) and not re.search(_DAY_WORDS,re.sub(r'^\s*(?:明天|明日|明早)','',rest))):
+        if re.search(_DAY_WORDS,work):return ''
+    else:
+        grounded=_relative_weekday(_grounded_text(first,day),day)
+        days=_action_deadlines(first,day)
+        if len(days)!=1 or len(re.findall(_DAY_WORDS+r'|\d{1,2}\s*[日号]',grounded))!=1 or re.search(r'交|带',work):return ''
+        day=next(iter(days))
+    return day if not due_on or due_on>day else ''
+
+
+def completion_words(quote,header,day,action):
+    """The own words heading this item's work clause that its day was proven from, when they hold its clock and the saved
+    action left them out: 2026年10月18日20:00前 before 完成《秋日观察》第2页 for a goal saved as 完成《秋日观察》第2页，….
+
+    Copied as written from the same first work clause completion_day read, never from a title, another clause (the
+    handback's own words), another item or the sending time; a saved action already holding the clock, or not opening
+    exactly one line with the same work words, keeps its lines. Display only: nothing is saved or rewritten.
+    """
+    text=(quote or '').strip();masked=_titles_read_as_objects(text)
+    if not day or not text:return None
+    label='|'.join(filter(None,(re.escape((header or '').strip()),family_agent._SCHOOL_NATIVE_SUBJECTS)))
+    at=(re.match(r'^(?:'+label+r')\s*[：:]\s*',masked) or re.match('',masked)).end()
+    first=re.split(r'[，,。；;\n]',masked[at:],maxsplit=1)[0]
+    verb=re.search(_COMPLETION_VERB,first)
+    clock=verb and re.search(r'\d{1,2}\s*[:：]\s*\d{2}',first[:verb.start()])
+    if not clock or '_' in first[:verb.start()]:return None
+    lead=text[at:at+verb.start()].strip();work=text[at+verb.start():at+len(first)].strip()
+    lines=[x.lstrip() for x in str(action or '').splitlines()]
+    if len(work)<4 or clock[0] in str(action or '') or sum(x.startswith(work) for x in lines)!=1:return None
+    return dict(lead=lead,work=work)
+
+
+def deadline(text,published):
+    """Only an unambiguous deadline phrase; several different dates need review, and so does a day the clause stating it
+    leaves to choose (孩子明早或后天交给班主任, family_agent._SCHOOL_DAY_OR): the parse recognizes only one of its options.
+    Another clause's choice (今晚或明晚请家长签字) or one between receivers names no day, so an explicit single day is kept."""
+    candidates=deadlines(text,published)
+    if len(candidates)!=1:return ''
+    value=next(iter(candidates))
+    if any(value in deadlines(clause,published) and re.search(family_agent._SCHOOL_DAY_OR,_titles_read_as_objects(clause))
+           for clause in re.split(r'[，,。；;！!？?\n]',text or '')):return ''
+    return value
+
+
+_EXAM_RE = re.compile(r'测验|测试|考试|单元测|小测|月考|期中|期末|检测|统考|联考|水平测|质检|摸底')
+
+
+def _exam_identity(text):
+    """The smallest stable identity needed to keep one subject's exams apart."""
+    text=(text or '').lower()
+    kind=next((x for x in ('单元','期中','期末','月考','小测','统考','联考','水平测','质检','摸底') if x in text),
+              '测验' if '测验' in text else '考试' if '考试' in text else '测试' if re.search(r'测试|检测',text) else '')
+    units=set()
+    for value in re.findall(r'unit\s*\d+(?:\s*[-–—~～至到]\s*(?:unit\s*)?\d+)?',text,re.I):
+        units.add('unit'+'-'.join(re.findall(r'\d+',value)))
+    units.update(re.findall(r'第?[一二三四五六七八九十百0-9]+单元',text))
+    return kind,units
+
+
+def is_exam(text):
+    """A graded test event worth recording a result for; daily 听写/默写 homework is not one."""
+    # ponytail: title-only heuristic; explicit event types can replace it if ambiguous titles recur.
+    text = text or ''
+    if re.search(r'打印|复习|订正|报名|缴费|签字|回执|备考|准备|核酸|视力|体检|听力筛查|软件|设备|网络|成绩|结果|试卷|卷子', text): return False
+    return bool(_EXAM_RE.search(text))
+
+
+def task_category(title,purpose=None):
+    """Classify the requested work, not a school subject mentioned by an admin task."""
+    if purpose in family_agent.PURPOSES:
+        return 'homework' if purpose=='learning' and not is_exam(title) else 'todo'
+    title=re.sub(r'^待核对[：:]?\s*','',title)
+    if re.search(r'打印|报名|缴费|回执|签字|署名|登记|确认书|请假|接送|招新|选拔|提交渠道|(?:作业|学习)入口|^核(?:对|查)|(?:听写|考试|测验)(?:情况|结果|成绩)|等级',title):
+        return 'todo'
+    if re.search(r'作业|习作|作文|听写|默写|背诵|练习|订正|摘抄|抄写|朗读|阅读单|阅读任务|预习|复习|^(?:语文|英语|数学|科学|历史|地理|生物|物理|化学)[：:]',title):
+        return 'homework'
+    # ponytail: uncertain school material stays a to-do to review, never an invented assignment.
+    return 'todo'
+
+
+# Every tracked item is filed under the courses its own words name. The school's native learning subjects come first; the
+# other school courses keep their own admin items (体育课带跳绳) without making them learning work. A teacher, class
+# representative or other recipient (交给数学课代表、英语老师) only addresses the item and never names its subject.
+# The list only recognises a course word where that word ends: 美术史 or 科学馆 is its own noun, never 美术 or 科学, and a
+# course the family saved under its own name (美术史) is kept as written instead of being cut to a listed one.
+_OTHER_COURSES='道德与法治|体育|美术|音乐|信息科技|劳动|书法'
+_LONGER_NOUN='史馆家展会节院系界角团社'
+GENERAL='综合'
+# Only the item's own non-course matter says it has no subject. An admin or optional purpose, a signing step or a parent's
+# to-do category is what the item is for, never proof that it belongs to no course (老师发的卷子上签字 stays 科目待定).
+_NO_SUBJECT_RE=re.compile(r'同意书|确认书|回执|报名|缴费|交费|请假|接送|家长会|校外|参观|体检')
+
+
+@functools.cache
+def _subject_patterns():
+    # Read on first use: family_agent imports this module before its own subject list exists.
+    names=family_agent._SCHOOL_NATIVE_SUBJECTS+'|'+_OTHER_COURSES
+    return re.compile('(?:'+names+')(?!['+_LONGER_NOUN+'])'),re.compile('(?:'+names+')(?:课代表|老师|教师|组长)'),re.compile(names)
+
+
+def named_subjects(text):
+    """The subjects an item's own words file it under, in order and without repeats."""
+    seen=[];subject,addressee,_=_subject_patterns()
+    for m in subject.finditer(addressee.sub('',re.sub(r'^待核对[：:]?\s*','',text or ''))):
+        if m[0] not in seen:seen.append(m[0])
+    return seen
+
+
+def saved_subjects(value):
+    """Saved course names as written. 道德与法治 or 美术史 stays one course; only a joint 科学与美术 of listed courses splits."""
+    whole=_subject_patterns()[2];out=[]
+    for part in re.split(r'[·、,，/+＋\s]+',value or ''):
+        pieces=re.split(r'[与和及]',part)
+        out.extend(pieces if len(pieces)>1 and all(whole.fullmatch(p) for p in pieces) else [part] if part else [])
+    return list(dict.fromkeys(out))
+
+
+def subject_fields(title,quote='',*,saved='',corrected='',no_subject=False):
+    """File one item once under its own subjects, never by merging, sibling words or guessing.
+
+    A parent's correction wins and can be cleared to reopen the automatic reading. Then a subject saved with the item
+    (the school's learning subject, a child's or parent's capture), then the item's own title, then its own original
+    words. A saved learning subject names only the learning outcome: when the item's own title names that subject together
+    with other courses, the one joint result keeps all of them on its one card. Without any subject an item is 综合 only
+    on positive evidence (its own non-course matter, or a family plan that names no course); everything else is 科目待定."""
+    if corrected:
+        return dict(subjects=[],subject_state='general',subject_basis='parent') if corrected==GENERAL else \
+            dict(subjects=corrected.split('·'),subject_state='known',subject_basis='parent')
+    saved=saved_subjects(saved);title=title or ''
+    if saved:
+        rest=title
+        for s in saved:rest=rest.replace(s,'·')
+        joint=[s for s in named_subjects(rest) if s not in saved] if all(s in title for s in saved) else []
+        return dict(subjects=saved+joint,subject_state='known',subject_basis='saved')
+    for subjects in (named_subjects(title),named_subjects(quote)):
+        if subjects:return dict(subjects=subjects,subject_state='known',subject_basis='own_words')
+    general=no_subject or bool(_NO_SUBJECT_RE.search(title+'\n'+(quote or '')))
+    return dict(subjects=[],subject_state='general' if general else 'unknown',subject_basis='')
+
+
+def metadata(app,c,child_id,title,due,refs=(),focus=None,purpose=None,*,publication_ref='',date_quote='',goal='',date_header='',school_focus=False,date_siblings=None,action='',pending=False,originals=(),reminders=(),cleared=False,school_action=''):
+    focus=focus or {};messages=[];publications=[];original_time=''
+    store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
+    for ref in refs:
+        if not isinstance(ref,str) or not ref.startswith('message:'):continue
+        parts=ref[8:].rsplit(':',1)
+        if len(parts)!=2:continue
+        try:
+            source,msg=store._message_context(c,dict(child_id=child_id,source_id=parts[0],message_id=parts[1]))
+            # Its identity (ref, publisher) lets the shared role reader prove one teacher's own later restatement.
+            messages.append(dict(msg,ref=ref,publisher=family_agent._publisher(parts[0],msg)))
+            if ref==publication_ref:original_time=sent_at(msg.get('time',''))
+            if not any(p['ref']==ref for p in publications):
+                publications.append(dict(ref=ref,source_name=source['name'],sender=msg.get('sender','')))
+        except family_agent.AgentError:continue
+    # A reminder verified as this same affair (its receipt's unchanged originals) adds provenance only: its words never re-date
+    # the original requirement, which keeps its own completion and handback days; corrections and cancels are other changes.
+    messages=[m for m in messages if m['ref'] not in reminders]
+    # A read attachment's own requirements (image/PDF) saved with this action are its original words, read on their own
+    # message's sending time; a caption only pointing to them (英语：老师布置的两项要求见图片。) gives no day of its own.
+    attached=[o for o in originals if isinstance(o,dict) and isinstance(o.get('text'),str) and o['text'].strip()
+              and any(m['ref']==o.get('ref') for m in messages) and not any(o['text'] in m.get('text','') for m in messages)]
+    if attached and not any(date_quote and date_quote in m.get('text','') and deadlines(date_quote,sent_day(m.get('time','')))
+                            for m in messages):
+        # Read as the original action's own date check reads them (a labelled or comma day head, an ordered 先…，再… work);
+        # this in-memory reading copy only, the saved requirement words stay as written.
+        from family_agent import _school_date_head_joined as joined  # a local name: metadata's own family_agent use stays global
+        read=lambda o:joined(o['text'])
+        for o in attached:messages=[dict(m,text=m.get('text','')+'\n'+read(o)) if m['ref']==o['ref'] else m for m in messages]
+        date_quote='\n'.join(read(o) for o in attached)
+    # Only words found in this child's own originals of this item can tell what its day means.
+    if date_quote and not any(date_quote in m.get('text','') for m in messages):date_quote=''
+    times=sorted({sent_at(m.get('time','')) for m in messages}-{''})
+    days=sorted({value[:10] for value in times})
+    organized=focus.get('category') in ('unknown','homework','todo')
+    published=focus.get('published_on','') if organized else (original_time[:10] if original_time else days[0] if len(days)==1 else '')
+    subject=re.sub(r'^待核对[：:]?\s*','',title).rstrip('。')
+    # Borrow a source deadline only from the clause naming THIS task, not a sibling instruction.
+    # An exam task's title is usually rewritten (subject prefix, weekday suffix), so it is no longer a
+    # literal substring of the notice. Match its school subject; do not borrow another exam's date.
+    clauses=[(clause,m) for m in messages for clause in re.split(r'[。；;，,\n]',m.get('text',''))]
+    named=[(clause,m) for clause,m in clauses if subject and subject in clause]
+    prefix=re.match(r'\s*([^：:]{1,12})[：:]',subject)
+    exam_subject=prefix[1].strip() if prefix else ''
+    exam_kind,exam_units=_exam_identity(subject)
+    fallback=[(clause,m) for clause,m in clauses if exam_subject and exam_subject in clause and
+              _exam_identity(clause)[0]==exam_kind and (not exam_units or exam_units & _exam_identity(clause)[1])]
+    selected=(named or fallback) if is_exam(subject) else named
+    # A school item's date comes only from its own original clause, never from another action naming it.
+    if date_quote:selected=[(clause,m) for clause,m in selected if clause.strip() and clause.strip() in date_quote]
+    dates={deadline(clause,sent_day(m.get('time',''))) for clause,m in selected}-{''}
+    source_unknown=any(re.search(r'(?:时间|日期).{0,6}(?:另行通知|另行安排|待定|未定)',clause) for clause,_ in selected)
+    source_due=next(iter(dates)) if len(dates)==1 and not source_unknown else ''
+    due_on=focus.get('due_on','') if organized else deadline(due,published) or deadline(title,published) or source_due
+    # A collected school task saved with no day (its reply left the day out) reads the one its own words prove, by the same
+    # reading the selection now uses (family_agent._school_own_due); a parent's plan or edit keeps priority, nothing is saved.
+    # A pending candidate's stored due is that selection's own verdict (a day it leaves to choose stays open): never re-read.
+    own_day=(family_agent._school_own_due(date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],date_siblings)
+             if not pending and not organized and not due_on and date_quote and date_siblings is not None and not focus.get('scheduled_on')
+             and not focus.get('version') else '')
+    due_on=due_on or own_day
+    # A school item's day not saved with it is its own only by the same shared placement its proposal passed: a sibling's
+    # same-day deadline (另请家长…前参加科技讲座筹备会议) never dates an item whose own event the notice later cancels.
+    if (not organized and date_quote and due_on and due_on!=date(due) and family_agent._school_borrowed_day(
+            date_quote,[dict(text=m.get('text',''),time=m.get('time','')) for m in messages],due_on,goal,subject)):due_on=''
+    category=focus.get('category','')
+    if category not in ('homework','todo'):category='todo' if category=='unknown' else task_category(title,purpose)
+    # Later supplements retain their own source entries, not the first notice's time.
+    published_at=original_time if original_time and original_time[:10]==published else min((value for value in times if value[:10]==published),default='')
+    # The same day reads as the meeting's arranged day or a hand-in deadline by the action the item itself names.
+    # Saving the task records its original day in the focus too; a different (parent-edited) date keeps the deadline contract.
+    original=date(due) if date_quote else ''
+    sent=original_time[:10] if original_time else days[0] if len(days)==1 else ''
+    due_kind=date_meaning(date_quote,due_on,sent,subject,goal) if due_on and due_on in (original,own_day) else 'deadline' if due_on else ''
+    # The work's own day is read only from this child's one original holding the item's own words; a parent's explicit
+    # plan or edit keeps priority, and the handback due stays as it is. A focus saved only by parent-confirmed school changes
+    # of this same item is no parent choice: the own day stays while the confirmed words still give that same day.
+    own=[m for m in messages if date_quote and date_quote in m.get('text','')]
+    home=sent_day(own[0].get('time','')) if len(own)==1 else ''
+    if (due_kind=='deadline' and due_on in (original,own_day) and home and date_siblings is not None
+            and not _day_clauses(date_quote,due_on,home)):
+        # A quote stopping before its own role sentence (…答案写在练习册上。 before 今晚完成，明天早上交。) names no clause of that day:
+        # its role is read from the one own range the due was proven from, the quote's sentence and a directly following sentence
+        # of its roles alone (family_agent._school_role_days); a sibling's words, another original or a summary give none.
+        ranged=family_agent._school_role_days(date_quote,messages,date_siblings,words=True)
+        if ranged and ranged[1]==due_on:due_kind=date_meaning(ranged[2],due_on,home,subject,goal)
+    heading=date_header if len(own)==1 and date_header and 0<=own[0]['text'].find(date_header)<own[0]['text'].find(date_quote) else ''
+    # A family plan (scheduled_on, box, next step) changes only the family's own day: the teacher's completion stays.
+    # The parent editor carries back the item's own school values (its action as goal, its saved due); a value equal to
+    # them is no edit. A different goal or due, or one a parent explicitly cleared (cleared), is the parent's choice.
+    # Compared only with the item's own school words not yet replaced by the parent (its canonical goal, the original action
+    # before a focus goal took its place): the current action may already be the parent's own goal (app.tasks).
+    school_goal={str(v).strip() for v in (school_action,goal) if str(v or '').strip()}
+    family_edited=bool(cleared or str(focus.get('goal') or '').strip() and str(focus.get('goal')).strip() not in school_goal
+                       or focus.get('due_on') and focus.get('due_on')!=date(due))
+    complete_on=(completion_day(date_quote,heading,own[0].get('time',''),due_on)
+                 if len(own)==1 and (not family_edited or school_focus) else '')
+    if complete_on and family_edited:
+        # A parent's own goal or due edit must restate the day. A focus written only by this item's own confirmed school changes
+        # (_school_focus: accepted append/update items of this same task) keeps the day its canonical original's own words give
+        # (the one original holding the item's date quote), unless those confirmed words name another completion day.
+        confirmed=completion_day(focus.get('goal',''),heading,own[0].get('time',''),due_on)
+        if (bool(confirmed) and confirmed!=complete_on) if school_focus else confirmed!=complete_on:complete_on=''
+    # The clock its own work clause gives that same day (20:00前) belongs to it on every card; the saved action stays.
+    words=completion_words(date_quote,heading,complete_on,action) if complete_on else None;submit={}
+    if (not complete_on and len(own)==1 and due_on and date_siblings is not None and (not family_edited or school_focus)):
+        # The same own-role reading the item was selected and saved with (今晚完成，明天早上交 / 今晚请家长签字，明天早上让孩子交给…):
+        # its one earlier completion day is listed on that day; its handback/check due stays. Another item's quote or day gives none.
+        # An earlier handback of the same thing (今晚在线提交《活动卡》，明早交给班主任) is its own handback role with its own words,
+        # never this item's completion: nothing says the work is done at home.
+        handed={};roles=family_agent._school_role_days(date_quote,messages,date_siblings,handbacks=handed)
+        if roles and roles[1]==due_on and len(roles[0])==1 and next(iter(roles[0]))<due_on:
+            earlier=next(iter(roles[0]))
+            if earlier in handed:
+                # Its role is its own predicate's: an evening check (今晚老师检查《手工草图》) stays a check, never 先提交.
+                submit=dict(submit_on=earlier,submit_words=handed[earlier],**({'submit_role':'check'} if family_agent._school_earlier_role(handed[earlier])=='check' else {}))
+            else:complete_on=earlier
+    if not submit and due_on and len(own)==1 and date_quote:
+        # The item's own words naming a later explicit check of the same work (明早我抽听, 明天早读检查) give that check its own
+        # day beside the due; never another clause, object, a negated or cancelled check, or a guess from a bare 明早.
+        for clause in re.split(r'[，,。；;！!？?\n]',date_quote):
+            if not re.search(r'检查|抽查|抽听|抽背',clause) or family_agent._school_step_negated(clause) or re.search(r'取消|不再|改为|改到|推迟|延期|顺延',clause):continue
+            # The same one-clause day reader the role reading uses (明早我抽听 → the next morning of its own sending day).
+            day=family_agent._school_clause_day(clause,sent_day(own[0].get('time','')))
+            if day and day>due_on:
+                submit=dict(submit_on=day,submit_words=clause.strip(),submit_role='check');break
+    return dict(category=category,published_on=published,published_at=published_at,publications=publications,due_on=due_on,due_kind=due_kind,complete_on=complete_on,scheduled_on=focus.get('scheduled_on',''),
+                category_confirmed=focus.get('category') in ('homework','todo'),publication_known=bool(published),box=focus.get('box') or 'inbox',
+                **({'complete_words':words} if words else {}),**submit)
+
+
+def _stored_date_quote(plan):
+    """An item's own stored original words; its rewritten short title (参加家长会) states no day or request."""
+    anchors=list((plan.get('school_action_anchor') or {}).values())[:1]
+    # A native outcome kept for review by unread linked material keeps its own verified quote in its cover (read-only here).
+    return next((v.strip() for v in (plan.get('school_date_quote'),(plan.get('school_native_action') or {}).get('quote'),
+                                     (plan.get('school_native_cover') or {}).get('quote'),*anchors)
+                 if isinstance(v,str) and v.strip()),'')
+
+
+def _stored_date_header(plan,quote):
+    """The list heading saved with the same native action whose own words are quote; any other source gives none."""
+    native=plan.get('school_native_action') or {}
+    return native.get('header','') if isinstance(native,dict) and native.get('quote')==quote and isinstance(native.get('header'),str) else ''
+
+
+def _focus_cleared(c,task_id):
+    """Whether a saved focus version explicitly emptied a goal or due an earlier version held (a parent's clear), never a
+    value simply left unsent (the partial plan request keeps the earlier value)."""
+    if not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone():return False
+    held=set();last={}
+    for row in c.execute('SELECT current FROM task_focus_history WHERE task_id=? ORDER BY rowid',(task_id,)):
+        if last:held|={k for k in ('goal','due_on') if last.get(k)}
+        last=json.loads(row['current'])
+    # Only the current state decides: a value emptied now after an earlier version held it; a later restore lifts it.
+    return any(k in held and not last.get(k) for k in ('goal','due_on'))
+
+
+def _school_focus(c,task,proposal,plan):
+    """Every saved focus version of this task is a parent-confirmed school change of its own accepted item, none a parent's choice.
+
+    Each version's history row is the save of a change item accepted onto this same task for this item whose receipt records
+    that it really wrote the focus (a deduplicated append wrote none, so its key proves nothing), recorded on the item with the
+    same written due/title/requirements, and the last saved state is still the task's focus."""
+    focus=task.get('focus') or {};version=focus.get('version') or 0
+    if not version or not c.execute("SELECT 1 FROM sqlite_master WHERE name='task_focus_history'").fetchone():return False
+    rows={}
+    for row in c.execute('SELECT request_key,current FROM task_focus_history WHERE task_id=?',(task['id'],)):
+        current=json.loads(row['current']);rows[current.get('version')]=(row['request_key'],current)
+    events={'school-change-'+family_agent._hash(e['item_id'])[:32]:e for e in plan.get('school_changes',[])
+            if isinstance(e,dict) and isinstance(e.get('item_id'),str) and e.get('change') in ('update','append')}
+    previous=None
+    for number in range(1,version+1):
+        key,current=rows.get(number,('',{}));event=events.get(key)
+        written=(current.get('due_on'),current.get('title'),current.get('goal'))
+        # A parent's plan-only save (schedule, box, next step) after them keeps the school-written requirement and due as they
+        # were; a parent's own due, title or goal edit is a parent choice and ends the proof.
+        if not event and previous is not None and written==previous:continue
+        previous=written
+        change=event and c.execute("SELECT plan FROM agent_items WHERE id=? AND kind='school' AND state='accepted' AND task_id=? AND child_id=?",
+                                   (event['item_id'],task['id'],proposal['child_id'])).fetchone()
+        receipt=json.loads(change['plan']) if change else {};written=receipt.get('school_change_receipt') or {}
+        if (receipt.get('school_change_of')!=proposal['id'] or written.get('task_id')!=task['id'] or written.get('deduplicated') is not False
+                or (current.get('due_on'),current.get('title'),current.get('goal'))!=(event['due'],event['title'],event.get('applied_goal',event['goal']))):
+            return False
+    return all(focus.get(k)==value for k,value in rows[version][1].items())
+
+
+_TITLE_LABEL=re.compile(r'[^：:\s，,。；;、《》()（）]{1,8}[：:]\s*')
+_LINE_END='。.；;！!？? '
+_PAIRS={'《':'》','“':'”','‘':'’','「':'」','『':'』','（':'）','(':')','【':'】','[':']'}
+_SENTENCE_END='。！？'
+_STEP_END='；'
+
+
+def _sentences(line,ends=_SENTENCE_END):
+    """A saved line as its own sentences, each ending after a full-width 。！？ (a run of them stays together) outside
+    《》, quotes and brackets. A line with an unbalanced pair or an ASCII double quote stays whole; no word is changed."""
+    if '"' in line: return [line]
+    parts,closing,start=[],[],0
+    for i,ch in enumerate(line):
+        if ch in _PAIRS: closing.append(_PAIRS[ch])
+        elif ch in _PAIRS.values():
+            if not closing or closing.pop()!=ch: return [line]
+        elif ch in ends and not closing and (i+1==len(line) or line[i+1] not in ends):
+            parts.append(line[start:i+1].strip());start=i+1
+    if closing: return [line]
+    return [x for x in parts+[line[start:].strip()] if x]
+
+
+def _steps(line):
+    """A shown line as the parts its own top-level full-width ； joins, in order, each keeping its ；: the same guard as
+    _sentences (never inside 《》, quotes or brackets; an unbalanced pair or an ASCII double quote keeps the line whole), and
+    marks alone never make a line. Commas and an ASCII ; never cut. Lines of the same card, never items of their own."""
+    steps=[]
+    for part in _sentences(line,_STEP_END):
+        if steps and not (re.search(r'\w',part) and re.search(r'\w',steps[-1])):steps[-1]+=part
+        else:steps.append(part)
+    return steps
+
+
+_THIS_PAGE=r'这一页|这页|本页|该页|此页'
+
+
+# Before a 这一页 that points back: only its asker and a word back to the same work (请家长听完后在…), no material of its own.
+_BACK_TO_SAME_WORK=r'\s*(?:请|让|由)?\s*(?:家长|学生|孩子|同学们?)?\s*(?:[听读看做写]完(?:后|以后|之后)?|完成后)?\s*(?:在|于)?\s*'
+
+
+def _stated_clauses(text):
+    """A line's own clauses as the card reads them; a leading 请 asks nothing more.
+
+    这一页/本页 is the line's one 第N页 only when it stands in the very next clause after nothing but its asker and a word
+    back to the same work (…课本第20页的对话朗读三遍；请家长听完后在这一页签字). Another material named before it
+    (听写本本页) or taken out in between (取出听写本；…本页) leaves its page unknown, so no clause is read as the same."""
+    clauses=[c.strip() for c in re.split(r'[，,；;。！!？?]',text) if c.strip()]
+    pages=[(n,m[0]) for n,c in enumerate(clauses) for m in re.finditer(r'第\s*\d+\s*页',c)]
+    if len(pages)==1 and pages[0][0]+1<len(clauses):
+        n,page=pages[0];back=re.match(_BACK_TO_SAME_WORK+'('+_THIS_PAGE+')',clauses[n+1])
+        if back:clauses[n+1]=clauses[n+1][:back.start(1)]+page+clauses[n+1][back.end(1):]
+    return {re.sub(r'^请','',c) for c in clauses}
+
+
+_CLAUSE_MARKS='，,；;。！!？?'
+_LABEL_LINE=re.compile(r'^(提交要求|补充要求|补充说明|正文)[：:]\s*')
+_PLAN_LINE=re.compile(r'^家庭安排（计划\s*[^）]*）[：:]\s*(.*)$')
+# Helpers that only fill a gap in wording, never carry a fact of their own (C2 fold equivalence).
+_FOLD_CHARS='的了着里也都就再还吧呢啊呀哦嘛和与及而'
+_NUM=re.compile(r'第?\d+(?:[至到\-—~]\d+)?\s*[页题课节遍张本号点分个次行段字天周月]?')
+_NEG=('不','没','别','勿','禁止','取消','免')
+_NEG_RE=re.compile('|'.join(_NEG))
+_OBJ=re.compile(r'《[^》]*》')
+_TIME=re.compile(r'(今天|今晚|明天|明早|后天|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|\d{1,2}[点时])')
+
+
+def _plain(text):
+    """The words of a line for comparison only: width, case, blanks and punctuation do not make a repeat; never shown."""
+    text=unicodedata.normalize('NFKC',str(text or '')).lower()
+    return ''.join(ch for ch in text if not ch.isspace() and not unicodedata.category(ch).startswith('P'))
+
+
+def _fold_key(text):
+    """A plain line without the particles that change no fact (里/的/了/和…), so only wording differs."""
+    return ''.join(ch for ch in str(text or '') if ch not in _FOLD_CHARS)
+
+
+def _same_content(a,b):
+    """Two plain texts say the same thing: equal, one a continuous part of the other, or only particles apart."""
+    if not a or not b:return False
+    if a==b or a in b or b in a:return True
+    ka,kb=_fold_key(a),_fold_key(b)
+    return bool(ka) and ka==kb
+
+
+def _covered_by(whole,part):
+    """C2/C3: part adds nothing over whole: same content, or part is a continuous piece of whole (direction matters
+    for lines: a longer line carrying new words is never 'covered')."""
+    if not whole or not part:return False
+    if part==whole or part in whole:return True
+    return _fold_key(part)==_fold_key(whole) and bool(_fold_key(part))
+
+
+def _tokens(text):
+    """Facts a title-cut may not make vanish: numbers/pages/items, 《》 objects, times and negations."""
+    text=str(text or '')
+    return set(_NUM.findall(text))|set(_OBJ.findall(text))|set(_TIME.findall(text))|{n for n in _NEG if n in text}
+
+
+def _multiset_le(part,whole):
+    """Every character of part is available in whole, counting each one only as often as whole has it."""
+    left=collections.Counter(whole)
+    for ch in part:
+        if not left.get(ch,0):return False
+        left[ch]-=1
+    return True
+
+
+def _title_prefix_removed(line,title):
+    """C4: an opening of a line that only retells the title reads once, in the title.
+
+    A prefix is taken only at a spoken punctuation mark (：，；。) and only when every one of its words is in the title
+    (multiset), no number/page/item, 《》 object, time or negation of the prefix is absent from the title, and it is at
+    least 60% of the title. Otherwise the whole line stays: a new 题号 (第1、2题 over 第1题) or a swapped page/item
+    (第3页第2题 over 第2页第3题) is never cut away. Returns (rest, taken); empty rest means the line only retold the
+    title and is left out."""
+    tp=_plain(title)
+    if not tp:return line,False
+    label=_TITLE_LABEL.match(title);bare=_plain(title[label.end():] if label else title)
+    cuts=sorted({n for n,ch in enumerate(line) if ch in '：:，,；;。.'}|{len(line)},reverse=True)
+    for cut in cuts:
+        prefix=line[:cut].strip();rest=line[cut+1:].strip() if cut<len(line) else ''
+        pp=_plain(prefix)
+        if not pp or len(pp)<max(2,int(0.6*len(tp))):continue
+        if not _multiset_le(pp,tp):continue
+        # A negation that the title words carry must not be moved or dropped: when both the heading and this
+        # line speak a negation, the line reads as itself (A5a: 不用抄写/不用朗读 swap).
+        if _NEG_RE.search(title) and _NEG_RE.search(line) and pp!=tp:continue
+        if _tokens(prefix)-_tokens(title):continue
+        # A first clause that is exactly the heading's own words (朗读课本第20页对话三遍 after 英语：) keeps its own
+        # line: the words are the title's, but the line itself carries the requirement that follows, and the parent
+        # reads both halves in the body. Only a rest that is nothing but the title is left out.
+        if rest and pp==bare:continue
+        if rest:return rest,True
+        return '',True
+    return line,False
+
+
+def _whole_title_repeat(line,title):
+    """C3: a whole line that only retells the title is left out; a negation of its own always reads."""
+    a,b=_plain(title),_plain(line)
+    if _NEG_RE.search(line) and a!=b:return False
+    return _covered_by(a,b)
+
+
+def _clause_parts(line):
+    """A line's own clauses with their punctuation (top-level commas and sentence marks)."""
+    return [part for part in _sentences(line,_CLAUSE_MARKS) if _plain(part)]
+
+
+def _clause_covered(part,shown_clauses):
+    """C2: this clause adds nothing over one already shown."""
+    return any(_covered_by(whole,part) for whole in shown_clauses)
+
+
+def _without_repeats(line,shown):
+    """C2: every clause reads once in this card; C6 keeps every word that is not a repeat.
+
+    Only equal or continuous-part clauses go (_same_content), never a clause with a new number/object/negation. The
+    remaining clauses keep their own punctuation, and a dropped final clause hands its closing mark to the line so
+    (读第3课，读第3课。 reads 读第3课。). A line that repeats nothing is returned untouched."""
+    shown_clauses=[x for whole in shown for x in (_plain(part) for part in _clause_parts(whole)) if x]
+    kept,local,changed,last_marks=[],[],False,''
+    for chunk in _clause_parts(line):
+        part=_plain(chunk)
+        if part in local or _clause_covered(part,shown_clauses+local):
+            changed=True
+            last_marks=chunk[len(chunk.rstrip(_CLAUSE_MARKS)):]
+            continue
+        local.append(part);kept.append(chunk);last_marks=''
+    if not changed:return line,False
+    if last_marks and kept:kept[-1]=kept[-1].rstrip(_CLAUSE_MARKS)+last_marks
+    return ''.join(kept).strip(),True
+
+
+def _label_line(content,shown):
+    """C1/C6: a labelled line (提交要求：…) without its label.
+
+    Its whole content reads once when the card already shows every clause (_stated_clauses keeps 这一页 tied to its own
+    第N页). A content that extends the previous line's last clause folds into that line by replacing that very clause
+    (never inserting into the middle of a sentence, so the saved order cannot read scrambled). Otherwise its new words
+    are returned as an independent line."""
+    if not content:return '',set()
+    if shown and _stated_clauses(content)<=set().union(*map(_stated_clauses,shown)):return '',set()
+    if shown:
+        previous=shown[-1].rstrip(_LINE_END);clause=re.split(r'[，,；;]',previous)[-1].strip()
+        core=content.rstrip(_LINE_END).strip()
+        if clause and core.startswith(clause):
+            at=shown[-1].rfind(clause)
+            if at>=0:
+                shown[-1]=shown[-1][:at]+core+shown[-1][at+len(clause):]
+                return '',{len(shown)-1}
+    return content,set()
+
+
+def action_lines(title,action,words=None):
+    """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
+
+    Only words the card would repeat are left out: the title's own label (语文：) opens no line; a label such as
+    提交要求： is never shown, while the requirement after it stays (C1/C6); an opening that only retells the title
+    gives way to the title (C4) with numbers, pages, items, 《》 objects, times and negations protected; a whole line
+    that only retells the title goes (C3); and every clause reads once across the card (C2): equal or continuous-part
+    clauses go, only-particle wording folds. A labelled line never inserts into the middle of a shown sentence; it
+    folds into the previous line only when it extends that line's last clause, else it keeps its own line. Everything
+    else keeps its saved order and punctuation. The own completion words (completion_words) the item's agenda carries
+    head the one saved line opening with the same work words. Each shown line then reads as its own top-level ； parts
+    (_steps); only a line this reading changed loses a dangling ； (C8), never a closing 。！？."""
+    saved=[x.strip() for x in str(action or '').splitlines()]
+    if words:saved=[words['lead']+x if x.startswith(words['work']) else x for x in saved]
+    lines=[x for line in saved if line for x in _sentences(line)]
+    heading=str(title or '').strip().rstrip(_LINE_END);label=_TITLE_LABEL.match(heading)
+    if lines and heading and lines[0].rstrip(_LINE_END) and lines[0].rstrip(_LINE_END) in (heading,heading[label.end():] if label else heading):
+        lines=lines[1:]
+    elif lines and label:
+        own=heading[:label.end()].rstrip()  # the heading already shows this exact label (英语：)
+        if lines[0].startswith(own) and lines[0][len(own):].strip():lines[0]=lines[0][len(own):].strip()
+    shown,edited=[],set()
+    heading_plain=_plain(heading)
+    for line in lines:
+        labelled=_LABEL_LINE.match(line)
+        if labelled:
+            content=line[labelled.end():].strip()
+            if not _plain(content):continue
+            content,taken=_title_prefix_removed(content,heading)
+            if taken and not _plain(content):continue
+            cp=_plain(content)
+            if _covered_by(heading_plain,cp):continue
+            if any(_covered_by(_plain(whole),cp) for whole in shown):continue
+            content,touched=_label_line(content,shown)
+            if not _plain(content):continue
+            edited.update(touched);edited.add(len(shown));shown.append(content)
+            continue
+        line,taken=_title_prefix_removed(line,heading)
+        if taken and not _plain(line):continue
+        if _whole_title_repeat(line,heading):continue
+        if any(_covered_by(_plain(whole),_plain(line)) for whole in shown):continue
+        line,repeated=_without_repeats(line,shown)
+        if not _plain(line):continue
+        if taken or repeated:edited.add(len(shown))
+        shown.append(line)
+    out=[]
+    for i,line in enumerate(shown):
+        parts=_steps(line)
+        if i in edited:parts=[part.strip().strip('；;，,') for part in parts]
+        out.extend(part for part in parts if _plain(part))
+    return out
+
+def _cited_by(c):
+    """Every live school item's own stored words by the child and original it cites, read once per listing."""
+    cited_by={}
+    for r in c.execute("SELECT id,child_id,plan,evidence FROM agent_items WHERE kind='school' AND state!='superseded'"):
+        for ref in {e.get('ref') for e in json.loads(r['evidence'] or '[]') if isinstance(e,dict)}:
+            cited_by.setdefault((r['child_id'],ref),{})[r['id']]=_stored_date_quote(json.loads(r['plan']))
+    return cited_by
+
+
+def _date_siblings(cited_by,row):
+    """Every other live item of this child citing one of the same originals: its own words are never this item's role."""
+    others={}
+    for e in json.loads(row['evidence'] or '[]'):
+        if isinstance(e,dict):others.update(cited_by.get((row['child_id'],e.get('ref')),{}))
+    others.pop(row['id'],None)
+    return list(others.values())
+
+
+def _same_reminders(c,store,task,proposal):
+    """Refs of the reminders linked to this task as the same affair whose receipt still holds: the reminder row accepted onto
+    this task for this original item, its originals unchanged since they were verified (the same basis the link checked)."""
+    refs=set()
+    for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted' AND task_id=? AND child_id=?",(task['id'],proposal['child_id'])):
+        plan=json.loads(row['plan']);receipt=plan.get('school_same_receipt')
+        if (not isinstance(receipt,dict) or receipt.get('task_id')!=task['id'] or plan.get('school_duplicate_of')!=proposal['id']
+                or not isinstance(receipt.get('input_basis'),dict) or not receipt['input_basis']):continue
+        try:evidence,_=family_agent._school_material(store,c,row)
+        except family_agent.AgentError:continue
+        if family_agent._school_message_basis(evidence)==receipt['input_basis']:refs.update(receipt['input_basis'])
+    return refs
+
+
+def enrich(app,c,tasks):
+    owners={p['name']:p['id'] for p in app.profiles(c)}
+    reported={r['task_id']:(r['child_id'],r['day'],r['report'],r['subject']) for r in c.execute('SELECT task_id,child_id,day,report,subject FROM study_items WHERE id=task_id')} if c.execute("SELECT 1 FROM sqlite_master WHERE name='study_items'").fetchone() else {}
+    cited_by=None  # read once per enrich, only when a school item needs its siblings
+    for task in tasks:
+        refs=[x.strip() for x in task['source'].splitlines() if x.strip().startswith('message:')]
+        focus=task.get('focus') or {}
+        purpose=None;publication_ref='';date_quote='';goal='';date_header='';school_focus=False;date_siblings=None;originals=();reminders=()
+        subject_title=task.get('original_title',task['title']);own_quote='';saved_subject='';confirmed=[];needs=[]
+        if task.get('school_origin'):
+            origin=task['source'].splitlines()[0].removeprefix('Agent建议:')
+            proposal=c.execute("SELECT * FROM agent_items WHERE id=? AND task_id=? AND child_id=? AND kind='school' AND state='accepted'",
+                               (origin,task['id'],owners.get(task['child'],''))).fetchone()
+            if proposal:
+                plan=json.loads(proposal['plan'])
+                # A complete original line's missing execution resource, in its reader's words (never a reading gap).
+                needs=[n for n in plan.get('school_task',{}).get('resource_needed') or [] if isinstance(n,str) and n.strip()]
+                purpose=plan.get('school_task',{}).get('purpose');goal=str(plan.get('school_task',{}).get('goal') or '')
+                store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False)
+                publication_ref=family_agent.school_original_publication_ref(store,c,proposal)
+                date_quote=_stored_date_quote(plan) or re.sub(r'^待核对[：:]?\s*','',proposal['title']).strip()
+                # The role a confirmed school update proved for its day (交回) is the saved due's while that day stays.
+                confirmed=[e for e in plan.get('school_changes') or [] if isinstance(e,dict) and e.get('change')=='update']
+                date_header=_stored_date_header(plan,date_quote)
+                # The same saved row, words and subject its pending candidate was filed with.
+                subject_title=proposal['title'];own_quote=_stored_date_quote(plan);saved_subject=str((plan.get('school_learning') or {}).get('subject') or '')
+                school_focus=_school_focus(c,task,proposal,plan)
+                if cited_by is None:cited_by=_cited_by(c)
+                date_siblings=_date_siblings(cited_by,proposal)
+                # Only while this item's own originals still stand as saved (same child, messages, files and drafts).
+                originals=family_agent.school_original_requirements(family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False),c,dict(proposal))
+                reminders=_same_reminders(c,store,task,proposal)
+        due=task['due'];teacher={}
+        captured=reported.get(task['id'])
+        if captured and captured[0]==owners.get(task['child']) and task['source'] in family_study.CAPTURE_SOURCES:
+            # The capture day is a plan date, not a teacher deadline; preserve explicit later edits.
+            focus=dict(focus)
+            if not focus.get('category'):focus['category']='homework'
+            if not focus.get('scheduled_on') and not focus.get('version'):focus['scheduled_on']=captured[1]
+            due=task['due']=''
+            # Only days the parent or child explicitly entered as the teacher's own are teacher days; a plan never writes them.
+            teacher={k:v for k,v in json.loads(captured[2] or '{}').items() if k in family_study.TEACHER_DAYS and v}
+            if teacher.get('handback_on'):focus['due_on']=teacher['handback_on']
+            saved_subject=captured[3] or ''
+        task['agenda']=metadata(app,c,owners.get(task['child'],''),task.get('original_title',task['title']),due,refs,focus,purpose,publication_ref=publication_ref,date_quote=date_quote,goal=goal,date_header=date_header,school_focus=school_focus,date_siblings=date_siblings,originals=originals,action=task.get('action',''),reminders=reminders,cleared=_focus_cleared(c,task['id']),school_action=task.get('original_action',task.get('action','')))
+        # The latest confirmed updates on the task's current day decide its role: a later one moving no role on that same day
+        # (只做第2题) keeps the earlier proven 交回; an update to another day ends the search (a parent's day reads as before).
+        for event in reversed(confirmed):
+            if not task['agenda'].get('due_on') or str(event.get('due') or '')!=task['agenda']['due_on']:break
+            if event.get('due_kind') in DUE_LABELS:task['agenda']['due_kind']=event['due_kind'];break
+        if teacher.get('handback_on'):task['agenda']['due_kind']='handback'
+        if needs:task['agenda']['resource_needed']=needs
+        if teacher.get('complete_on'):
+            task['agenda']['complete_on']=teacher['complete_on'];task['agenda'].pop('complete_words',None)
+        task['agenda'].update(subject_fields(subject_title,own_quote,saved=saved_subject,corrected=(task.get('focus') or {}).get('subject','')))
+        # Only a card that leaves repeated words out carries its own lines; every other task keeps its exact shape and
+        # its card reads the saved lines as they are.
+        lines=action_lines(task['title'],task.get('action',''),task['agenda'].get('complete_words'))
+        if lines!=[x.strip() for x in str(task.get('action') or '').splitlines() if x.strip()]:task['action_lines']=lines
+    return tasks
+
+
+def visible_on(item,day):
+    m=item['agenda']
+    if m.get('box')=='wish': return False
+    published=m['published_on'];due=m['due_on'];scheduled=m['scheduled_on'];complete=m.get('complete_on','');submit=m.get('submit_on','')
+    if published and day<published:return False
+    if item['closed']:
+        return day in {published,scheduled,due,complete,submit,item.get('closed_on','')}-{''} and (not item.get('closed_on') or day<=item['closed_on'])
+    if day==published or day==scheduled or (complete and day==complete) or (submit and day==submit):return True
+    # An undated item remains in the inbox; a deadline carries forward until a parent closes it.
+    # Unknown publication stays unknown, but a known deadline must not hide from today's work.
+    # A known teacher complete day with no handback day carries forward the same way; it is never made a handback/due day.
+    known=due or complete
+    return bool(known and day>=(published or min(known,scheduled or known,dt.datetime.now(family_agent.TZ).date().isoformat())))
+
+
+def snapshot(app,start,end):
+    with app.connect() as c:
+        c.execute('BEGIN')
+        profiles=app.profiles(c);owners={p['name']:p['id'] for p in profiles};ids=set(owners.values())
+        tables={r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        updates={r['id']:dict(r) for r in c.execute('SELECT * FROM task_updates')}
+        items=[]
+        for task in app.tasks(c):
+            if task['child'] not in owners:continue
+            u=updates.get(task['id'],{});status=app.task_status(task,u.get('status'))
+            items.append(dict(id=task['id'],task_id=task['id'],kind='task',child_ids=[owners[task['child']]],
+                title=task['title'],agenda=task['agenda'],status=status,closed=status in app.TASK_CLOSED,
+                closed_on=date(u.get('updated','')[:10]),body=task['action'],
+                touched=bool(u.get('status') or (task.get('focus') or {}).get('version'))))
+        if 'agent_items' in tables:
+            store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False);cited_by=_cited_by(c)
+            for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id DESC"):
+                plan=json.loads(row['plan']);brief=plan.get('school_task',{})
+                if row['child_id'] not in ids or brief.get('state')=='reference':continue
+                refs=[e['ref'] for e in json.loads(row['evidence'])]
+                purpose=brief.get('purpose')
+                # Action or not is read only from the saved brief: a read goal whose purpose is neither optional nor unknown.
+                # Voluntary/reference (optional) is never required work, whatever goal it reads (_school_brief keeps it out of
+                # 必做); kind, pending state, a subject word, a title, a stored attachment or a publication day prove no action.
+                # Such a row is material still to be organized (it stays here, in the school inbox and its originals, unchanged).
+                material=not str(brief.get('goal') or '').strip() or purpose in ('optional','unknown')
+                category=task_category((brief.get('title') or row['title']) if purpose in family_agent.PURPOSES else row['title'],purpose)
+                # A candidate reads its day from the same stored original words, publication and siblings as its accepted item.
+                m=metadata(app,c,row['child_id'],row['title'],row['due'],refs,publication_ref=family_agent.school_original_publication_ref(store,c,row),
+                           date_quote=_stored_date_quote(plan),goal=str(brief.get('goal') or ''),date_header=_stored_date_header(plan,_stored_date_quote(plan)),
+                           date_siblings=_date_siblings(cited_by,row),pending=True,
+                           originals=family_agent.school_original_requirements(store,c,dict(row)))
+                m['category']=category
+                m.update(subject_fields(row['title'],_stored_date_quote(plan),saved=str((plan.get('school_learning') or {}).get('subject') or '')))
+                relation=(dict(change=brief['change'],target_id=brief['target_id'],refs=refs,title=str(brief.get('title') or row['title']),
+                               lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12])
+                          if brief.get('change') in ('update','append') and brief.get('target_id') else None)
+                link=plan.get('school_pending_of') if isinstance(plan.get('school_pending_of'),dict) else None
+                link=dict(target=str(link.get('item_id') or ''),change=str(link.get('change') or ''),refs=refs,title=str(brief.get('title') or row['title']),
+                          lines=[l.strip() for l in str(brief.get('goal') or row['body'] or '').splitlines() if l.strip()][:12],
+                          siblings=[q for q in link.get('sibling_quotes') or [] if isinstance(q,str)]) if link else None
+                items.append(dict(id=row['id'],task_id='',kind='school',child_ids=[row['child_id']],title=row['title'],
+                    agenda=m,status='待核对',closed=False,closed_on='',body=row['body'],**({'relation':relation} if relation else {}),
+                    **({'school_material':True} if material else {}),
+                    **({'pending_link':link} if link else {})))
+            items=_one_pending_affair(c,items,store)
+            items=_one_affair_versions(c,items,store)
+        study=[]
+        if 'study_items' in tables:
+            for row in c.execute('SELECT * FROM study_items ORDER BY day,rowid'):
+                if row['child_id'] not in ids:continue
+                entry=dict(id=row['id'],task_id=row['task_id'],kind='study',child_ids=[row['child_id']],day=row['day'],
+                    title=row['title'],status=row['status'],result=row['result'],result_actor=dict(row).get('result_actor','parent'))
+                if start<=row['day']<=end:study.append(entry)
+                if not row['task_id']:
+                    items.append(dict(entry,agenda=dict(category='homework',published_on='',due_on='',scheduled_on=row['day'],**subject_fields(row['title'],saved=row['subject'])),
+                        closed=row['result']=='完成' and entry['result_actor']=='parent',closed_on=row['day']))
+        plans=[];plan_error=''
+        if 'calendar_events' in tables:
+            # A saved calendar row that cannot be verified leaves only the plans out (the calendar's own read reports it);
+            # tasks, school items and study items are still returned, so one bad row never takes the list down.
+            try: saved=family_calendar.Store.saved_rows(c,ids)
+            except family_calendar.CalendarError: saved=[];plan_error='日程记录暂时无法核对，未列入；事项清单不受影响。'
+            parents={e['id']:e for e in saved if not e['occurrence']}
+            for event in saved:
+                if any(child not in ids for child in event['child_ids']):continue
+                if event['occurrence']:
+                    event['occurrence']=dict(event['occurrence'],version=event['version'],series_version=parents[event['occurrence']['series_id']]['version'])
+                plans.append(dict(id='calendar:'+event['id'],task_id='',kind='event',child_ids=event['child_ids'],title=event['title'],
+                    agenda=dict(category='todo',published_on='',due_on='',scheduled_on=event['day'],**subject_fields(event['title'],no_subject=True)),closed=event['status'] in ('cancelled','completed'),event=event))
+    first=dt.date.fromisoformat(start);count=(dt.date.fromisoformat(end)-first).days+1
+    agenda=[]
+    for offset in range(count):
+        day=(first+dt.timedelta(days=offset)).isoformat()
+        agenda.extend(dict(item,day=day) for item in items if visible_on(item,day))
+    # Batch photo wrong records' concrete basis (read only), carried on the same inbox list to this module's day_view.
+    inbox=_Inbox(items+plans)
+    try:
+        import family_photo_batch
+        with app.connect() as c:
+            c.row_factory=__import__('sqlite3').Row
+            inbox.photo_basis=family_photo_batch.basis_map(c,app)
+    except (__import__('sqlite3').Error,ValueError,KeyError,TypeError):
+        inbox.photo_basis={}
+    return dict(agenda=agenda,study=study,inbox=inbox,**({'plan_error':plan_error} if plan_error else {}))
+
+
+# B4: a teacher's later notice about one saved affair (change update/append, its target a listed task of the same child) is
+# that affair's new version on its one card, never a second card. Only an update by the same verified publisher, strictly
+# later, same subject or the same subject-free affair, the only notice on it, wholly read text, no cancel or newly negated
+# original action, and an affair the family has not touched (no status, edit, feedback or wrong record) shows its latest
+# requirement and dates with one short change line; every other notice stays for the parent on the same card, the old
+# requirement, dates and family state kept as they are. Read only: the pending item stays the one place it is confirmed.
+_VERSION_CANCEL=r'取消|撤回|作废|停办|不再需要|不用(?:再)?(?:做|交|带|读|写|完成|参加)了|不需要(?:做|交|带)了'
+_CN_NUMBER={1:'一',2:'两',3:'三',4:'四',5:'五',6:'六',7:'七',8:'八',9:'九',10:'十'}
+
+
+def _message(c,ref):
+    try:source_id,message_id=ref[8:].rsplit(':',1)
+    except ValueError:return None,''
+    row=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(source_id,message_id)).fetchone()
+    try:return (json.loads(row['payload']),source_id) if row else (None,'')
+    except (ValueError,TypeError):return None,''
+
+
+def _read_publisher(c,ref):
+    """The verified publisher of one wholly read text message, '' otherwise."""
+    message,source_id=_message(c,ref)
+    if not message or message.get('unread') or message.get('kind','text')!='text' or not str(message.get('text') or '').strip():return ''
+    return family_agent._publisher(source_id,message)
+
+
+def _wholly_read(c,store,child,ref):
+    """One message read in full: its text and every original attached to it, each with a saved complete reading that leaves
+    no open question. An attached file without one (未读PNG、未整理的原件) leaves the message, and any notice on it, unread."""
+    message,source_id=_message(c,ref)
+    if not message or message.get('unread') or message.get('kind','text')!='text' or not str(message.get('text') or '').strip():return False
+    message_id=ref.rsplit(':',1)[1]
+    try:
+        attached={r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source_id,message_id))}
+        if not attached:return True
+        import family_media
+        source,saved=store._message_context(c,dict(child_id=child,source_id=source_id,message_id=message_id))
+        value=family_media.school_evidence(store,c,source,saved)
+    except Exception:return False
+    if not value or not value['complete'] or not attached<=set(value['upload_ids']):return False
+    return all(not d.get('uncertainties') for d in value['draft'].get('originals') or [value['draft']])
+
+
+def _negated_actions(text):
+    verbs=r'('+_COMPLETION_VERB+r'|填写|填|上交|提交|交|检查|带|准备|签字|签名)'
+    text=_titles_read_as_objects(text or '')
+    return {m[1] for m in re.finditer(_NEGATED_LEAD+verbs,text) if not _negation_negated(text[:m.start()])}
+
+
+_DATE_ROLES={'work':'日期','handback':'交回日期','check':'检查日期'}
+
+
+def _short_change(old_text,new_text,shifts=()):
+    """One short provable change line (原三遍→两遍；交回日期 原11-18→11-17); '' when no count or date difference is provable.
+    A day is named only for a date role the notice itself moved (shifts: the role, its original days, its new days): a
+    notice restating the original's own day of that work (今晚只需跟读两遍) changes no date."""
+    parts=[];old,new=family_agent._school_counts(old_text),family_agent._school_counts(new_text)
+    for unit in sorted({u for _,u in old|new if u}):
+        a=sorted(n for n,u in old if u==unit and isinstance(n,int));b=sorted(n for n,u in new if u==unit and isinstance(n,int))
+        if len(a)==1 and len(b)==1 and a!=b:parts.append('原'+_CN_NUMBER.get(a[0],str(a[0]))+unit+'→'+_CN_NUMBER.get(b[0],str(b[0]))+unit)
+    for role,old_days,new_days in shifts:
+        if len(new_days)==1:
+            old=next(iter(old_days)) if len(old_days)==1 else ''
+            parts.append(_DATE_ROLES[role]+' 原'+(old[5:] if old else '未写明')+'→'+next(iter(new_days))[5:])
+    return '；'.join(parts)
+
+
+def _role_days(agenda,quote,sent):
+    """Each date role's days for one item: its saved due by its meaning (交回、检查; any other due is the work's
+    own day), its saved completion or earlier submission, and every day its own quoted clauses tie to a predicate of that
+    role (明早交给数学老师 is the handback's, 今晚完成 the work's). A clause dates only the role its own predicate names: one whose
+    predicate is none of them (改到下周一、明早仍交… where no predicate is read) or is negated (今晚不用填写) dates nothing, and
+    its day is left to the saved dates. The same day can hold two roles; a role is never read off another's."""
+    roles={role:set() for role in _DATE_ROLES}
+    due,kind=exact_day(agenda.get('due_on','')),agenda.get('due_kind','')
+    if due:roles['handback' if kind=='handback' else 'check' if kind=='inspection' else 'work'].add(due)
+    if exact_day(agenda.get('complete_on','')):roles['work'].add(agenda['complete_on'])
+    if exact_day(agenda.get('submit_on','')):roles['check' if agenda.get('submit_role')=='check' else 'handback'].add(agenda['submit_on'])
+    for clause in re.split(r'[，,；;。！!？?\n]+',quote or ''):
+        days=family_agent._school_clause_days(clause,sent) if exact_day(sent) and clause.strip() else None
+        if not days or family_agent._school_negated_day(clause) or _negated_actions(clause):continue
+        own=family_agent._school_clause_roles(clause)
+        for role in own&{'handback','check'} or ({'work'} if 'finish' in own else ()):roles[role]|=days
+    return roles
+
+
+def _saved_quote(c,*,item_id='',task_id=''):
+    """One school row's own stored original words: a notice by its id, a task by its accepted origin row; '' when none."""
+    try:
+        row=(c.execute("SELECT plan FROM agent_items WHERE id=? AND kind='school'",(item_id,)).fetchone() if item_id else
+             c.execute("SELECT plan FROM agent_items WHERE task_id=? AND kind='school' AND state='accepted' ORDER BY rowid LIMIT 1",(task_id,)).fetchone())
+        return _stored_date_quote(json.loads(row['plan'])) if row else ''
+    except Exception:return ''
+
+
+# A notice's latest requirement is the original's whole requirement with only what the notice itself changes put in. Each
+# original clause, its own day words aside (days are the saved date roles) and any count whose unit the notice restates
+# (三遍 replaces 四遍) or object it renames, must still be carried by the latest words: a dropped method, range, quantity,
+# qualifier, step or exemption is a lost unit, never a silent latest (PRD 3.2; one contract with the selection prompt).
+_UNIT_DAY_WORDS=re.compile(r'(?:下下|下|本|这|上)?个?(?:周|星期|礼拜)[一二三四五六日天末]|今[天日晚早]|明[天日晚早]|后天|当[天晚]|\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]?')
+_UNIT_FILLER=re.compile(r'[^\u4e00-\u9fffa-z0-9]|[的了地得着过也都再请需须要把将]')
+_UNIT_DIGITS=str.maketrans('一二两三四五六七八九','1223456789')
+
+
+def _unit_chars(text):
+    return set(_UNIT_FILLER.sub('',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())).translate(_UNIT_DIGITS))
+
+
+def _count_token(units):
+    return re.compile(r'(?:\d+|[一二两三四五六七八九十]+)\s*(?:'+'|'.join(sorted(map(re.escape,units),key=len,reverse=True))+')')
+
+
+def _explicit_replacements(said,old):
+    """(old words, their new words) of each object a notice explicitly changes (透明塑料杯改为两个玻璃杯): the old words are
+    the longest end of what precedes the change verb that the original writes verbatim; the new words, their numbers aside,
+    share its head noun (杯). Only as many old words right before that head as the new words bring (塑料 for 玻璃) are
+    replaced; every other old word of that object (透明) stays its requirement. A change to a day or a count alone is none."""
+    pairs=[];old=(old or '').lower()
+    for m in re.finditer(r'([\u4e00-\u9fff]{2,16}?)\s*(?:改为|改成|换成|换为)\s*([^，,；;。！!？?\n]{1,16})',(said or '').lower()):
+        if _UNIT_DAY_WORDS.match(m[2].strip()):continue
+        before=next((m[1][i:] for i in range(len(m[1])-1) if m[1][i:] in old),'')
+        new=re.sub(r'\s+','',_NUMERAL.sub('',m[2]))
+        head=next((before[-k:] for k in range(min(len(before),len(new))-1,0,-1) if new.endswith(before[-k:])),'')
+        words=new[:len(new)-len(head)];kept=before[:len(before)-len(head)]
+        if head and words and len(words)<=len(kept):pairs.append((before,kept[:len(kept)-len(words)]+words+head))
+    return pairs
+
+
+def _clause_negated(clause):
+    """Whether one clause's own predicate is negated (不用抄写、无需录音): a negation inside a title or negated again is none."""
+    text=_titles_read_as_objects(clause or '')
+    m=re.search(_NEGATED_LEAD+r'[\u4e00-\u9fff]',text)
+    return bool(m) and not _negation_negated(text[:m.start()])
+
+
+def _polar_chars(text):
+    """(words of text's positive clauses, words of its negated clauses), each clause read by its own polarity."""
+    pos,neg=set(),set()
+    for clause in re.split(r'[，,；;。！!？?\n]+',text or ''):
+        if clause.strip():(neg if _clause_negated(clause) else pos).update(_unit_chars(clause))
+    return pos,neg
+
+
+def _lifted_exemptions(old,notice):
+    """(clause, words) of each exemption the notice's own words lift: a positive clause of the notice requiring words the
+    original writes only in its negated clauses (不用抄写 → …只需跟读两遍，抄写). Same characters are no proof of the same
+    requirement: the polarity of each clause decides, as an exemption named again without its negation is a changed unit
+    for a date move. A notice that omits the exemption, or restates it negated (仍然不用抄写), lifts nothing."""
+    # Each exemption is bound to its own clause: the object or range before its negation (第4题 of 第4题不做) and the action
+    # after it. A notice clause lifts it only by naming that action and that object; a character shared with another clause
+    # (今晚做 beside 第4题不做) is no proof that the whole work, a signature or another object was ever exempt.
+    pos,_=_polar_chars(old);exempt=[];found=[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',old or ''):
+        if not clause.strip() or not _clause_negated(clause):continue
+        text=_titles_read_as_objects(clause);lead=re.search(_NEGATED_LEAD,text)
+        if not lead:continue
+        action=_unit_chars(text[lead.end():])-pos
+        if action:exempt.append((_unit_chars(text[:lead.start()]),action))
+    for clause in re.split(r'[，,；;。！!？?\n]+',notice or ''):
+        if not clause.strip() or _clause_negated(clause):continue
+        words=_unit_chars(clause);lifted=set().union(*([action for target,action in exempt if action<=words and target<=words] or [set()]))
+        if lifted:found.append((clause.strip(),lifted))
+    return found
+
+
+def _exemption_unmet(old,notice,shown):
+    """The notice's lifted exemptions (_lifted_exemptions) that the latest words do not require positively, or still exempt;
+    '' when none. Such latest words are never the whole latest requirement, on the page or saved."""
+    pos,neg=_polar_chars(shown)
+    return '、'.join(clause for clause,words in _lifted_exemptions(old,notice) if not words<=pos or words&neg)
+
+
+# The doers a requirement names (as _school_clause_roles' lead reads them): who reads, signs or hands in.
+_ACTOR_WORDS=r'家长|监护人|父母|爸爸|妈妈|爸妈|学生|孩子|同学们?|班主任|老师'
+
+
+def _learner_read(text):
+    """text with the generic words for the learner of this child's own task (孩子、学生、同学、孩子们) read as one doer, for
+    comparison only: they name the same current learner, never another. Specific people (爸爸、妈妈), parents, teachers and
+    names stay as written; the saved words are never rewritten."""
+    return re.sub(r'孩子们|同学们|同学|学生','孩子',text or '')
+
+
+def _polar_clauses(text):
+    """(clause, negated, requirement pieces) of each clause of text, read by its own polarity."""
+    return [(c.strip(),_clause_negated(c),_requirement_pieces(c)) for c in re.split(r'[，,；;。！!？?\n]+',text or '') if c.strip()]
+
+
+def _rebound_actors(old,notice):
+    """Each notice clause whose doer the notice's own words change while every other word of it is one original piece's own,
+    of the same polarity (家长今晚听音频跟读… after 孩子今晚听音频跟读…；孩子签字 after 家长签字): the notice's clause words."""
+    # The learner's generic words are compared as one doer; the notice's own clause words are what is quoted back.
+    old=_learner_read(old)
+    actors=_unit_chars(''.join(re.findall(_ACTOR_WORDS,old+'\n'+_learner_read(notice))))
+    if not actors:return []
+    olds=_polar_clauses(old);units=set(family_agent._SCHOOL_COUNT_UNITS.split('|'));found=[]
+    for raw,negated,_ in _polar_clauses(notice):
+        norm=re.sub(_subject_patterns()[2].pattern,' ',re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token(units).sub(' ',_MOVE_NARRATION.sub(' ',_learner_read(raw).lower()))))
+        for piece in _requirement_pieces(norm,False):
+            same=[u for _,n,pieces in olds if n==negated for u in pieces]
+            if any(piece<=u for u in same):continue
+            # Only a doer the original piece itself names can change: a piece naming none (今晚听音频跟读…) proves nothing.
+            core=piece-actors
+            if core and piece&actors and any(core<=u-actors and u&actors and not piece&actors<=u for u in same):
+                found.append(re.sub(r'^[^：:，,]{0,8}[：:]','',raw).strip());break
+    return found
+
+
+def _rebound_unmet(old,notice,shown):
+    """A short reason when the notice changes who does a requirement (_rebound_actors) and the latest words do not state it
+    so: the notice's own clauses and the summary's clauses naming a doer, never the whole message; '' when none."""
+    found=_rebound_actors(old,notice)
+    if not found:return ''
+    held=[set().union(*pieces) for _,_,pieces in _polar_clauses(_learner_read(shown)) if pieces]
+    def carried(clause):
+        norm=re.sub(_subject_patterns()[2].pattern,' ',_MOVE_NARRATION.sub(' ',_learner_read(clause).lower()))
+        return all(any(piece<=h for h in held) for piece in _requirement_pieces(norm,False))
+    if all(carried(c) for c in found):return ''
+    said=list(dict.fromkeys(re.sub(r'^[^：:，,]{0,8}[：:]','',c).strip()[:24] for c,_,_ in _polar_clauses(shown) if re.search(_ACTOR_WORDS,c)))[:3]
+    return ('通知改为“'+'”“'.join(c[:24] for c in found)+'”，执行人与原要求不同；新要求的归纳'
+            +('仍写“'+'”“'.join(said)+'”' if said else '未写明执行人'))
+
+
+def _unchanged_lost(old_lines,shown,said,lifted=()):
+    """Original clauses the latest shown words no longer carry beyond the notice's own changes; [] when every one is kept.
+    An object the notice explicitly changes (透明塑料杯改为两个玻璃杯) is carried only by its changed words written as one
+    phrase in the latest (透明玻璃杯); otherwise its old words stay required."""
+    units={u for _,u in family_agent._school_counts(said) if u}
+    renamed=bool(family_agent._school_named_objects(said)-family_agent._school_named_objects('\n'.join(old_lines)))
+    have=_unit_chars(shown);lost=[];written=re.sub(r'\s+','',(shown or '').lower())
+    # A count the notice replaces (三遍 → 两遍) is no unchanged standard: a lost clause is named without it (每词).
+    told=family_agent._school_counts(said)
+    replaced=_count_token(units) if units else None
+    label=lambda clause:re.sub(r'\s+','',replaced.sub(lambda t:'' if family_agent._school_counts(t[0])-told else t[0],clause)) if replaced else clause
+    changed=[(a,b) for a,b in _explicit_replacements(said,'\n'.join(old_lines)) if b in written]
+    lifted=set().union(*(words for _,words in lifted)) if lifted else set()
+    for clause in re.split(r'[，,；;。！!？?\n]+','\n'.join(old_lines)):
+        # An exemption the notice itself lifts (不用抄写 → 抄写) is a changed unit, never an unchanged one the latest must keep.
+        if lifted and _clause_negated(clause) and _unit_chars(clause)&lifted:continue
+        core=clause.lower()
+        for a,b in changed:core=core.replace(a,b)
+        if units:core=_count_token(units).sub(' ',core)
+        if renamed:core=family_agent._SCHOOL_NAMED.sub(' ',core)
+        if _unit_chars(core)-have:lost.append(label(clause.strip())[:24])
+    return lost
+
+
+def _stated_count_changes(said):
+    """(old count, new count, unit, the notice's own new words) of each count a notice explicitly changes (每句由四遍改为一遍)."""
+    counts=family_agent._school_counts;found=[]
+    number=r'(?:\d+|[一二两三四五六七八九十]+)\s*(?:'+family_agent._SCHOOL_COUNT_UNITS+')'
+    for m in re.finditer(r'('+number+r')\s*(?:改为|改成|换成|换为)\s*((?:\d+|[一二两三四五六七八九十]+)\s*(?:'+family_agent._SCHOOL_COUNT_UNITS+')?)',said or ''):
+        old,new=[x for x in counts(m[1]) if x[1]],counts(m[2])
+        if len(old)!=1:continue
+        unit=old[0][1];new=[n for n,u in new if u in (unit,'')]
+        if len(new)==1 and new[0]!=old[0][0]:found.append((old[0][0],new[0],unit,m[2].strip() if unit in m[2] else m[2].strip()+unit))
+    return found
+
+
+def _put_counts(old_lines,changes):
+    """The original lines with each stated count change put in, else None (an old count not written exactly once)."""
+    lines=list(old_lines);counts=family_agent._school_counts
+    for old,new,unit,words in changes:
+        tokens=[(i,t) for i,l in enumerate(lines) for t in _count_token({unit}).finditer(l) if counts(t[0])=={(old,unit)}]
+        if len(tokens)!=1:return None
+        i,t=tokens[0];lines[i]=lines[i][:t.start()]+words+lines[i][t.end():]
+    return lines
+
+
+def _count_only_latest(old_lines,old_title,shown,said,moved):
+    """The original lines with only the notice's own count change put in, else None. Each changed unit has one count in the
+    latest words that the notice itself states, and one old count of that unit written once in the original; the model's
+    latest must say nothing beyond the original and that change. A moved date would leave dated original words stale."""
+    old='\n'.join(old_lines)
+    if not old_lines or moved and _UNIT_DAY_WORDS.search(old):return None
+    counts=family_agent._school_counts;told=counts(said);new=counts(shown);before=counts(old);lines=list(old_lines);changed=False
+    for unit in sorted({u for _,u in told if u}):
+        a=[n for n,u in before if u==unit];b=[n for n,u in new if u==unit]
+        if len(b)!=1 or (b[0],unit) not in told:continue
+        if len(a)!=1 or a[0]==b[0]:return None
+        tokens=[(i,t) for i,l in enumerate(lines) for t in _count_token({unit}).finditer(l) if counts(t[0])=={(a[0],unit)}]
+        written=next((t[0] for t in _count_token({unit}).finditer(shown) if counts(t[0])=={(b[0],unit)}),'')
+        if len(tokens)!=1 or not written:return None
+        i,t=tokens[0];lines[i]=lines[i][:t.start()]+written+lines[i][t.end():];changed=True
+    if not changed or not _unit_chars(shown)<=_unit_chars(old_title+'\n'+'\n'.join(lines)):return None
+    return lines
+
+
+def _polar_pieces(text,shared=True):
+    """(positive, negated) requirement pieces of text (_requirement_pieces), each clause read by its own polarity."""
+    pos,neg=[],[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',text or ''):
+        if clause.strip():(neg if _clause_negated(clause) else pos).extend(_requirement_pieces(clause,shared))
+    return pos,neg
+
+
+def _notice_count_change(old_lines,notice):
+    """(old count, new count, unit, the notice's own new words, (line, token)) of the one count the teacher's own notice
+    words change, else None. Unit 9第1到6个单词今晚只需跟读两遍，仍然不用抄写 after 今晚听音频跟读Unit 9第1到6个单词，每词三遍
+    restates the same requirement unit with one new count of the same unit (遍): every other unit (听音频、每词、口头、不用抄写)
+    is unchanged, whatever a model summary paraphrased (共两遍), left out (听音频) or kept unchanged (每词三遍).
+
+    notice is the notice's own sentence holding this item's quote. Apart from its narration (更正、刚才、仍然…), a restricting
+    只需/只要/仅, the item's course name and that one count, each piece of it must restate ONE piece of the original of the
+    same polarity, as a date-only move must (_units_restated): characters gathered from several pieces are no proof. A new
+    action, object, material or scope word (共、整组), an exemption turned positive (不用抄写 → 抄写), a newly negated step
+    (不用听音频), actors swapped between two actions (家长跟读、孩子签字 after 孩子跟读、家长签字) or a second changed count is
+    no count-only change; nor is an old count of that unit not written exactly once in the original."""
+    old='\n'.join(old_lines)
+    if not old_lines or not notice:return None
+    counts=family_agent._school_counts;told=counts(notice);before=counts(old)
+    changed=[(n,u) for n,u in told if u and (n,u) not in before]
+    if len(changed)!=1:return None
+    new,unit=changed[0];was=[n for n,u in before if u==unit]
+    if len(was)!=1 or was[0]==new or len([n for n,u in told if u==unit])!=1:return None
+    tokens=[(i,t) for i,l in enumerate(old_lines) for t in _count_token({unit}).finditer(l) if counts(t[0])=={(was[0],unit)}]
+    written=next((t[0] for t in _count_token({unit}).finditer(notice) if counts(t[0])=={(new,unit)}),'')
+    if len(tokens)!=1 or not written:return None
+    rest=re.sub(r'只(?:需|要|用)?|仅(?:需|要)?',' ',_count_token({unit}).sub(' ',_MOVE_NARRATION.sub(' ',notice.lower())))
+    rest=re.sub(_subject_patterns()[2].pattern,' ',rest)
+    pos,neg=_polar_pieces(_learner_read(old));said_pos,said_neg=_polar_pieces(_learner_read(rest),False);negation=_unit_chars('不用不必无需无须免别勿没未')
+    if not all(any(piece<=unit for unit in pos) for piece in said_pos) or not all(any(piece<=unit|negation for unit in neg) for piece in said_neg):
+        return None
+    return was[0],new,unit,written,tokens[0]
+
+
+def _notice_count_latest(old_lines,old_title,notice,moved):
+    """The original lines with the one count the teacher's own notice words change put in (_notice_count_change), else None.
+    A moved date leaves the original's dated words stale."""
+    if moved and _UNIT_DAY_WORDS.search('\n'.join(old_lines)):return None
+    proof=_notice_count_change(old_lines,notice)
+    if proof is None:return None
+    i,t=proof[4];lines=list(old_lines);lines[i]=lines[i][:t.start()]+proof[3]+lines[i][t.end():]
+    return lines
+
+
+def _notice_own_words(quote,said):
+    """The notice's own sentence(s) holding an item's verified quote; '' when the quote is not found in the notice."""
+    return family_agent._school_own_sentences(quote,said) if quote and quote in (said or '') else ''
+
+
+# Words a notice uses to narrate a move of the original itself (前面通知带的瓶也下周一再带，今晚仍不用填写): a move verb, a
+# pointer to the earlier notice and a continuity word state no requirement of their own.
+_MOVE_NARRATION=re.compile(r'(?:由|从)?\s*(?:改|调|调整|推迟|延后|延期|提前|挪|换|移)\s*(?:到|至|为|在)(?=\s*(?:'+_UNIT_DAY_WORDS.pattern+'))'
+                           r'|(?:前面|刚才|之前|上面|此前|原来|原先)(?:通知|说|发|布置|安排)?|仍然|仍旧|仍|还是|照旧|依旧|照常|更正')
+
+
+# A number with the measure word right after it (两个、三支、第8页); its object is the noun written right after it (两个纸盘),
+# else the one written right before it within its own enumerated piece (纸盘改为三个、铅笔仍三支).
+_NUMERAL=re.compile(r'(\d+|[一二两三四五六七八九十百千]+)\s*([\u4e00-\u9fff]?)')
+
+
+def _counted_objects(text,narration):
+    """(number, measure word, object words) of every number in text, its days (and a notice's move narration) aside."""
+    found=[];text=(text or '').lower()
+    for piece in re.split(r'[，,；;。、！!？?\n]+|以及|和|及|与',_UNIT_DAY_WORDS.sub(' ',_MOVE_NARRATION.sub(' ',text) if narration else text)):
+        for m in _NUMERAL.finditer(piece):
+            words=_unit_chars(re.match(r'\S*',piece[m.end():])[0]) or _unit_chars(re.search(r'\S*$',piece[:m.start()].rstrip())[0])
+            found.append((m[1].translate(_UNIT_DIGITS),m[2],words))
+    return found
+
+
+def _counts_unchanged(said,old):
+    """Whether every number the notice states is the original's own number of that same object: each one (透明塑料杯改为
+    三个、铅笔仍三支) meets the original's numbers of that measure word whose objects share the most of its object words,
+    and each of them is that very number. An old number of another object (三支铅笔) never vouches for a changed one (两个
+    杯→三个); an object or measure the original never counted is beyond it."""
+    held=_counted_objects(old,False)
+    for number,unit,words in _counted_objects(said,True):
+        near=[(len(words&named),n) for n,u,named in held if u==unit and words&named]
+        best=max((k for k,_ in near),default=0)
+        if not best or any(n!=number for k,n in near if k==best):return False
+    return True
+
+
+def _requirement_pieces(text,shared=True):
+    """The words of each enumerated piece of text's clauses (带两个透明塑料杯｜三根玻璃棒), days aside. A clause's lead before
+    its first counted object (科学：实验课带) is shared by every piece it enumerates."""
+    found=[]
+    for clause in re.split(r'[，,；;。！!？?\n]+',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())):
+        pieces=re.split(r'、|以及|和|及|与',clause);first=_NUMERAL.search(pieces[0]) if shared and len(pieces)>1 else None
+        lead=_unit_chars(pieces[0][:first.start()]) if first else set()
+        found+=[_unit_chars(piece)|lead for piece in pieces if _unit_chars(piece)]
+    return found
+
+
+def _units_restated(said,old):
+    """Whether each piece of the notice, its move narration and days aside, restates one requirement unit of the original:
+    all its words held by one original piece. Words pieced together from another object (两个玻璃杯 from 两个透明塑料杯 and
+    三根玻璃棒) or a change verb naming no day (改为两个玻璃杯) are a changed unit, never a date-only move."""
+    held=_requirement_pieces(old)
+    return all(any(words<=unit for unit in held) for words in _requirement_pieces(_MOVE_NARRATION.sub(' ',(said or '').lower()),False))
+
+
+def _day_moved_latest(old_lines,old_title,original,said,old_day,new_day,old_sent,new_sent):
+    """The original lines with only the notice's own stated move put in, else None. The notice's own words move the item
+    (周四科学课改到下周一) to one day that is the latest saved day; the original names the moved day with one word that is its
+    own saved day, and each of its other day words (今晚不用填写) means the same day read on the notice's sending day; the
+    notice's own words, its days and move narration aside, say nothing beyond the original. The original's every other unit
+    (一个、空的、不用填写) is then still the requirement, whatever the model's summary left out."""
+    days=family_agent._school_clause_days
+    if not (exact_day(old_day) and exact_day(new_day) and old_day!=new_day and old_lines and old_sent and new_sent):return None
+    to=[t for t in re.finditer(r'(?:改|调|调整|推迟|延后|延期|提前|挪|换|移)\s*(?:到|至|为|在)\s*('+_UNIT_DAY_WORDS.pattern+')',said)]
+    if not to or any(days(t[1],new_sent)!={new_day} for t in to):return None
+    lines=list(old_lines);moved=[];kept=set()
+    for i,line in enumerate(lines):
+        for t in _UNIT_DAY_WORDS.finditer(line):
+            held=days(t[0],old_sent)
+            if held=={old_day}:moved.append((i,t))
+            elif not held or days(t[0],new_sent)!=held:return None
+            else:kept|=held
+    if len(moved)!=1:return None
+    if any(days(t[0],new_sent) not in ({old_day},{new_day},*({d} for d in kept)) for t in _UNIT_DAY_WORDS.finditer(said)):return None
+    if not _units_restated(said,old_title+'\n'+'\n'.join(old_lines)+'\n'+original):return None
+    # An exemption the notice names again without its negation (今晚要填写记录表 after 今晚不用填写) is a changed unit.
+    if any(verb in said for verb in _negated_actions('\n'.join(old_lines))-_negated_actions(said)):return None
+    # So is any number it states that is not the original's own number of the same object (透明塑料杯改为三个).
+    if not _counts_unchanged(said,old_title+'\n'+'\n'.join(old_lines)+'\n'+original):return None
+    (i,t),=moved;lines[i]=lines[i][:t.start()]+to[0][1]+lines[i][t.end():]
+    return lines
+
+
+def _pending_restated(c,store,root,group,links):
+    """Every later notice of a still-pending item proven to restate its requirement unchanged, read from the stored originals:
+    the selection's link proof (same publisher and source, later, same object and day) plus the one restatement contract of a
+    saved task's reminder (family_agent._school_restated_reason and _school_same_new_step on the notice's own words, another
+    item's proven clauses set aside by _school_same_own), each notice and original wholly read, its due the item's own or none
+    and no day word the item's words and originals do not hold. Anything else is a change or a doubt and stays for review."""
+    if store is None:return False
+    a=root['agenda'];child=root['child_ids'][0];words=root['title']+'\n'+str(root.get('body') or '')
+    own=[p.get('ref','') for p in a.get('publications') or [] if str(p.get('ref','')).startswith('message:')]
+    originals=[str((_message(c,r)[0] or {}).get('text') or '') for r in own]
+    if not own or not all(originals):return False
+    facts=words+'\n'+'\n'.join(originals)
+    for n in group:
+        link=links[n['id']]
+        if link['change']!='same' or not link['refs'] or (n['agenda'].get('due_on') or '') not in ('',a.get('due_on') or ''):return False
+        if not all(_wholly_read(c,store,child,r) for r in list(link['refs'])+own):return False
+        said='\n'.join(str((_message(c,r)[0] or {}).get('text') or '') for r in link['refs'])
+        mine,_=family_agent._school_same_own(said,link.get('siblings') or (),words)
+        if not mine.strip() or not family_agent._school_same_object(mine,words):return False
+        body=family_agent._school_relation_body(mine)[0]
+        summary=link['title']+' '+family_agent._school_relation_body('\n'.join(link['lines']))[0]
+        if family_agent._school_restated_reason(body,facts,summary) or family_agent._school_same_new_step(body,facts):return False
+        if any(w not in facts for w in family_agent._SCHOOL_DATE_MENTION.findall(mine)):return False
+    return True
+
+
+def _one_pending_affair(c,items,store=None):
+    """A later notice bound to an earlier pending school item (school_pending_of, the program's own proof at selection) is
+    that affair's notice, never a second card. While the earlier item is pending, its one card keeps its own title, lines
+    and dates, gains every notice's publications and a review note, and all stay pending for the parent; once the earlier
+    item became a task, the notice is that task's notice under the version rules below; dismissed or gone, its own card."""
+    links={x['id']:x.pop('pending_link') for x in items if x.get('pending_link')}
+    if not links:return items
+    pending={x['id']:x for x in items if x['kind']=='school'};groups={}
+    for x in items:
+        link=links.get(x['id'])
+        if not link:continue
+        target,seen=link['target'],{x['id']}
+        while target in links and links[target]['target'] in pending and target not in seen:
+            seen.add(target);target=links[target]['target']
+        root=pending.get(target)
+        if root is not None and root is not x and root['child_ids']==x['child_ids']:
+            groups.setdefault(target,[]).append(x);continue
+        try:row=c.execute("SELECT task_id,child_id FROM agent_items WHERE id=? AND kind='school' AND state='accepted'",(target,)).fetchone()
+        except Exception:row=None
+        if row and row['task_id'] and [row['child_id']]==x['child_ids'] and not x.get('relation'):
+            x['relation']=dict(change=link['change'],target_id=row['task_id'],refs=link['refs'],title=link['title'],lines=link['lines'])
+    for target,group in groups.items():
+        root=pending[target];a=root['agenda'];pubs=list(a.get('publications') or [])
+        # A proven unchanged reminder asks the parent nothing new: the item keeps its own pending state, words and days.
+        restated=_pending_restated(c,store,root,group,links)
+        for n in group:pubs+=[p for p in n['agenda'].get('publications') or [] if p not in pubs]
+        root['agenda']=dict(a,publications=pubs)
+        root['version']=dict(state='review',pending_id=group[0]['id'],
+            previous=dict(title=root['title'],lines=[l.strip() for l in str(root.get('body') or '').splitlines() if l.strip()][:12],
+                          due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on','')),
+            notices=[dict(id=n['id'],change=links[n['id']]['change'],title=links[n['id']]['title'],lines=links[n['id']]['lines'],
+                          publications=publications(n['agenda']),published_at=str(n['agenda'].get('published_at') or '')) for n in group],
+            reasons=['同一待核事项有后续通知']+(['是同一事项的再次提醒，要求未变'] if restated else []),
+            note=('同一事项再次提醒（'+str(len(group))+'条），要求未变；原要求、日期和全部原文都保留，原文未写明的范围和日期仍未知。' if restated else
+                  '同一事项有后续通知（'+str(len(group))+'条）待核对；原要求、日期和全部原文都保留，原文未写明的范围和日期仍未知，确认后才改。'),
+            **({'restated':True} if restated else {}))
+    attached={n['id'] for g in groups.values() for n in g}
+    return [x for x in items if x['id'] not in attached]
+
+
+def _one_affair_versions(c,items,store):
+    tasks={x['task_id']:x for x in items if x['kind']=='task'};notices={}
+    for x in items:
+        rel=x.get('relation')
+        if rel and rel['target_id'] in tasks and tasks[rel['target_id']]['child_ids']==x['child_ids']:notices.setdefault(rel['target_id'],[]).append(x)
+    attached=set()
+    for task_id,group in notices.items():
+        task=tasks[task_id];a=task['agenda'];why=[]
+        attached.update(x['id'] for x in group)
+        x=group[0];rel=x['relation'];m=x['agenda']
+        own=[p.get('ref','') for p in a.get('publications') or [] if str(p.get('ref','')).startswith('message:')][:1]
+        original=(_message(c,own[0])[0] or {}).get('text','') if own else ''
+        said='\n'.join(str((_message(c,r)[0] or {}).get('text') or '') for r in rel['refs'])
+        senders={_read_publisher(c,r) for r in rel['refs']}
+        if len(group)>1:why.append('同一事项有多条新通知')
+        if rel['change']!='update':why.append({'same':'是同一事项的再次提醒','cancel':'含取消或停止原要求'}.get(rel['change'],'是补充要求'))
+        if task['closed'] or task.get('touched'):why.append('家庭已有完成、状态或修改')
+        else:
+            try:
+                # Feedback is the family's whether it names the task in its source (事项:) or through its structured link
+                # (save_record → link_record_task keeps the parent's own source and sets linked_task_id); neither is rewritten.
+                if c.execute("SELECT 1 FROM records WHERE source=? OR linked_task_id=? LIMIT 1",('事项:'+task_id,task_id)).fetchone():why.append('家庭已有反馈')
+            except Exception:why.append('家庭记录暂时无法核对')
+        if subject_key(a)!=subject_key(m) or a.get('subject_state') not in ('known','general'):why.append('科目或事务不能确认相同')
+        if not own or '' in senders or senders!={_read_publisher(c,own[0])}:why.append('发布者不同或未核实')
+        # Only a wholly read notice on a wholly read original is a clear latest requirement: a linked original still unread
+        # (an attached PNG with no saved reading) may hold the very standard the text points to.
+        if not all(_wholly_read(c,store,task['child_ids'][0],r) for r in list(rel['refs'])+own):why.append('通知或所附原件尚未读全')
+        # The latest lines shown are the model's summary: each title and number in them must be the notice's or original's own words.
+        shown=rel['title']+'\n'+'\n'.join(rel['lines']);grounded=said+'\n'+original
+        if (not family_agent._school_named_objects(shown)<=family_agent._school_named_objects(grounded)
+                or not all(any(n==m and (u==v or not u) for m,v in family_agent._school_counts(grounded)) for n,u in family_agent._school_counts(shown))):
+            why.append('新要求的归纳与通知原文对不上')
+        # After the current requirement's own basis: the latest of its own adopted originals (a 17:00 correction), not only its
+        # first publication (15:40); a time no original proves leaves the notice for review.
+        # Every adopted original's own sending time must be proved first: one known time beside a missing, invalid or absent
+        # one proves no notice later, and none is filled from the first publication, another message or today.
+        times=[sent_at(str((_message(c,p['ref'])[0] or {}).get('time') or '')) for p in a.get('publications') or []
+               if str(p.get('ref','')).startswith('message:')]
+        basis=max(times+[str(a.get('published_at') or '')])
+        if not all(times):why.append('原要求有原消息的发送时间未能核实，不能确认这条通知更晚')
+        elif not (m.get('published_at') and basis and m['published_at']>basis):why.append('不是原发布者之后的通知')
+        if re.search(_VERSION_CANCEL,said) or not _negated_actions(said)<=_negated_actions(original):why.append('含取消或停止原要求')
+        # The latest is a whole requirement: every unchanged original unit kept, or only a proven count change put in.
+        old_lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()];lines=list(rel['lines']);composed=False
+        own_words=_notice_own_words(_saved_quote(c,item_id=x['id']),said) or said
+        lifted=_lifted_exemptions('\n'.join(old_lines),own_words) if rel['change']=='update' else []
+        if lifted and (unmet:=_exemption_unmet('\n'.join(old_lines),own_words,shown)):
+            why.append('通知要求“'+unmet[:30]+'”，原要求写明不用；新要求的归纳未写入这项')
+        elif rel['change']=='update' and (rebound:=_rebound_unmet('\n'.join(old_lines),own_words,shown)):
+            why.append(rebound)
+        # A notice moves the item only by tying a date role to a day the original does not hold in that same role: 今晚只需
+        # 跟读两遍 restates the original's own 今晚 (its work day), whichever role the summary filed it under, and moves nothing;
+        # 改为今晚交给数学老师 moves the handback from 明早 onto 今晚, although 今晚 already was the original's work day.
+        old_roles=_role_days(a,_saved_quote(c,task_id=task_id),sent_day(str(a.get('published_at') or '')))
+        new_roles=_role_days(m,_saved_quote(c,item_id=x['id']),sent_day(str(m.get('published_at') or '')))
+        shifts=[(role,old_roles[role],new_roles[role]-old_roles[role]) for role in _DATE_ROLES if new_roles[role]-old_roles[role]]
+        moved=bool(shifts)
+        lost=_unchanged_lost(old_lines,shown,said,lifted) if rel['change']=='update' and not why else []
+        if lost:
+            fixed=_count_only_latest(old_lines,task['title'],shown,said,moved)
+            if fixed is None:
+                # The model's summary may paraphrase or drop an unchanged unit; the teacher's own words still prove the change.
+                fixed=_notice_count_latest(old_lines,task['title'],_notice_own_words(_saved_quote(c,item_id=x['id']),said),moved) if not lifted else None
+            if fixed is None and moved:
+                fixed=_day_moved_latest(old_lines,task['title'],original,said,a.get('due_on',''),m.get('due_on',''),
+                                        sent_day(str(a.get('published_at') or '')),sent_day(str(m.get('published_at') or '')))
+            if fixed is None:why.append('新要求的归纳缺少原要求中未改的部分（'+'；'.join(lost)[:60]+'）')
+            else:lines,composed=fixed,True
+        # Latest words still stating the one count the teacher's own words change (只需跟读两遍 after 每句三遍), however complete
+        # otherwise, are the old requirement: the proven change is put in, else it stays review (_notice_count_change).
+        own_found=_notice_own_words(_saved_quote(c,item_id=x['id']),said)
+        implicit=_notice_count_change(old_lines,own_found) if rel['change']=='update' and not why and not lifted else None
+        if implicit and (implicit[0],implicit[2]) in family_agent._school_counts('\n'.join(lines)):
+            fixed=_notice_count_latest(old_lines,task['title'],own_found,moved)
+            if fixed is None:why.append('新要求仍写着通知已改掉的数量，与更正原文对不上')
+            else:lines,composed=fixed,True
+        # Latest words still stating a count the notice explicitly changed (由四遍改为一遍) are the old requirement: the
+        # notice's own count goes into the original's one token of that unit, every other unit kept; else it stays review.
+        stated=_stated_count_changes(said) if rel['change']=='update' and not why else []
+        if stated and any((old,unit) in family_agent._school_counts('\n'.join(lines)) for old,_,unit,_ in stated):
+            fixed=_put_counts(old_lines,stated)
+            if fixed is None:why.append('新要求仍写着通知已改掉的数量，与更正原文对不上')
+            else:lines,composed=fixed,True
+        previous=dict(title=task['title'],lines=[l.strip() for l in str(task.get('body') or '').splitlines() if l.strip()][:12],
+                      due_on=a.get('due_on',''),due_kind=a.get('due_kind',''),complete_on=a.get('complete_on',''))
+        listed=[dict(id=n['id'],change=n['relation']['change'],title=n['relation']['title'],lines=n['relation']['lines'],
+                     publications=publications(n['agenda']),published_at=str(n['agenda'].get('published_at') or '')) for n in group]
+        if not why:
+            pubs=list(a.get('publications') or []);pubs+=[p for p in m.get('publications') or [] if p not in pubs]
+            # A date-only update of the same lesson-day affair (带瓶改到下周一) keeps its own role; a new role is read when stated.
+            kind=m.get('due_kind','') if m.get('due_kind') not in ('','deadline') or a.get('due_kind') in ('','deadline') else a['due_kind']
+            # The due's new day is the moved role's own when the notice's clauses moved that role there (改为今晚交给数学老师).
+            moved_to={role:days for role,_,days in shifts}
+            if m.get('due_on') in moved_to.get('handback',()):kind='handback'
+            elif m.get('due_on') in moved_to.get('check',()):kind='inspection'
+            # A role the notice left where it was keeps its day (今晚完成 stays the work's day when only the handback moved).
+            kept=(a.get('complete_on','') if not m.get('complete_on') and 'work' not in moved_to and exact_day(a.get('complete_on',''))
+                  and a['complete_on']<=(m.get('due_on') or a['complete_on']) else '')
+            if moved:
+                task['agenda']=dict(a,due_on=m.get('due_on',''),due_kind=kind,complete_on=m.get('complete_on','') or kept,publications=pubs,
+                                    submit_on=m.get('submit_on',''),submit_words=m.get('submit_words',''),submit_role=m.get('submit_role',''))
+                if not kept:task['agenda'].pop('complete_words',None)
+            # A notice stating no day of its own (跟读改每词三遍), or only the original's own days, changes no date role: the
+            # original's days stay as they were.
+            else:task['agenda']=dict(a,publications=pubs)
+            task['version']=dict(state='latest',pending_id=x['id'],title=rel['title'],lines=lines,previous=previous,notices=listed,
+                                 **({'composed':'original_with_stated_change'} if composed else {}),
+                                 change=_short_change(previous['title']+'\n'+'\n'.join(previous['lines']),rel['title']+'\n'+said,shifts) or '要求有更新')
+        else:
+            task['version']=dict(state='review',pending_id=x['id'],previous=previous,notices=listed,reasons=why,
+                                 note='有新通知待核对（'+'、'.join(why)+'）；原要求、日期和家庭状态保留，确认后才改。')
+    return [x for x in items if x['id'] not in attached]
+
+
+# One child's one day, read once on the server for every client (the web home and the Mac workbench): the same selection,
+# order and subject filing the home list used, now computed here instead of in each client. Read only: it never collects,
+# calls a model or writes, and every date, subject and role it shows is the enriched metadata above, never re-read from words.
+SUBJECT_GENERAL, SUBJECT_UNKNOWN = '综合事务', '科目待定'
+# A role names only its own action: who hands in or checks stays in the original words, never added by the label.
+DUE_LABELS = {'event': '活动日期', 'handback': '交回', 'inspection': '检查', 'arranged': '安排日'}
+CORRECTION_KINDS = ('订正', '复测', '独立复测')
+# How a row relates to the viewed day, from its saved dates only: 今天 (done/planned/due that day), 已过期限, 以后 (a later
+# date), 之前安排 (an earlier plan still open), 日期未写明 (no exact date; never guessed, never counted as today) and 已过 (a
+# lesson, in-class check or arranged day that is over; a deadline or handback past due is 已过期限 instead).
+DAY_ROLES = {'today': '今天', 'overdue': '已过期限', 'later': '以后', 'earlier': '之前安排', 'unknown': '日期未写明', 'passed': '已过'}
+# A lesson, in-class check or arranged day that is over has passed (已过, history); only a deadline or handback becomes overdue.
+PASSED_KINDS = ('event', 'inspection', 'arranged')
+
+
+def _passed(a, day):
+    # Homework with its own earlier completion day (11月17日今晚朗读2遍，11月18日早读检查) is not finished by its check day
+    # passing: still open, it is overdue as a deadline is. Only a bare lesson, check or arranged day is history.
+    due, complete = exact_day(a.get('due_on')), exact_day(a.get('complete_on'))
+    return (bool(due) and due < day and (a.get('due_kind') or 'deadline') in PASSED_KINDS
+            and not (complete and complete < due and a.get('category') == 'homework'))
+
+
+def exact_day(value):
+    if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value) or value.startswith('0000'): return ''
+    try: return value if dt.date.fromisoformat(value).isoformat() == value else ''
+    except ValueError: return ''
+
+
+def subject_key(agenda):
+    a = agenda or {}
+    if a.get('subject_state') == 'known' and a.get('subjects'): return ' · '.join(a['subjects'])
+    return SUBJECT_GENERAL if a.get('subject_state') == 'general' else SUBJECT_UNKNOWN
+
+
+def subject_filed(rows, key_of):
+    """Subject is the first grouping of every tracking list: insertion order, 综合事务 then 科目待定 last, rows never merged."""
+    groups = {}
+    for row in rows: groups.setdefault(str(key_of(row) or '').strip() or SUBJECT_UNKNOWN, []).append(row)
+    rank = lambda key: 2 if key == SUBJECT_UNKNOWN else 1 if key == SUBJECT_GENERAL else 0
+    return sorted(groups.items(), key=lambda pair: rank(pair[0]))
+
+
+def _day_rank(item, day):
+    a = item.get('agenda') or {}
+    due, planned, published = exact_day(a.get('due_on')), exact_day(a.get('scheduled_on')), exact_day(a.get('published_on'))
+    if day in (due, planned) or day in (exact_day(a.get('complete_on')), exact_day(a.get('submit_on'))): return 0, day
+    if due and due < day: return (6, due) if _passed(a, day) else (1, due)
+    if due: return 2, due
+    if planned and planned < day: return 3, planned
+    return (4, a.get('published_at') or published) if published else (5, '')
+
+
+def _day_order(a, b, day):
+    (ar, ad), (br, bd) = _day_rank(a, day), _day_rank(b, day)
+    if ar != br: return ar - br
+    return (ad > bd) - (ad < bd) if ar == 2 else (bd > ad) - (bd < ad)
+
+
+def day_facts(agenda, day, today, school):
+    """The dates as saved, each with its own role; an unknown date says so and is never guessed."""
+    a = agenda or {}; facts = []; published = a.get('published_at') or ''
+    if published or a.get('published_on') or school:
+        facts.append(dict(role='published', label='发布', value=published[:16].replace('T', ' ') if published else a.get('published_on') or '待核对',
+                          known=bool(published or a.get('published_on'))))
+    complete = exact_day(a.get('complete_on'))
+    if complete and (complete != a.get('due_on') or a.get('due_kind') == 'handback'):
+        facts.append(dict(role='complete', label='完成', value=complete, known=True, today=complete == today))
+    submit = exact_day(a.get('submit_on'))
+    if submit and submit != exact_day(a.get('due_on')):  # an earlier handback or check of the same thing, in its own words and role
+        check = a.get('submit_role') == 'check'
+        facts.append(dict(role='check' if check else 'submit', label=('检查' if exact_day(a.get('due_on')) and submit > exact_day(a.get('due_on')) else '先检查') if check else '先提交', value=submit, known=True,
+                          today=submit == today, words=str(a.get('submit_words') or '')))
+    due = exact_day(a.get('due_on'))
+    if due:
+        kind = a.get('due_kind') or 'deadline'
+        state = ('passed' if _passed(a, day) else 'overdue') if due < day else \
+            'next_morning' if kind in ('deadline', 'handback') and due == (dt.date.fromisoformat(day) + dt.timedelta(days=1)).isoformat() else ''
+        facts.append(dict(role='due', kind=kind, label=DUE_LABELS.get(kind, '截止'), value=due, known=True, state=state))
+    else:
+        facts.append(dict(role='due', label='截止' if school else '交回', value='日期未写明，不猜', known=False))
+    if exact_day(a.get('scheduled_on')): facts.append(dict(role='scheduled', label='计划', value=a['scheduled_on'], known=True))
+    return facts
+
+
+def day_role(agenda, day):
+    a = agenda or {}
+    dates = [exact_day(a.get(k)) for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')]
+    if day in dates: return 'today'
+    due = exact_day(a.get('due_on'))
+    if due and due < day and not _passed(a, day): return 'overdue'
+    if any(d and d > day for d in dates): return 'later'
+    # The parent's own earlier plan of a past lesson or arranged day, still open, is 之前安排, never history.
+    if _passed(a, day) and not exact_day(a.get('scheduled_on')): return 'passed'
+    return 'earlier' if any(dates) else 'unknown'
+
+
+def publications(agenda):
+    """Who published it, as saved on the item (source name, sender, message ref); nothing is re-read or shortened by guess."""
+    return [dict(ref=str(p.get('ref') or ''), source_name=str(p.get('source_name') or ''), sender=str(p.get('sender') or ''))
+            for p in (agenda or {}).get('publications') or [] if isinstance(p, dict)]
+
+
+def _record_row(r):
+    note = str(r.get('note') or '')
+    return dict(id=r['id'], day=r.get('day', ''), created=r.get('created', ''), title=r.get('title', ''), subject=r.get('subject', ''),
+                note=note[:600], note_truncated=len(note) > 600, attachments=list(r.get('attachments') or []),
+                followup_kind=r.get('followup_kind', ''), related_record_id=r.get('related_record_id'),
+                assistance=str(r.get('assistance') or ''), practice_relation=str(r.get('practice_relation') or ''),
+                **({'retry': r['retry']} if r.get('retry') else {}))
+
+
+def _merged_progress(a, b):
+    """One affair's saved progress: each member's own counts added, lists joined without repeating an entry."""
+    if not a or not b: return a or b
+    out = dict(a)
+    for key, value in b.items():
+        old = out.get(key)
+        if isinstance(value, bool) or isinstance(old, bool): out[key] = old if old not in (None, '', False) else value
+        elif isinstance(value, (int, float)) and isinstance(old, (int, float)): out[key] = old + value
+        elif isinstance(value, list) and isinstance(old, list): out[key] = old + [x for x in value if x not in old]
+        elif old in (None, '', [], {}): out[key] = value
+    return out
+
+
+class _Inbox(list):
+    """The inbox items as before (a plain list for every caller and for JSON), plus the read-only photo basis map."""
+    photo_basis = {}
+
+
+def day_view(inbox, tasks, records, child, day, today, wrong_source):
+    """The list and each row's own facts for one child and day; closed rows that day stay findable in their own list."""
+    by_task = {t['id']: t for t in tasks}
+    mine = [x for x in inbox if child['id'] in (x.get('child_ids') or [])]
+
+    def review_due(x):
+        task = by_task.get(x.get('task_id')) if x.get('kind') == 'task' else None
+        focus = (task or {}).get('focus') or {}
+        return bool(task) and not x.get('closed') and focus.get('mode') != 'next' and bool(exact_day(focus.get('review_on'))) and focus['review_on'] <= day
+
+    def shown(x):
+        a = x.get('agenda') or {}
+        if x.get('closed') or x.get('kind') == 'event' or a.get('box') == 'wish': return False
+        if a.get('published_on') and a['published_on'] > day: return False
+        return not a.get('scheduled_on') or a['scheduled_on'] <= day or bool(a.get('due_on')) or review_due(x)
+
+    open_rows = sorted([x for x in mine if shown(x)], key=functools.cmp_to_key(lambda a, b: _day_order(a, b, day)))
+    closed_rows = [x for x in mine if x.get('closed') and x.get('kind') in ('task', 'study') and (x.get('agenda') or {}).get('box') != 'wish' and visible_on(x, day)]
+    own = [r for r in records if r.get('child') == child['name']]
+    feedback = {}
+    for r in own:
+        source = str(r.get('source') or '')
+        task_id = source[3:] if source.startswith('事项:') else r.get('linked_task_id') if source != wrong_source else ''
+        if task_id: feedback.setdefault(task_id, []).append(r)
+    wrong = [r for r in own if r.get('source') == wrong_source]
+    followups = {}
+    for r in own:
+        if r.get('followup_kind') in CORRECTION_KINDS and r.get('related_record_id') is not None: followups.setdefault(r['related_record_id'], []).append(r)
+
+    def wrong_row(r):
+        later = sorted(followups.get(r['id'], []), key=lambda f: (f.get('created') or '', f['id']))
+        row = _record_row(r); row['followups'] = [_record_row(f) for f in later]
+        basis = getattr(inbox, 'photo_basis', {}).get(r['id'])
+        if basis: row['photo_basis'] = basis
+        row['state'] = {'订正': '已订正', '复测': '已复测', '独立复测': '已复测'}[later[-1]['followup_kind']] if later else '待订正'
+        # The original homework only through the record's explicit link, and only a task of this same child.
+        task = by_task.get(r.get('linked_task_id') or '')
+        if task and task.get('child') == child['name']: row.update(task_id=task['id'], task_title=task.get('title', ''))
+        return row
+
+    def row(x):
+        task = by_task.get(x.get('task_id')) if x.get('task_id') else None
+        version = x.get('version')
+        a = x.get('agenda') or {}; school = x.get('kind') == 'school' or bool((task or {}).get('school_origin'))
+        oral = bool(task) and task.get('source') in family_study.CAPTURE_SOURCES
+        lines = (task.get('action_lines') or [l.strip() for l in str(task.get('action') or '').splitlines() if l.strip()]) if task else \
+            [l.strip() for l in str(x.get('body') or '').splitlines() if l.strip()][:12] if x.get('kind') == 'school' else []
+        saved = sorted(feedback.get(x.get('task_id') or '', []), key=lambda r: (r.get('created') or '', r['id']))
+        notes = [dict(wrong_row(r), task_id=x['task_id']) for r in wrong if x.get('task_id') and r.get('linked_task_id') == x['task_id']]
+        pubs = publications(a)
+        if version and version['state'] == 'latest': lines = list(version['lines'])
+        # A pending notice of this same item is listed after the adopted originals, marked, so its whole original opens through
+        # the same original-message buttons; it never enters the task, its saved sources or the print basis.
+        if version and version.get('state') != 'latest':
+            for n in version.get('notices') or []:
+                for p in n.get('publications') or []:
+                    if p.get('ref') and all(p['ref'] != q.get('ref') for q in pubs):
+                        pubs = pubs + [dict(p, pending=True, role='pending_reminder', label='待核提醒（未采用）', time=n.get('published_at', ''))]
+        # An oral item with no written action shows its saved manual record's own words, with their provenance; nothing guessed.
+        if oral and not lines and str((task or {}).get('title') or '').strip(): lines = ['孩子口述、家长记录：' + task['title'].strip()]
+        # The parent's own arrangement of this same item, as the family's, on its plan day; the school's words and dates
+        # stay in lines, the family's arrange reads in plan_lines (C7: the two are never one breath).
+        arranged = str(((task or {}).get('focus') or {}).get('next_action') or '').strip()
+        plan_lines = []
+        if arranged: lines = list(lines) + ['家庭安排（计划 ' + (exact_day(a.get('scheduled_on')) or '日期未定') + '）：' + arranged]
+        kept = []
+        for line in lines:
+            family = _PLAN_LINE.match(str(line))
+            if family: plan_lines.extend(x.strip() for x in family[1].splitlines() if x.strip())
+            else: kept.append(line)
+        lines = kept
+        # A past lesson or arranged day the parent keeps open with its own review due now (等学校回复, review_on) is an earlier
+        # arrangement still open (之前安排), listed with its original facts; the review day is never a school date.
+        when = day_role(a, day)
+        if when == 'passed' and review_due(x): when = 'earlier'
+        return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=version['title'] if version and version['state'] == 'latest' else x.get('title', ''), subject=subject_key(a),
+                    **({'version': version} if version else {}),
+                    category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
+                    status=x.get('status', ''), closed=bool(x.get('closed')), pending_review=x.get('kind') == 'school',
+                    **({'material': True} if x.get('school_material') else {}),
+                    origin='school' if school else 'oral' if oral else 'family',
+                    origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
+                    lines=lines, plan_lines=plan_lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
+                    today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')),
+                    when=when, publications=pubs, published_at=str(a.get('published_at') or ''),
+                    publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),
+                    # The task's own saved progress exactly as /api/state reads it (task_progress): feedback, linked wrong
+                    # records, current-basis clues, independent new attempts and history; clues are not mastery.
+                    progress=(task or {}).get('progress') or None,
+                    records=[dict(_record_row(r), task_id=x.get('task_id') or '') for r in saved if r.get('source') != wrong_source], wrong=notes)
+
+    # A saved task verified as the same affair as an earlier one of this child (school_same_as) is one logical affair.
+    same = {}
+    for t in tasks:
+        root, seen = t.get('school_same_as'), {t['id']}
+        while root in by_task and root not in seen and by_task[root].get('school_same_as'):
+            seen.add(root); root = by_task[root]['school_same_as']
+        if root in by_task and root not in seen and by_task[root]['child'] == t['child']: same[t['id']] = root
+
+    def group(listed):
+        """One logical affair per verified same-affair group, decided before the open/closed split: the earliest listed task's
+        row carries every member's sources, saved records and wrong notes, each with its own task_id so every action stays
+        with that task. Differing completion is still one affair with its doubt stated; no member's own state changes."""
+        heads, order = {}, []
+        for r, closed in listed:
+            key = same.get(r['task_id'], r['task_id']) or r['id']
+            if key not in heads: heads[key] = []; order.append(key)
+            heads[key].append((r, closed))
+        open_out, closed_out = [], []
+        for key in order:
+            members = heads[key]
+            head = next((r for r, _ in members if r['task_id'] == key), members[0][0])
+            # Only a grouped row names each publication's own task; every other row keeps its exact shape.
+            if len(members) > 1: head['publications'] = [dict(p, task_id=head['task_id']) for p in head['publications']]
+            for r, _ in members:
+                if r is head: continue
+                head.setdefault('members', []).append(dict(id=r['id'], task_id=r['task_id'], title=r['title'], status=r['status'], closed=r['closed'],
+                                                         publications=r['publications'], progress=r['progress']))
+                known = {(p['ref'], p['task_id']) for p in head['publications']}
+                head['publications'] = head['publications'] + [dict(p, task_id=r['task_id']) for p in r['publications'] if (p['ref'], r['task_id']) not in known]
+                head['records'] = sorted(head['records'] + r['records'], key=lambda f: (f.get('created') or '', f['id']))
+                head['wrong'] = head['wrong'] + r['wrong']
+                head['progress'] = _merged_progress(head['progress'], r['progress'])
+            is_open = any(not closed for _, closed in members)
+            if len(members) > 1:
+                head['same_affair'] = dict(state='grouped', task_ids=[head['task_id']] + [m['task_id'] for m in head['members']])
+                head['group_progress'] = [dict(task_id=r['task_id'], progress=r['progress']) for r, _ in members if r['progress']]
+                done = [r for r, _ in members if r['closed']]
+                if done and is_open:
+                    head['same_affair'].update(state='uncertain', note='同一事项另有一份已标记“' + done[0]['status'] + '”，是否还需要再做或再交待核对；各自原状态和记录保留，不据反馈推定完成。')
+                elif len({r['status'] for r, _ in members}) > 1:
+                    head['same_affair'].update(state='uncertain', note='同一事项的几份记录状态不同，请核对；各自原状态和记录保留。')
+                if is_open and head['closed']: head['closed'] = False
+            (open_out if is_open else closed_out).append(head)
+        return open_out, closed_out
+
+    rows, closed_rows = group([(row(x), False) for x in open_rows] + [(row(x), True) for x in closed_rows])
+    # School material with no read action (unknown purpose or no read goal) is not this day's work and no item count: it
+    # keeps its original message, attachments and organize state in the school inbox, and the day names it once per subject.
+    material = [r for r in rows if r.get('material')]
+    rows = [r for r in rows if not r.get('material')]
+    # A later lesson-day item (bring, in-class check, event) or a later item still waiting for its scope (待核对) the family
+    # has not touched is not this day's work: it is listed in full on its own day and only named in one short 即将/待补 line
+    # before it. Anything with family progress, a record, a new version or no exact later date stays listed every day; a
+    # pending item's proven unchanged reminder (version restated, _pending_restated) is no new version of its requirement.
+    def upcoming(r):
+        due = next((f for f in r['facts'] if f.get('role') == 'due' and f.get('known')), None)
+        return (r['when'] == 'later' and not r['closed'] and not r['records'] and not r['wrong'] and not r.get('progress')
+                and ((r.get('version') or {}).get('state', 'latest') == 'latest' or (r.get('version') or {}).get('restated') is True)
+                and not r.get('members') and not r.get('times') and r['status'] in ('', '待跟进', '待办', '待核对', '未开始')
+                and (r['pending_review'] or bool(due and due.get('kind') in ('event', 'inspection', 'arranged'))))
+    later = [dict(id=r['id'], task_id=r['task_id'], title=r['title'], subject=r['subject'], pending_review=r['pending_review'],
+                  change=(r.get('version') or {}).get('change', ''),
+                  day=min(f['value'] for f in r['facts'] if f.get('known') and exact_day(f.get('value')) and f['value'] > day)) for r in rows if upcoming(r)]
+    rows = [r for r in rows if not upcoming(r)]
+    # The day's list is its own work. An action with no exact date keeps its id, originals, progress and family edits under
+    # 日期未定/待安排 (view.undated), counted apart from the day; a bare past lesson, check or arranged day (已过) is that day's
+    # history, listed with the same id on its own day, not open work here. A deadline or handback past due, open homework past
+    # its own completion day, and a parent's earlier plan or due review stay in the list.
+    undated = [r for r in rows if r['when'] == 'unknown']
+    rows = [r for r in rows if r['when'] not in ('unknown', 'passed')]
+    return dict(groups=[dict(subject=key, items=list(items), undated=sum(r['when'] == 'unknown' for r in items)) for key, items in subject_filed(rows, lambda r: r['subject'])],
+                closed=[dict(subject=key, items=list(items)) for key, items in subject_filed(closed_rows, lambda r: r['subject'])],
+                wrong=[dict(subject=key, items=list(items)) for key, items in subject_filed([wrong_row(r) for r in wrong], lambda r: SUBJECT_GENERAL if str(r.get('subject') or '').strip() == '综合' else str(r.get('subject') or '').strip())],
+                upcoming=sorted(later, key=lambda u: (u['day'], u['subject'])),
+                undated=[dict(subject=key, items=list(items)) for key, items in subject_filed(undated, lambda r: r['subject'])],
+                materials=[dict(subject=key, items=[dict(id=r['id'], title=r['title'], published_at=r['published_at']) for r in items])
+                           for key, items in subject_filed(material, lambda r: r['subject'])],
+                counts=dict(open=len(rows), closed=len(closed_rows), upcoming=len(later), material=len(material), undated=len(undated),
+                            **{role: sum(r['when'] == role for r in rows) for role in DAY_ROLES}))

@@ -1,0 +1,41 @@
+........EE........EE.
+======================================================================
+ERROR: test_a_near_duplicate_line_is_dropped (__main__.NearRepeatTests.test_a_near_duplicate_line_is_dropped)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/joyrush/.local/share/family-learning/public-integration-20260926/test_daily_list_expression.py", line 130, in test_a_near_duplicate_line_is_dropped
+    self.assertEqual(family_agenda._NEAR_REPEAT, 0.80)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'family_agenda' has no attribute '_NEAR_REPEAT'
+
+======================================================================
+ERROR: test_the_english_near_line_is_below_the_fixed_ratio_and_stays (__main__.NearRepeatTests.test_the_english_near_line_is_below_the_fixed_ratio_and_stays)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/joyrush/.local/share/family-learning/public-integration-20260926/test_daily_list_expression.py", line 138, in test_the_english_near_line_is_below_the_fixed_ratio_and_stays
+    self.assertLess(ratio, family_agenda._NEAR_REPEAT, ratio)
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'family_agenda' has no attribute '_NEAR_REPEAT'
+
+======================================================================
+ERROR: test_the_fixed_title_repeat_threshold_keeps_a_line_that_adds_one_word (__main__.RestatementTests.test_the_fixed_title_repeat_threshold_keeps_a_line_that_adds_one_word)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/joyrush/.local/share/family-learning/public-integration-20260926/test_daily_list_expression.py", line 103, in test_the_fixed_title_repeat_threshold_keeps_a_line_that_adds_one_word
+    self.assertEqual(family_agenda._TITLE_REPEAT, 0.90)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'family_agenda' has no attribute '_TITLE_REPEAT'
+
+======================================================================
+ERROR: test_the_fixed_opening_threshold_keeps_a_line_with_its_own_opening_word (__main__.TitleOpeningTests.test_the_fixed_opening_threshold_keeps_a_line_with_its_own_opening_word)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/joyrush/.local/share/family-learning/public-integration-20260926/test_daily_list_expression.py", line 119, in test_the_fixed_opening_threshold_keeps_a_line_with_its_own_opening_word
+    self.assertEqual(family_agenda._TITLE_PREFIX, 0.90)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: module 'family_agenda' has no attribute '_TITLE_PREFIX'
+
+----------------------------------------------------------------------
+Ran 21 tests in 0.006s
+
+FAILED (errors=4)

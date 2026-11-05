@@ -1,0 +1,15 @@
+{
+  "passed": 7,
+  "checks": [
+    "parent explicitly enables homework; session-scoped state excludes other child and parent task inbox",
+    "360px: report, estimate, timer, help, self-report, parent confirmation, refresh and layout",
+    "1440px: report, estimate, timer, help, self-report, parent confirmation, refresh and layout",
+    "five teacher requirements added by the parent read title, own conditions once and keep the saved words on the child card at 360/1440 and after reopen",
+    "a parent next step identical to the saved action reads once; a different next step and the action both stay, at 360/1440 and after reopen",
+    "one saved English paragraph reads as its own sentences under its heading, with or without an identical next step, at 360/1440 and after reopen",
+    "revoke daily homework removes its data while reading entrance stays usable"
+  ],
+  "syntheticOnly": true,
+  "actualPhoneTested": false,
+  "screenshots": null
+}

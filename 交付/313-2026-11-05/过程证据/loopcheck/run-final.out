@@ -1,0 +1,199 @@
+{
+  "steps": {
+    "step1_feedback": {
+      "task": {
+        "id": "AGENT-46d7f691d45e2af7a8132331",
+        "child": "示例甲",
+        "title": "数学：完成练习册第12页第2至4题",
+        "due": "2026-11-05",
+        "original_status": "待跟进",
+        "source": "Agent建议:agent-ddcd18966c5c8c96ed22f141dd43ec38\nmessage:synthetic-group:502\n虚构班级 · 2026-11-04T16:01:00+08:00\n数学：今晚完成练习册第12页第2至4题，写出计算过程，明天交回。",
+        "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+      },
+      "feedback_record": {
+        "day": "2026-11-04",
+        "category": "学习进展",
+        "subject": "数学",
+        "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+        "transcript": "",
+        "transcript_state": "",
+        "assistance": "",
+        "created": "2026-11-04T23:41:12.068764",
+        "related_record_id": null,
+        "followup_kind": "",
+        "comparison_note": "",
+        "record_id": 1,
+        "task_id": "AGENT-46d7f691d45e2af7a8132331",
+        "child": "示例甲",
+        "attachments": [
+          {
+            "id": "08c4bc142f73286b4a7f9470dc6116cd",
+            "name": "fake-homework-page.png",
+            "size": 29661,
+            "mime": "image/png",
+            "url": "/upload/08c4bc142f73286b4a7f9470dc6116cd"
+          }
+        ]
+      },
+      "attachment": "08c4bc142f73286b4a7f9470dc6116cd"
+    },
+    "step2_wrong": {
+      "wrong": {
+        "id": 2,
+        "child": "示例甲",
+        "day": "2026-11-04",
+        "subject": "数学",
+        "title": "数学错题：第2题",
+        "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：5以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+        "source": "错题照片核对",
+        "related_record_id": 1,
+        "linked_task_id": "AGENT-46d7f691d45e2af7a8132331",
+        "linked_task_at": "2026-11-04T23:41:41.855275",
+        "followup_kind": ""
+      },
+      "saved": {
+        "ok": true,
+        "saved": [
+          {
+            "id": 2,
+            "existing": false,
+            "title": "数学错题：第2题"
+          }
+        ],
+        "count": 1
+      }
+    },
+    "step3_correction": {
+      "correction": {
+        "id": 3,
+        "child": "示例甲",
+        "day": "2026-11-04",
+        "title": "订正：练习册第12页第2题 2+3",
+        "source": "家长网页记录",
+        "related_record_id": 2,
+        "linked_task_id": "AGENT-46d7f691d45e2af7a8132331",
+        "linked_task_at": "2026-11-04T23:41:41.929950",
+        "followup_kind": "订正"
+      }
+    },
+    "step4_topic": {
+      "topic": {
+        "id": "cnm_p010",
+        "name": "10以内的加法",
+        "grade": 1,
+        "semester": "上",
+        "chapter": "一年级上册 第2单元 6～10的认识和加、减法",
+        "mastery_criteria": [
+          "能口算 10 以内的加法",
+          "能解决把两部分合起来的简单问题"
+        ]
+      },
+      "links": [
+        {
+          "id": 1,
+          "child_id": "child-1",
+          "record_id": "2",
+          "record_hash": "63fb9bd1fe81031072e67efa8b0d7027e5523b50d673e9bd6151538be81c7005",
+          "topic_id": "cnm_p010",
+          "state": "confirmed",
+          "pack_sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+          "note": "家长确认：错在「10以内的加法」",
+          "request_id": "297ce43ab2f44d46b740a77d88d8a890",
+          "created_at": 1793806902.021982
+        }
+      ],
+      "diagnoses": [
+        {
+          "id": 1,
+          "topic_id": "cnm_p010",
+          "state": "finished",
+          "summary": "{\"mode\": \"target\", \"targets\": [\"cnm_p010\"], \"asked\": 2, \"limit\": 8, \"finished\": true, \"limitReached\": false, \"mastered\": [], \"shaky\": [\"cnm_p010\"], \"weak\": [], \"unconfirmed\": [], \"untested\": [\"cnm_p001\", \"cnm_p004\", \"cnm_p006\", \"cnm_p008\"], \"roots\": [], \"path\": [{\"id\": \"cnm_p010\", \"status\": \"shaky\", \"isRoot\": false, \"isTarget\": true}]}"
+        }
+      ],
+      "answers": [
+        {
+          "sent": {
+            "seq": 1,
+            "qid": "cnm_p010_q4",
+            "topic_id": "cnm_p010",
+            "text": "A",
+            "verdict": "wrong"
+          },
+          "status": 200,
+          "response_ok": true,
+          "error": null
+        },
+        {
+          "sent": {
+            "seq": 2,
+            "qid": "cnm_p010_q1",
+            "topic_id": "cnm_p010",
+            "text": "9",
+            "verdict": "correct"
+          },
+          "status": 200,
+          "response_ok": true,
+          "error": null
+        }
+      ]
+    },
+    "step5_review": {
+      "event": {
+        "id": "69ab356f70974b3291b8a411a165b922",
+        "version": 0,
+        "child_ids": [
+          "child-1"
+        ],
+        "title": "家庭复习：数学练习册第12页第2题",
+        "category": "study",
+        "day": "2026-11-05",
+        "start_time": "19:30",
+        "end_time": "19:50",
+        "location": "",
+        "note": "按错题重做 2+3，并口述计算过程。",
+        "status": "confirmed",
+        "repeat": "none",
+        "until": "",
+        "review": {
+          "child_id": "child-1",
+          "record_id": 2,
+          "topic_id": "cnm_p010",
+          "task_id": "AGENT-46d7f691d45e2af7a8132331",
+          "basis": "63fb9bd1fe81031072e67efa8b0d7027e5523b50d673e9bd6151538be81c7005"
+        }
+      },
+      "second": {
+        "ok": true,
+        "record_id": 4,
+        "replayed": false,
+        "record": {
+          "id": 4,
+          "child": "示例甲",
+          "source": "家长网页记录",
+          "care_choice": "",
+          "care_review_on": ""
+        }
+      },
+      "retry": {
+        "item": {
+          "qid": "cnm_p010_q3",
+          "topic_id": "cnm_p010",
+          "prompt": "有 4 支铅笔，又放进来 5 支。一共有多少支？计算：4＋5＝？",
+          "type": "numeric",
+          "answer": "9"
+        },
+        "remaining": 18,
+        "mark_status": 200,
+        "mark_response_ok": true,
+        "mark_error": null,
+        "status": 503,
+        "response": {
+          "error": "新题判定组件未配置，这一步没有保存；原错题和诊断照常保留，配置后可用同一提交重试",
+          "code": "deeptutor_unavailable",
+          "not_saved": true
+        }
+      },
+      "guided": {
+        "status": 200,
+        "ok": true,
+        "session_id": "0d19614bea29d587e8801a65038b2a

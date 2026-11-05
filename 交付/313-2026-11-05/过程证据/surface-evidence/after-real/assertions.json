@@ -1,0 +1,8 @@
+{
+  "base": "http://127.0.0.1:8791",
+  "fakePlan": false,
+  "expectClean": true,
+  "planExpected": true,
+  "failures": [],
+  "notes": []
+}

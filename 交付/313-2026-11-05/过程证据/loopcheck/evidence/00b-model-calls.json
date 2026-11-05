@@ -1,0 +1,306 @@
+[
+  {
+    "call_index": 1,
+    "name": "family_agent_selection",
+    "model": "doubao-seed-evolving",
+    "timeout_s": 45,
+    "request_brief": {
+      "evidence": [
+        {
+          "attachments": [],
+          "content_incomplete": false,
+          "kind": "text",
+          "publisher": "publisher:df628dd0387d2faba2a1",
+          "ref": "message:synthetic-group:501",
+          "related_messages": [
+            "message:synthetic-group:501"
+          ],
+          "sender": "虚构语文老师",
+          "source": "虚构班级",
+          "text": "语文：今晚朗读《晚照》2遍，请家长签字，明天早读检查。",
+          "time": "2026-11-04T16:00:00+08:00"
+        },
+        {
+          "attachments": [],
+          "content_incomplete": false,
+          "kind": "text",
+          "publisher": "publisher:8a564d79e6583383eea9",
+          "ref": "message:synthetic-group:502",
+          "related_messages": [
+            "message:synthetic-group:502"
+          ],
+          "sender": "虚构数学老师",
+          "source": "虚构班级",
+          "text": "数学：今晚完成练习册第12页第2至4题，写出计算过程，明天交回。",
+          "time": "2026-11-04T16:01:00+08:00"
+        },
+        {
+          "attachments": [],
+          "content_incomplete": false,
+          "kind": "text",
+          "publisher": "publisher:4ce000b514ec0ec7cdd4",
+          "ref": "message:synthetic-group:503",
+          "related_messages": [
+            "message:synthetic-group:503"
+          ],
+          "sender": "虚构英语老师",
+          "source": "虚构班级",
+          "text": "英语：今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写；明天英语课听写。",
+          "time": "2026-11-04T16:02:00+08:00"
+        },
+        {
+          "attachments": [],
+          "content_incomplete": false,
+          "kind": "text",
+          "publisher": "publisher:4ce000b514ec0ec7cdd4",
+          "ref": "message:synthetic-group:504",
+          "related_messages": [
+            "message:synthetic-group:504"
+          ],
+          "sender": "虚构英语老师",
+          "source": "虚构班级",
+          "text": "英语：明天英语课带《单词听写本》，不用在家练习。",
+          "time": "2026-11-04T16:03:00+08:00"
+        },
+        {
+          "attachments": [],
+          "content_incomplete": false,
+          "kind": "text",
+          "publisher": "publisher:1fa573589f5b7c1c085c",
+          "ref": "message:synthetic-group:505",
+          "related_messages": [
+            "message:synthetic-group:505"
+          ],
+          "sender": "虚构班主任",
+          "source": "虚构班级",
+          "text": "班主任通知：今晚请家长在《出游回执》勾选参加或不参加并签名，下周一由孩子交回。",
+          "time": "2026-11-04T16:04:00+08:00"
+        },
+        {
+          "attachments": [],
+          "content_incomplete": false,
+          "kind": "text",
+          "publisher": "publisher:02b6b5fd0278f83dd3cf",
+          "ref": "message:synthetic-group:506",
+          "related_messages": [
+            "message:synthetic-group:506"
+          ],
+          "sender": "虚构班主任",
+          "source": "虚构班级",
+          "text": "供参考：读物《海边小记》，自愿阅读，不布置作业，不用提交。",
+          "time": "2026-11-04T16:05:00+08:00"
+        }
+      ]
+    },
+    "started": "2026-11-04T23:41:04.495072",
+    "ok": true,
+    "duration_s": 7.03,
+    "result": {
+      "proposals": [
+        {
+          "title_quote": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+          "focus": "school",
+          "due": "2026-11-05",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:501"
+            }
+          ],
+          "task_title": "语文：朗读《晚照》2遍并家长签字",
+          "task_goal": "今晚朗读《晚照》2遍。\n请家长签字。\n明天早读检查。",
+          "task_advice": "可分两遍朗读，家长在旁确认后签字。",
+          "learning_subject": "语文",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "老师明确要求今晚朗读2遍、家长签字，明天早读检查。",
+          "task_purpose": "learning",
+          "task_submission": "家长签字，明天早读检查"
+        },
+        {
+          "title_quote": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+          "focus": "school",
+          "due": "2026-11-05",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:502"
+            }
+          ],
+          "task_title": "数学：练习册第12页第2至4题",
+          "task_goal": "今晚完成练习册第12页第2至4题。\n须写出计算过程。\n明天交回。",
+          "task_advice": "完成后可自查计算过程是否完整。",
+          "learning_subject": "数学",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "老师明确要求完成练习册指定页题并写出计算过程，明天交回。",
+          "task_purpose": "learning",
+          "task_submission": "明天交回练习册"
+        },
+        {
+          "title_quote": "今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写",
+          "focus": "school",
+          "due": "",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:503"
+            }
+          ],
+          "task_title": "英语：跟读Unit 7第3至10个单词",
+          "task_goal": "今晚听音频跟读Unit 7第3至10个单词。\n每词3遍。\n不用抄写。\n明天英语课听写。",
+          "task_advice": "可先听一遍音频再逐词跟读，注意发音。",
+          "learning_subject": "英语",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "老师明确要求今晚听音频跟读指定单词，每词3遍，不用抄写。",
+          "task_purpose": "learning",
+          "task_submission": ""
+        },
+        {
+          "title_quote": "明天英语课听写",
+          "focus": "school",
+          "due": "2026-11-05",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:503"
+            }
+          ],
+          "task_title": "英语：Unit 7单词听写（明天）",
+          "task_goal": "明天英语课进行Unit 7第3至10个单词听写。\n今晚听音频跟读每词3遍，不用抄写。",
+          "task_advice": "可结合跟读复习这8个单词的读音和拼写。",
+          "learning_subject": "英语",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "老师明确宣布明天英语课听写Unit 7第3至10个单词。",
+          "task_purpose": "learning",
+          "task_submission": ""
+        },
+        {
+          "title_quote": "明天英语课带《单词听写本》，不用在家练习",
+          "focus": "school",
+          "due": "2026-11-05",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:504"
+            }
+          ],
+          "task_title": "英语：明天带《单词听写本》",
+          "task_goal": "明天英语课带《单词听写本》。\n不用在家练习。",
+          "task_advice": "今晚把《单词听写本》放进书包。",
+          "learning_subject": "",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "老师明确要求明天英语课携带《单词听写本》，属于带物事务，无学习成果要求。",
+          "task_purpose": "admin",
+          "task_submission": ""
+        },
+        {
+          "title_quote": "今晚请家长在《出游回执》勾选参加或不参加并签名，下周一由孩子交回",
+          "focus": "school",
+          "due": "2026-11-09",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:505"
+            }
+          ],
+          "task_title": "交回《出游回执》（家长勾选签名）",
+          "task_goal": "今晚请家长在《出游回执》勾选参加或不参加并签名。\n下周一由孩子交回。",
+          "task_advice": "勾选后确认签名，提醒孩子下周一带回。",
+          "learning_subject": "",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "ready",
+          "task_reason": "班主任明确要求家长勾选参加或不参加并签名，下周一由孩子交回，属于行政回执事务。",
+          "task_purpose": "admin",
+          "task_submission": "下周一由孩子交回《出游回执》"
+        },
+        {
+          "title_quote": "供参考：读物《海边小记》，自愿阅读，不布置作业，不用提交",
+          "focus": "school",
+          "due": "",
+          "evidence": [
+            {
+              "ref": "message:synthetic-group:506"
+            }
+          ],
+          "task_title": "",
+          "task_goal": "",
+          "task_advice": "",
+          "learning_subject": "",
+          "learning_goal_id": "",
+          "task_change": "new",
+          "task_target_id": "",
+          "task_state": "reference",
+          "task_reason": "仅为自愿阅读参考，明确不布置作业、不用提交，不生成任务。",
+          "task_purpose": "optional",
+          "task_submission": ""
+        }
+      ]
+    }
+  },
+  {
+    "call_index": 2,
+    "name": "family_wrong_questions_annotate",
+    "model": "doubao-seed-evolving",
+    "timeout_s": 150,
+    "request_brief": {
+      "parts": 3,
+      "images": 1,
+      "text_chars": 72
+    },
+    "started": "2026-11-04T23:41:12.076945",
+    "ok": true,
+    "duration_s": 29.76,
+    "result": {
+      "pages": [
+        {
+          "page": 1,
+          "regions": [
+            {
+              "kind": "layout",
+              "box": {
+                "x": 62,
+                "y": 88,
+                "w": 438,
+                "h": 68
+              },
+              "label": "卷头",
+              "text": "数学·练习册 第12页（全虚构）",
+              "answer": "",
+              "correction": "",
+              "uncertain": false
+            },
+            {
+              "kind": "wrong_item",
+              "box": {
+                "x": 63,
+                "y": 282,
+                "w": 367,
+                "h": 112
+              },
+              "label": "第2题",
+              "text": "第2题 2+3=6",
+              "answer": "2+3=6",
+              "correction": "",
+              "uncertain": true,
+              "topic_hint": "5以内加法计算",
+              "error_hint": "加法计算结果错误"
+            }
+          ]
+        }
+      ],
+      "uncertainties": [
+        "第2题无手写批改痕迹，仅依据算式运算结果判定为疑似错误"
+      ]
+    }
+  }
+]

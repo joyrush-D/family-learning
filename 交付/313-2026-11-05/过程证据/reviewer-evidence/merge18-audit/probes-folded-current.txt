@@ -1,0 +1,9 @@
+family_agent.py sha1= c28b93e004504056d6483798404bb8ef98d31e7e
+change='same'    folded_lines=['更正：只做第26页第1—3题，改到11月10日交']
+                   body_after='完成《每日练习》第26页第1—4题。\n更正：只做第26页第1—3题，改到11月10日交'
+change='append'  folded_lines=[]
+                   body_after='完成《每日练习》第26页第1—4题。'
+change='update'  folded_lines=[]
+                   body_after='完成《每日练习》第26页第1—4题。'
+change='cancel'  folded_lines=[]
+                   body_after='完成《每日练习》第26页第1—4题。'

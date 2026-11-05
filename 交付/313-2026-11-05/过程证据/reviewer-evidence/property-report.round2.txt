@@ -1,0 +1,173 @@
+# shim (diagnostic only): _TITLE_REPEAT=0.9
+# shim (diagnostic only): _TITLE_PREFIX=0.9
+# shim (diagnostic only): _NEAR_REPEAT=0.8
+# shim (diagnostic only): _coverage = char-multiset overlap
+# shim (diagnostic only): _line_repeats = _covered_by on whole shown lines
+== property test of family_agenda.action_lines (display projection) ==
+repo: /Users/joyrush/.local/share/family-learning/public-integration-20260926  (HEAD 58973a6, working tree with the uncommitted change)
+corpus: 64 (title, action) pairs found by AST scan of repo *.py
+  [test_daily_list_expression.py:94] title='语文：A'
+      action='读第3课，读第3课。'
+      out   =['读第3课。']
+      LOSS '读第3课，读第3课。' unreachable='读第3课'
+      trace: _without_repeats drops clauses: '读第3课，读第3课。' -> '读第3课。'
+  [test_daily_list_expression.py:99] title='语文：A'
+      action='读第3课，读第3课，家长签字。'
+      out   =['读第3课，家长签字。']
+      LOSS '读第3课，读第3课，家长签字。' unreachable='读第3课家长签字'
+      trace: _without_repeats drops clauses: '读第3课，读第3课，家长签字。' -> '读第3课，家长签字。'
+  [test_daily_list_expression.py:115] title='英语：完成《每日练习》'
+      action='完成英语《每日练习》。'
+      out   =[]
+      LOSS '完成英语《每日练习》。' unreachable='英语每日练习'
+      trace: _title_prefix_removed: '完成英语《每日练习》。' -> ''
+      trace: drop (prefix removed everything): '完成英语《每日练习》。'
+  [test_daily_list_expression.py:116] title='英语：完成《每日练习》'
+      action='补充要求：完成英语《每日练习》。'
+      out   =[]
+      LOSS '补充要求：完成英语《每日练习》。' unreachable='英语每日练习'
+      trace: drop (_coverage vs title 1.000 >= 0.90): '补充要求：完成英语《每日练习》。'
+  [test_homework_print_change_basis.py:28] title='数学：完成练习三第1至5题'
+      action='完成数学练习三第1至5题。11月5日交。'
+      out   =['11月5日交。']
+      LOSS '完成数学练习三第1至5题。' unreachable='数学练习三第1至5题'
+      trace: _title_prefix_removed: '完成数学练习三第1至5题。' -> ''
+      trace: drop (prefix removed everything): '完成数学练习三第1至5题。'
+corpus findings: 5
+
+== invented adversarial cases (fictional strings only) ==
+  [A1a 90% prefix, differing page/question digit mid-prefix] ok
+      title ='数学：完成第20页第1题'
+      action='完成第20页第2题，家长签字'
+      out   =['完成第20页第2题，家长签字']
+  [A1b 90% whole-line drop, extra question number] ok
+      title ='数学：完成第20页第1题'
+      action='完成第20页第1、2题'
+      out   =['完成第20页第1、2题']
+      trace: drop (_coverage vs title 0.900 >= 0.90): '完成第20页第1、2题'
+  [A1c multiset coverage, page/question transposed] ok
+      title ='语文：完成练习册第2页第3题'
+      action='完成练习册第3页第2题'
+      out   =['完成练习册第3页第2题']
+      trace: drop (_coverage vs title 1.000 >= 0.90): '完成练习册第3页第2题'
+  [A1d 90% prefix with a new practice-book name of its own] ok
+      title ='数学：完成《每日练习》第26页第1—3题'
+      action='完成《口算卡》第26页第1—3题，家长签字'
+      out   =['完成《口算卡》第26页第1—3题，家长签字']
+  [A2a 0.833 time word] ok
+      title ='语文：读课文'
+      action='今天交练习册。\n明天交练习册。'
+      out   =['今天交练习册。', '明天交练习册。']
+      similarity '今天交练习册' vs '明天交练习册' = 0.833 (>= 0.80)
+  [A2b 0.857 object] ok
+      title ='语文：读课文'
+      action='明天带上练习册。\n明天带上练习本。'
+      out   =['明天带上练习册。', '明天带上练习本。']
+      similarity '明天带上练习册' vs '明天带上练习本' = 0.857 (>= 0.80)
+  [A2c 0.857 number] ok
+      title ='数学：口算'
+      action='交作业到1号本。\n交作业到2号本。'
+      out   =['交作业到1号本。', '交作业到2号本。']
+      similarity '交作业到1号本' vs '交作业到2号本' = 0.857 (>= 0.80)
+  [A2d 0.800 time word] ok
+      title ='语文：背书'
+      action='不用明天交。\n不用后天交。'
+      out   =['不用明天交。', '不用后天交。']
+      similarity '不用明天交' vs '不用后天交' = 0.800 (>= 0.80)
+  [A2e 0.800 negation] ok
+      title ='数学：练习'
+      action='明天交练习册。\n明天不交练习册。'
+      out   =['明天交练习册。', '明天不交练习册。']
+      similarity '明天交练习册' vs '明天不交练习册' = 0.923 (>= 0.80)
+  [A3a substring rule, negation inverted] ok
+      title ='语文：读课文'
+      action='不用抄写课文。\n抄写课文'
+      out   =['不用抄写课文。']
+      trace: drop (_line_repeats >= 0.80 vs a shown line): '抄写课文'
+      similarity '不用抄写课文' vs '抄写课文' = 0.800 (>= 0.80)
+  [A3b substring rule inside a shown clause] ok
+      title ='语文：读课文'
+      action='不用背诵课文。\n背诵课文'
+      out   =['不用背诵课文。']
+      trace: drop (_line_repeats >= 0.80 vs a shown line): '背诵课文'
+      similarity '不用背诵课文' vs '背诵课文' = 0.800 (>= 0.80)
+  [A4a label fold (fictional): intent of C6] ok
+      title ='语文：A'
+      action='今晚完成，明天早上交。\n提交要求：明天早上交练习册。'
+      out   =['今晚完成，明天早上交练习册。']
+      trace: drop (_label_line all clauses already shown): '提交要求：明天早上交练习册。'
+  [A4b label fold with a middle clause] ok
+      title ='语文：A'
+      action='明天交练习册，然后读课文。\n提交要求：明天交练习册和卷子。'
+      out   =['明天交练习册，然后读课文。', '明天交练习册和卷子。']
+      trace: _label_line folds/keeps '提交要求：明天交练习册和卷子。' -> '明天交练习册和卷子。' touched=[]
+  [A4c negation scope after fold] ok
+      title ='语文：A'
+      action='今晚完成，不用明天交。\n提交要求：明天交练习册。'
+      out   =['今晚完成，不用明天交。', '明天交练习册。']
+      trace: _label_line folds/keeps '提交要求：明天交练习册。' -> '明天交练习册。' touched=[]
+  [A5a order-blind multiset: line is the title with the negation moved] RED
+      title ='语文：不用抄写，要朗读两遍'
+      action='要抄写，不用朗读两遍'
+      out   =[]
+      LOSS '要抄写，不用朗读两遍' unreachable='抄写不用朗读两遍'
+      trace: _title_prefix_removed: '要抄写，不用朗读两遍' -> ''
+      trace: drop (prefix removed everything): '要抄写，不用朗读两遍'
+  [A5b negation in title, different quantity in line] ok
+      title ='英语：不需要录音，跟读两遍'
+      action='需要录音，跟读三遍'
+      out   =['需要录音，跟读三遍']
+  [A6a clause deletion inside a sentence] ok
+      title ='语文：读第3课'
+      action='今天读第3课，明天交练习册。'
+      out   =['今天读第3课，明天交练习册。']
+  [A6b clause deletion, sentence keeps its own mark] ok
+      title ='语文：A'
+      action='读第3课。\n读第3课，家长签字。'
+      out   =['读第3课。', '家长签字。']
+      trace: _without_repeats drops clauses: '读第3课，家长签字。' -> '家长签字。'
+
+adversarial RED cases: 1 -> ['A5a order-blind multiset: line is the title with the negation moved']
+
+== h18 oracle matters: every unit / negative constraint still readable? ==
+  [h18-a-math] title='数学：《每日练习》第26页第1—3题'
+      unit '完成《每日练习》第26页第1、2、3题' missing=[]
+      unit '每题写出算式' missing=[]
+      unit '每题验算' missing=[]
+      unit '家长签字' missing=[]
+      unit '周五交给数学周老师' missing=[]
+      neg  '第4题明确不做' missing=[]
+      out=['完成《每日练习》第26页第1、2、3题', '每题写出算式', '每题验算', '家长签字', '周五交给数学周老师', '第4题明确不做']
+  [h18-a-reading] title='语文：朗读《风经过小巷》第2、3自然段'
+      unit '《风经过小巷》第2、3自然段各朗读两遍' missing=[]
+      unit '读给家长听' missing=[]
+      unit '明早由语文林老师抽听' missing=[]
+      neg  '不用录音、不用上传、不用背诵' missing=[]
+      out=['《风经过小巷》第2、3自然段各朗读两遍', '读给家长听', '明早由语文林老师抽听', '不用录音、不用上传、不用背诵']
+  [h18-a-english] title='英语：英语《每日练习》'
+      unit '看图选词第1—3题' missing=[]
+      unit 'under、near各抄写一遍' missing=[]
+      unit '做完放英语夹里，明早带来' missing=[]
+      neg  '不需要录音，不用群里发照片' missing=[]
+      out=['看图选词第1—3题', 'under、near各抄写一遍', '做完放英语夹里，明早带来', '不需要录音，不用群里发照片']
+  [h18-a-art-cancelled] title='美术：收集并带两片落叶'
+      neg  '整项取消；叶子和夹叶子的旧书都不用带。' missing=[]
+      out=['整项取消；', '叶子和夹叶子的旧书都不用带。']
+  [h18-b-math] title='数学：《计算小卡》第4页第1—6题'
+      unit '《计算小卡》第4页第1—6题，直接写得数' missing=[]
+      unit '明天交' missing=[]
+      neg  '不用抄题、不另加题；已经做过的不用再做一遍。' missing=[]
+      out=['《计算小卡》第4页第1—6题，直接写得数', '明天交', '不用抄题、不另加题；', '已经做过的不用再做一遍。']
+  [h18-b-photo] title='带一张一寸证件照更新学生卡'
+      unit '带一张一寸证件照，明早交班主任用于更新学生卡' missing=[]
+      unit '现有蓝底或白底都可，不用重新拍' missing=[]
+      neg  '蓝底、白底是二选一的允许范围，数量仍为一张；不要求重新拍。' missing=[]
+      out=['明早交班主任用于更新学生卡', '现有蓝底或白底都可，不用重新拍', '蓝底、白底是二选一的允许范围，数量仍为一张；', '不要求重新拍。']
+  [h18-b-chinese-unread] title='语文：《识字小卡》练习（具体内容待补）'
+      unit '完成附件《识字小卡》上的练习；具体题目范围待读取' missing=[]
+      unit '完成后请家长在卡片下方签名' missing=[]
+      unit '明早交语文郑老师' missing=[]
+      out=['完成附件《识字小卡》上的练习；', '具体题目范围待读取', '完成后请家长在卡片下方签名', '明早交语文郑老师']
+  [h18-b-art-oral] title='美术：明天美术带一盒彩笔'
+      unit '明天带一盒彩笔' missing=[]
+      out=[]

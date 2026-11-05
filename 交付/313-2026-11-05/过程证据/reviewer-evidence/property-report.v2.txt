@@ -1,0 +1,18 @@
+== property test of family_agenda.action_lines (display projection) ==
+repo: /Users/joyrush/.local/share/family-learning/public-integration-20260926  (HEAD 58973a6, working tree with the uncommitted change)
+corpus: 57 (title, action) pairs found by AST scan of repo *.py
+  [test_daily_list_expression.py:83] title='语文：A'
+      action='读第3课，读第3课。'
+      out   =['读第3课。']
+      LOSS '读第3课，读第3课。' unreachable='读第3课'
+Traceback (most recent call last):
+  File "/Users/joyrush/Documents/deepseek-harness/default-workspace/work/reviewer-evidence/property_test.py", line 382, in <module>
+    main()
+    ~~~~^^
+  File "/Users/joyrush/Documents/deepseek-harness/default-workspace/work/reviewer-evidence/property_test.py", line 327, in main
+    for note in trace(c['title'], c['action']):
+                ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/joyrush/Documents/deepseek-harness/default-workspace/work/reviewer-evidence/property_test.py", line 187, in trace
+    cov = fa._coverage(plain(line), plain(heading))
+          ^^^^^^^^^^^^
+AttributeError: module 'family_agenda' has no attribute '_coverage'

@@ -1,0 +1,2 @@
+AssertionError [ERR_ASSERTION]: homework source is visible before expanding details
+    at /Users/joyrush/.local/share/family-learning/public-integration-20260926/test_today_ui.cjs:69:128

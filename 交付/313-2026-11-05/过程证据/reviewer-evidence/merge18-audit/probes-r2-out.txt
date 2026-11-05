@@ -1,0 +1,63 @@
+audited family_agent.py sha1=6a042b236dc6ea4518e2ef0e545fa42bc6f28e74 (target 4cd8383b025bed6047851e838256c5045336bf5b)
+  WARNING: working tree changed; conclusions apply to the file as read now
+
+== H1 (F1) _school_same_due: differing day no longer raises ==
+  reminder='明天交' (own day 11-05, card day 11-06) -> ('', 'no-raise')
+[PASS] H1 differing-day '明天交' is judged, not raised: got=True expected=True
+  reminder='改到11月10日交' (own day 11-05, card day 11-06) -> ('提醒把原事项改到另一天，是否同一次待核对；原事项和提醒原文都保留。', 'no-raise')
+[PASS] H1 differing-day '改到11月10日交' is judged, not raised: got=True expected=True
+  reminder='周五交' (own day 11-05, card day 11-06) -> ('', 'no-raise')
+[PASS] H1 differing-day '周五交' is judged, not raised: got=True expected=True
+[PASS] H1b same-day reminder stays unremarkable: got='' expected=''
+  module constants: 27 compiled, 82 raw strings: ['_SCHOOL_ACTION_HEAD', '_SCHOOL_ACTION_JOINED', '_SCHOOL_ACTION_OPEN', '_SCHOOL_ACTION_WHO', '_SCHOOL_ANY_DAY', '_SCHOOL_ARRANGEMENT', '_SCHOOL_BRACKET_DAY', '_SCHOOL_BRACKET_WEEKDAY', '_SCHOOL_CHANGE', '_SCHOOL_CHANGED_REASON', '_SCHOOL_CHOICE', '_SCHOOL_CHOICE_OPTION', '_SCHOOL_CLAUSE_MEASURE', '_SCHOOL_CONTINUED', '_SCHOOL_COUNT_UNITS', '_SCHOOL_DAY_HEAD', '_SCHOOL_DAY_OR', '_SCHOOL_DEFERRED', '_SCHOOL_DENIED', '_SCHOOL_DOUBT_CHECK', '_SCHOOL_DOUBT_EXTRA', '_SCHOOL_DOUBT_RANGE', '_SCHOOL_DOUBT_RESOURCE', '_SCHOOL_DOUBT_UNKNOWN', '_SCHOOL_LATER_WORD', '_SCHOOL_LEARNING_ACTS', '_SCHOOL_LESSON_ASSESSMENT', '_SCHOOL_LESSON_PLACE', '_SCHOOL_LIMIT_LEAD', '_SCHOOL_LINE_DEFERS', '_SCHOOL_MOVED', '_SCHOOL_NATIVE_AFTER', '_SCHOOL_NATIVE_ASPECT', '_SCHOOL_NATIVE_BESIDE', '_SCHOOL_NATIVE_CHANGE', '_SCHOOL_NATIVE_COMMON', '_SCHOOL_NATIVE_CONTINUED', '_SCHOOL_NATIVE_DATE', '_SCHOOL_NATIVE_DAY', '_SCHOOL_NATIVE_FILLER', '_SCHOOL_NATIVE_KEPT', '_SCHOOL_NATIVE_LESSON', '_SCHOOL_NATIVE_MARKER', '_SCHOOL_NATIVE_OWN', '_SCHOOL_NATIVE_POINTER', '_SCHOOL_NATIVE_PREDICATE', '_SCHOOL_NATIVE_QUALITY', '_SCHOOL_NATIVE_SUBJECTS', '_SCHOOL_NATIVE_UNSETTLED', '_SCHOOL_NATIVE_WAIVE', '_SCHOOL_NATIVE_WAIVE_AFTER', '_SCHOOL_NATIVE_WHEN', '_SCHOOL_NATIVE_WITHDRAW', '_SCHOOL_NATIVE_WORKSHEET', '_SCHOOL_ORIGINAL_DAY_REVIEW', '_SCHOOL_OUTCOME_DONE', '_SCHOOL_OUTCOME_LEARN', '_SCHOOL_OUTCOME_RANGE', '_SCHOOL_OUTCOME_VERB', '_SCHOOL_PART_DOUBT_PROMPT', '_SCHOOL_POINTER_PROMPT', '_SCHOOL_RELATION_NOUN', '_SCHOOL_RELATION_REF', '_SCHOOL_RESOURCE_TIME', '_SCHOOL_RESOURCE_TODAY', '_SCHOOL_ROLE_AUX', '_SCHOOL_ROLE_DAY', '_SCHOOL_ROLE_HEAD', '_SCHOOL_ROLE_LEAD', '_SCHOOL_ROLE_PAPER', '_SCHOOL_SCOPE_DEFERRED', '_SCHOOL_SHARED_SCOPE', '_SCHOOL_SIGN', '_SCHOOL_SPEECH', '_SCHOOL_STEP_NEGATIVE', '_SCHOOL_STEP_OBJECT', '_SCHOOL_STEP_PART', '_SCHOOL_STEP_REMINDER', '_SCHOOL_STEP_SUBMIT', '_SCHOOL_STEP_UNCHANGED', '_SCHOOL_UNIT_THEN', '_SCHOOL_WORK']
+  raw-string-as-pattern misuses: []
+[PASS] H1c no raw _SCHOOL_* string used as a compiled pattern: got=[] expected=[]
+  fixed line 2772: if held and own and not own&held and not re.search(_SCHOOL_MOVED,said):return None
+[PASS] H1d the differing-day branch uses re.search(_SCHOOL_MOVED, said): got=True expected=True
+
+== H2 (F2) split-residue filter boundary ==
+  '语文：生字' -> KEEPS (subject label)
+[PASS] H2 fragment '语文：生字' -> kept: got=True expected=True
+  '美术老师今天课上说。' -> SKIPS (pure lead-in)
+[PASS] H2 fragment '美术老师今天课上说。' -> dropped: got=False expected=False
+  '综合：带跳绳' -> KEEPS (action verb 带)
+[PASS] H2 fragment '综合：带跳绳' -> kept: got=True expected=True
+  '数学：第3页第2题' -> KEEPS (subject label + digits)
+[PASS] H2 fragment '数学：第3页第2题' -> kept: got=True expected=True
+  '《成长手册》第3页的自我评价' -> KEEPS (object/digits)
+[PASS] H2 fragment '《成长手册》第3页的自我评价' -> kept: got=True expected=True
+  formed proposals: [(1, '语文：预习《成长手册》第3页')]
+[PASS] H2b formed '语文：预习《成长手册》第3页' survives the new filter: got=True expected=True
+
+== H3 (F3) folded card keeps a stable publisher; source_id no longer gates identity ==
+  target: id=pending:p-folded publisher='publisher:0fe4951aa5a670' source_id='' refs=['message:s-wechat:m1', 'message:s-qq:m3']
+[PASS] H3 folded card keeps its publisher: got=True expected=True  # publisher values are deduped; source_id is only reported when one source remains
+[PASS] H3b folded card reports source_id="" (two channels, one publisher): got='' expected=''
+  third notice link -> {'item_id': 'p-folded', 'change': 'same', 'publisher': 'publisher:0fe4951aa5a670a7044c'}
+[PASS] H3c a third notice still folds into the cross-channel card: got=True expected=True
+  mixed senders: publisher='' source_id=''
+[PASS] H3d two different senders do not collapse into one publisher: got='' expected=''
+[PASS] H3e no publisher -> no silent link: got=None expected=None
+
+== H4 (R1) ambiguity keeps the notice its own card ==
+  per-card proof: [('pending:p-math', True), ('pending:p-chinese', True)]
+[PASS] H4 two waiting cards still share one object (ambiguity is real): got=2 expected=2  # unchanged object/subject-blind proof
+  new guard: _select L8138-8140 links only when len(hits)==1; two hits leave the notice its own card
+[PASS] H4b an explicitly named pending target still links: got=True expected=True
+
+== H5 (new overwrite point) _school_fold_pending keeps the later original out of body/evidence ==
+  change='same' folded=True body='完成《每日练习》第26页第1—4题。\n更正：只做第26页第1—3题，改到11月10日交。' | body_has=True evidence_has=False plan.originals=True
+[PASS] H5 fold change='same': later text readable in the card body: got=True expected=True  # the agenda card and the accepted action both read body
+[FAIL] H5b fold change='same': later original ref kept in evidence: got=False expected=True  # accept builds the task source text from evidence
+  change='append' folded=True body='完成《每日练习》第26页第1—4题。' | body_has=False evidence_has=False plan.originals=True
+[FAIL] H5 fold change='append': later text readable in the card body: got=False expected=True  # the agenda card and the accepted action both read body
+[FAIL] H5b fold change='append': later original ref kept in evidence: got=False expected=True  # accept builds the task source text from evidence
+  change='update' folded=True body='完成《每日练习》第26页第1—4题。' | body_has=False evidence_has=False plan.originals=True
+[FAIL] H5 fold change='update': later text readable in the card body: got=False expected=True  # the agenda card and the accepted action both read body
+[FAIL] H5b fold change='update': later original ref kept in evidence: got=False expected=True  # accept builds the task source text from evidence
+  change='cancel' folded=True body='完成《每日练习》第26页第1—4题。' | body_has=False evidence_has=False plan.originals=True
+[FAIL] H5 fold change='cancel': later text readable in the card body: got=False expected=True  # the agenda card and the accepted action both read body
+[FAIL] H5b fold change='cancel': later original ref kept in evidence: got=False expected=True  # accept builds the task source text from evidence
+[PASS] H5c no display reader of plan.school_folded (invisible provenance): got=[] expected=[]  # only family_agent writers store it
+  _fold_school_follows used=1 action='完成《每日练习》第26页第1—4题。\n补充：第26页第1—3题拍照。' row={'state': 'accepted', 'task_id': 'AGENT-1'}
+[PASS] H5d accepted card absorbs its waiting notice into the task action: got=True expected=True

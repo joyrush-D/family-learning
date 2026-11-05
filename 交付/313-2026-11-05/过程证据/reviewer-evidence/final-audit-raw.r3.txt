@@ -1,0 +1,43 @@
+REVIEWED sha1: 8348a71661cc22860eb40423224c576bba1109a6
+
+## 1 CORPUS (AST scan of repo *.py)
+CORPUS pairs: 68
+CORPUS findings: 6
+ - ('test_daily_list_expression.py:94', '语文：A', '读第3课，读第3课。', [('读第3课，读第3课。', '读第3课')], [], [], ['读第3课。'])
+ - ('test_daily_list_expression.py:99', '语文：A', '读第3课，读第3课，家长签字。', [('读第3课，读第3课，家长签字。', '读第3课家长签字')], [], [], ['读第3课，家长签字。'])
+ - ('test_daily_list_expression.py:115', '英语：完成《每日练习》', '完成英语《每日练习》。', [('完成英语《每日练习》。', '英语每日练习')], [], [], [])
+ - ('test_daily_list_expression.py:116', '英语：完成《每日练习》', '补充要求：完成英语《每日练习》。', [('补充要求：完成英语《每日练习》。', '英语每日练习')], [], [], [])
+ - ('test_daily_list_expression.py:316', '英语：完成《每日练习》', '完成英语《每日练习》。', [('完成英语《每日练习》。', '英语每日练习')], [], [], [])
+ - ('test_homework_print_change_basis.py:28', '数学：完成练习三第1至5题', '完成数学练习三第1至5题。11月5日交。', [('完成数学练习三第1至5题。', '数学练习三第1至5题')], [], [], ['11月5日交。'])
+
+## 2 ADVERSARIAL (pre-registered 18 hard-injury cases)
+cases: 18
+ADVERSARIAL RED: 0
+
+## 3 A5a (negation swap)
+A5a: ['要抄写，不用朗读两遍']
+
+## 4 NEW risk probes: _FOLD_CHARS particles / _plain digit separators
+ F1 again: T='语文：A' A='读一遍。\n再读一遍。'
+     OUT=['读一遍。', '再读一遍。'] losses=[] errs=[] reorders=[]
+ F2 also: T='语文：A' A='语文要交。\n语文也要交。'
+     OUT=['语文要交。', '语文也要交。'] losses=[] errs=[] reorders=[]
+ F3 again-bring: T='语文：A' A='明天带练习册。\n明天再带练习册。'
+     OUT=['明天带练习册。', '明天再带练习册。'] losses=[] errs=[] reorders=[]
+ F4 no-longer: T='语文：A' A='明天不带练习册。\n明天不再带练习册。'
+     OUT=['明天不带练习册。', '明天不再带练习册。'] losses=[] errs=[] reorders=[]
+ N1 range-vs-13: T='数学：完成第1—3题' A='完成第13题'
+     OUT=['完成第13题'] losses=[] errs=[] reorders=[]
+ N2 paras-vs-12: T='语文：朗读第1、2段' A='朗读第12段'
+     OUT=['朗读第12段'] losses=[] errs=[] reorders=[]
+
+## 5 the 3 new negation guards: side effects (该省不省 / 该显不显)
+ NEG1 title-neg + body new neg: OUT=['第5题不做']
+ NEG2 body repeats title neg + new info: OUT=['第4题不做，改做第5题']
+ NEG3 restatement kept (dup): OUT=['不用背诵《课文》，要朗读两遍']
+ NEG4 title-neg + new line: OUT=['明天带练习册']
+ NEG5 both neg, body trimmed?: OUT=['不用抄写课文，朗读两遍']
+
+## 6 no-loss join-back invariants used by the test suite
+C4 join-back: ['朗读课本第20页对话三遍；', '家长签字。'] | join= 朗读课本第20页对话三遍；家长签字。
+L789 case: ['今晚朗读课本第20页和第21页的对话；', '请家长听完后在这一页签字；', '明天早读检查。', '家长听完后在第20页签字，明天早读检查。']

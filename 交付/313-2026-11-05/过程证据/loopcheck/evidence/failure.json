@@ -1,0 +1,2746 @@
+{
+  "trace": "Traceback (most recent call last):\n  File \"/Users/joyrush/Documents/deepseek-harness/default-workspace/work/loopcheck/loopcheck_run.py\", line 521, in <module>\n    main()\n    ~~~~^^\n  File \"/Users/joyrush/Documents/deepseek-harness/default-workspace/work/loopcheck/loopcheck_run.py\", line 486, in main\n    s4 = step4(s2, s3)\n  File \"/Users/joyrush/Documents/deepseek-harness/default-workspace/work/loopcheck/loopcheck_run.py\", line 356, in step4\n    raise RuntimeError('no topic candidate: ' + json.dumps(search, ensure_ascii=False)[:600])\nRuntimeError: no topic candidate: {\"status\": \"none\", \"candidates\": [], \"total\": 0, \"groups\": [], \"grade\": null, \"review_status\": \"AI初稿，未经教师审核\", \"child_grades\": [4]}\n",
+  "model_calls": [
+    {
+      "call_index": 1,
+      "name": "family_wrong_questions_annotate",
+      "model": "doubao-seed-evolving",
+      "request_brief": {
+        "prompt_chars": 3
+      },
+      "started": "2026-11-04T23:23:37.382764",
+      "ok": true,
+      "duration_s": 30.21,
+      "result": {
+        "pages": [
+          {
+            "page": 1,
+            "regions": [
+              {
+                "kind": "layout",
+                "box": {
+                  "x": 62,
+                  "y": 88,
+                  "w": 438,
+                  "h": 68
+                },
+                "label": "卷头",
+                "text": "数学·练习册 第12页（全虚构）",
+                "answer": "",
+                "correction": "",
+                "uncertain": false
+              },
+              {
+                "kind": "wrong_item",
+                "box": {
+                  "x": 63,
+                  "y": 282,
+                  "w": 368,
+                  "h": 108
+                },
+                "label": "第2题",
+                "text": "第2题 2+3=6",
+                "answer": "2+3=6",
+                "correction": "",
+                "uncertain": true,
+                "topic_hint": "10以内加法计算",
+                "error_hint": "加法计算结果错误"
+              }
+            ]
+          }
+        ],
+        "uncertainties": [
+          "页面无手写批改、订正痕迹，第2题仅依据算式结果错误判定为疑似错题"
+        ]
+      }
+    }
+  ],
+  "http_trace": [
+    {
+      "step": "bootstrap-task",
+      "method": "POST",
+      "path": "/api/task/new",
+      "request": {
+        "child": "示例甲",
+        "title": "英语：明天英语课听写",
+        "due": "2026-11-05",
+        "action": "明天英语课听写。",
+        "box": "inbox",
+        "request_key": "loopcheck-boot-01"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "task": {
+          "id": "MANUAL-10a9c26033074119c07f",
+          "child": "示例甲",
+          "title": "英语：明天英语课听写",
+          "due": "2026-11-05",
+          "original_status": "待跟进",
+          "source": "家长录入",
+          "action": "明天英语课听写。"
+        }
+      }
+    },
+    {
+      "step": "bootstrap-task",
+      "method": "POST",
+      "path": "/api/task/new",
+      "request": {
+        "child": "示例甲",
+        "title": "语文：朗读《晚照》2遍",
+        "due": "2026-11-05",
+        "action": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+        "box": "inbox",
+        "request_key": "loopcheck-boot-02"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "task": {
+          "id": "MANUAL-c9f61f30ed505b29902d",
+          "child": "示例甲",
+          "title": "语文：朗读《晚照》2遍",
+          "due": "2026-11-05",
+          "original_status": "待跟进",
+          "source": "家长录入",
+          "action": "今晚朗读《晚照》2遍，请家长签字，明天早读检查"
+        }
+      }
+    },
+    {
+      "step": "bootstrap-task",
+      "method": "POST",
+      "path": "/api/task/new",
+      "request": {
+        "child": "示例甲",
+        "title": "英语：明天带《单词听写本》",
+        "due": "2026-11-05",
+        "action": "明天英语课带《单词听写本》；不用在家练习。",
+        "box": "inbox",
+        "request_key": "loopcheck-boot-03"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "task": {
+          "id": "MANUAL-7d063ba964af92377533",
+          "child": "示例甲",
+          "title": "英语：明天带《单词听写本》",
+          "due": "2026-11-05",
+          "original_status": "待跟进",
+          "source": "家长录入",
+          "action": "明天英语课带《单词听写本》；不用在家练习。"
+        }
+      }
+    },
+    {
+      "step": "bootstrap-task",
+      "method": "POST",
+      "path": "/api/task/new",
+      "request": {
+        "child": "示例甲",
+        "title": "数学：完成练习册第12页第2至4题",
+        "due": "2026-11-05",
+        "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+        "box": "inbox",
+        "request_key": "loopcheck-boot-04"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "task": {
+          "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+          "child": "示例甲",
+          "title": "数学：完成练习册第12页第2至4题",
+          "due": "2026-11-05",
+          "original_status": "待跟进",
+          "source": "家长录入",
+          "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+        }
+      }
+    },
+    {
+      "step": "bootstrap-task",
+      "method": "POST",
+      "path": "/api/task/new",
+      "request": {
+        "child": "示例甲",
+        "title": "家长：填写《出游回执》并签名交回",
+        "due": "2026-11-09",
+        "action": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。",
+        "box": "inbox",
+        "request_key": "loopcheck-boot-05"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "task": {
+          "id": "MANUAL-fb7f1cbb735f20665aee",
+          "child": "示例甲",
+          "title": "家长：填写《出游回执》并签名交回",
+          "due": "2026-11-09",
+          "original_status": "待跟进",
+          "source": "家长录入",
+          "action": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。"
+        }
+      }
+    },
+    {
+      "step": "1-upload",
+      "method": "POST",
+      "path": "/api/upload",
+      "request": "<binary 29661 bytes>",
+      "status": 200,
+      "response": {
+        "ok": true,
+        "attachment": {
+          "id": "23d17f78c37c61fed9cb40e0ea733aca",
+          "name": "fake-homework-page.png",
+          "size": 29661,
+          "mime": "image/png",
+          "url": "/upload/23d17f78c37c61fed9cb40e0ea733aca",
+          "sha256": "cddbb626c6de347831203e0720cf626533deb2ac15976c5bc9a817a873a05988",
+          "replayed": false
+        }
+      }
+    },
+    {
+      "step": "1-feedback",
+      "method": "POST",
+      "path": "/api/task/feedback",
+      "request": {
+        "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+        "child": "示例甲",
+        "day": "2026-11-04",
+        "complete": false,
+        "completion_note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+        "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+        "category": "学习进展",
+        "subject": "数学",
+        "attachments": [
+          "23d17f78c37c61fed9cb40e0ea733aca"
+        ],
+        "request_key": "84984315fd114ce0b70b8187742f7bee"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "record_id": 1,
+        "replayed": false,
+        "record": {
+          "id": 1,
+          "child": "示例甲",
+          "source": "事项:MANUAL-c0b2fcc39a7b680c4e6b",
+          "care_choice": "",
+          "care_review_on": ""
+        },
+        "feedback": {
+          "day": "2026-11-04",
+          "category": "学习进展",
+          "subject": "数学",
+          "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+          "transcript": "",
+          "transcript_state": "",
+          "assistance": "",
+          "created": "2026-11-04T23:23:37.378627",
+          "related_record_id": null,
+          "followup_kind": "",
+          "comparison_note": "",
+          "record_id": 1,
+          "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+          "child": "示例甲",
+          "attachments": [
+            {
+              "id": "23d17f78c37c61fed9cb40e0ea733aca",
+              "name": "fake-homework-page.png",
+              "size": 29661,
+              "mime": "image/png",
+              "url": "/upload/23d17f78c37c61fed9cb40e0ea733aca"
+            }
+          ]
+        },
+        "task": {
+          "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+          "child": "示例甲",
+          "title": "数学：完成练习册第12页第2至4题",
+          "due": "2026-11-05",
+          "original_status": "待跟进",
+          "source": "家长录入",
+          "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+          "focus": {
+            "mode": "next",
+            "next_action": "",
+            "waiting_for": "",
+            "review_on": "",
+            "version": 1,
+            "updated": "2026-11-04T23:23:37.337177+08:00",
+            "category": "",
+            "published_on": "",
+            "due_on": "2026-11-05",
+            "scheduled_on": "",
+            "box": "inbox",
+            "title": "",
+            "goal": "",
+            "subject": ""
+          },
+          "agenda": {
+            "category": "homework",
+            "published_on": "",
+            "published_at": "",
+            "publications": [],
+            "due_on": "2026-11-05",
+            "due_kind": "deadline",
+            "complete_on": "",
+            "scheduled_on": "",
+            "category_confirmed": false,
+            "publication_known": false,
+            "box": "inbox",
+            "subjects": [
+              "数学"
+            ],
+            "subject_state": "known",
+            "subject_basis": "own_words"
+          },
+          "update": null,
+          "history": [],
+          "feedback_ids": [
+            1
+          ],
+          "linked_record_ids": [],
+          "progress": {
+            "feedback": 1,
+            "wrong": 0,
+            "wrong_ids": [],
+            "clues": 0,
+            "retries": 0,
+            "history": 0
+          }
+        },
+        "completion_changed": false
+      }
+    },
+    {
+      "step": "2-annotate",
+      "method": "POST",
+      "path": "/api/wrong/annotate",
+      "request": {
+        "child": "示例甲",
+        "subject_hint": "数学",
+        "attachments": [
+          "23d17f78c37c61fed9cb40e0ea733aca"
+        ]
+      },
+      "status": 200,
+      "response": {
+        "pages": [
+          {
+            "page": 1,
+            "regions": [
+              {
+                "kind": "layout",
+                "box": {
+                  "x": 62,
+                  "y": 88,
+                  "w": 438,
+                  "h": 68
+                },
+                "label": "卷头",
+                "text": "数学·练习册 第12页（全虚构）",
+                "answer": "",
+                "correction": "",
+                "uncertain": false,
+                "topic_hint": "",
+                "error_hint": ""
+              },
+              {
+                "kind": "wrong_item",
+                "box": {
+                  "x": 63,
+                  "y": 282,
+                  "w": 368,
+                  "h": 108
+                },
+                "label": "第2题",
+                "text": "第2题 2+3=6",
+                "answer": "2+3=6",
+                "correction": "",
+                "uncertain": true,
+                "topic_hint": "10以内加法计算",
+                "error_hint": "加法计算结果错误"
+              }
+            ],
+            "attachment": {
+              "id": "23d17f78c37c61fed9cb40e0ea733aca",
+              "name": "fake-homework-page.png",
+              "url": "/upload/23d17f78c37c61fed9cb40e0ea733aca",
+              "mime": "image/png"
+            }
+          }
+        ],
+        "uncertainties": [
+          "页面无手写批改、订正痕迹，第2题仅依据算式结果错误判定为疑似错题"
+        ],
+        "subject_hint": "数学"
+      }
+    },
+    {
+      "step": "2-wrong-save",
+      "method": "POST",
+      "path": "/api/wrong/save",
+      "request": {
+        "child": "示例甲",
+        "day": "2026-11-04",
+        "subject": "数学",
+        "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+        "feedback_record_id": 1,
+        "feedback_created": "2026-11-04T23:23:37.378627",
+        "feedback_linked_at": "",
+        "request_key": "384893208aad4e6cb0389883c65c2227",
+        "items": [
+          {
+            "attachment": "23d17f78c37c61fed9cb40e0ea733aca",
+            "label": "第2题",
+            "text": "第2题 2+3=6",
+            "answer": "2+3=6",
+            "correction": "2+3=5",
+            "note": "家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。",
+            "topic_hint": "10以内加法计算",
+            "error_hint": "加法计算结果错误"
+          }
+        ]
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "saved": [
+          {
+            "id": 2,
+            "existing": false,
+            "title": "数学错题：第2题"
+          }
+        ],
+        "count": 1
+      }
+    },
+    {
+      "step": "2-state",
+      "method": "GET",
+      "path": "/api/state",
+      "request": null,
+      "status": 200,
+      "response": {
+        "today_view": {
+          "child-1": {
+            "groups": [
+              {
+                "subject": "数学",
+                "items": [
+                  {
+                    "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                    "kind": "task",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                    "title": "数学：完成练习册第12页第2至4题",
+                    "subject": "数学",
+                    "category": "homework",
+                    "status": "待跟进",
+                    "closed": false,
+                    "pending_review": false,
+                    "origin": "family",
+                    "origin_label": "家长录入",
+                    "lines": [
+                      "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+                    ],
+                    "plan_lines": [],
+                    "complete_words": "",
+                    "facts": [
+                      {
+                        "role": "due",
+                        "kind": "deadline",
+                        "label": "截止",
+                        "value": "2026-11-05",
+                        "known": true,
+                        "state": "next_morning"
+                      }
+                    ],
+                    "today": false,
+                    "when": "later",
+                    "publications": [],
+                    "published_at": "",
+                    "publisher": "",
+                    "progress": {
+                      "feedback": 1,
+                      "wrong": 1,
+                      "wrong_ids": [
+                        2
+                      ],
+                      "clues": 0,
+                      "retries": 0,
+                      "history": 0
+                    },
+                    "records": [
+                      {
+                        "id": 1,
+                        "day": "2026-11-04",
+                        "created": "2026-11-04T23:23:37.378627",
+                        "title": "反馈：数学：完成练习册第12页第2至4题",
+                        "subject": "数学",
+                        "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+                        "note_truncated": false,
+                        "attachments": [
+                          "23d17f78c37c61fed9cb40e0ea733aca"
+                        ],
+                        "followup_kind": "",
+                        "related_record_id": null,
+                        "assistance": "",
+                        "practice_relation": "",
+                        "task_id": "MANUAL-c0b2fcc39a7b680c4e6b"
+                      }
+                    ],
+                    "wrong": [
+                      {
+                        "id": 2,
+                        "day": "2026-11-04",
+                        "created": "2026-11-04T23:24:07.599866",
+                        "title": "数学错题：第2题",
+                        "subject": "数学",
+                        "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                        "note_truncated": false,
+                        "attachments": [
+                          "23d17f78c37c61fed9cb40e0ea733aca"
+                        ],
+                        "followup_kind": "",
+                        "related_record_id": 1,
+                        "assistance": "",
+                        "practice_relation": "",
+                        "followups": [],
+                        "state": "待订正",
+                        "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                        "task_title": "数学：完成练习册第12页第2至4题"
+                      }
+                    ]
+                  }
+                ],
+                "undated": 0
+              },
+              {
+                "subject": "英语",
+                "items": [
+                  {
+                    "id": "MANUAL-7d063ba964af92377533",
+                    "kind": "task",
+                    "task_id": "MANUAL-7d063ba964af92377533",
+                    "title": "英语：明天带《单词听写本》",
+                    "subject": "英语",
+                    "category": "homework",
+                    "status": "待跟进",
+                    "closed": false,
+                    "pending_review": false,
+                    "origin": "family",
+                    "origin_label": "家长录入",
+                    "lines": [
+                      "明天英语课带《单词听写本》；",
+                      "不用在家练习。"
+                    ],
+                    "plan_lines": [],
+                    "complete_words": "",
+                    "facts": [
+                      {
+                        "role": "due",
+                        "kind": "deadline",
+                        "label": "截止",
+                        "value": "2026-11-05",
+                        "known": true,
+                        "state": "next_morning"
+                      }
+                    ],
+                    "today": false,
+                    "when": "later",
+                    "publications": [],
+                    "published_at": "",
+                    "publisher": "",
+                    "progress": null,
+                    "records": [],
+                    "wrong": []
+                  },
+                  {
+                    "id": "MANUAL-10a9c26033074119c07f",
+                    "kind": "task",
+                    "task_id": "MANUAL-10a9c26033074119c07f",
+                    "title": "英语：明天英语课听写",
+                    "subject": "英语",
+                    "category": "homework",
+                    "status": "待跟进",
+                    "closed": false,
+                    "pending_review": false,
+                    "origin": "family",
+                    "origin_label": "家长录入",
+                    "lines": [
+                      "明天英语课听写。"
+                    ],
+                    "plan_lines": [],
+                    "complete_words": "",
+                    "facts": [
+                      {
+                        "role": "due",
+                        "kind": "deadline",
+                        "label": "截止",
+                        "value": "2026-11-05",
+                        "known": true,
+                        "state": "next_morning"
+                      }
+                    ],
+                    "today": false,
+                    "when": "later",
+                    "publications": [],
+                    "published_at": "",
+                    "publisher": "",
+                    "progress": null,
+                    "records": [],
+                    "wrong": []
+                  }
+                ],
+                "undated": 0
+              },
+              {
+                "subject": "语文",
+                "items": [
+                  {
+                    "id": "MANUAL-c9f61f30ed505b29902d",
+                    "kind": "task",
+                    "task_id": "MANUAL-c9f61f30ed505b29902d",
+                    "title": "语文：朗读《晚照》2遍",
+                    "subject": "语文",
+                    "category": "homework",
+                    "status": "待跟进",
+                    "closed": false,
+                    "pending_review": false,
+                    "origin": "family",
+                    "origin_label": "家长录入",
+                    "lines": [
+                      "今晚朗读《晚照》2遍，请家长签字，明天早读检查"
+                    ],
+                    "plan_lines": [],
+                    "complete_words": "",
+                    "facts": [
+                      {
+                        "role": "due",
+                        "kind": "deadline",
+                        "label": "截止",
+                        "value": "2026-11-05",
+                        "known": true,
+                        "state": "next_morning"
+                      }
+                    ],
+                    "today": false,
+                    "when": "later",
+                    "publications": [],
+                    "published_at": "",
+                    "publisher": "",
+                    "progress": null,
+                    "records": [],
+                    "wrong": []
+                  }
+                ],
+                "undated": 0
+              },
+              {
+                "subject": "综合事务",
+                "items": [
+                  {
+                    "id": "MANUAL-fb7f1cbb735f20665aee",
+                    "kind": "task",
+                    "task_id": "MANUAL-fb7f1cbb735f20665aee",
+                    "title": "家长：填写《出游回执》并签名交回",
+                    "subject": "综合事务",
+                    "category": "todo",
+                    "status": "待跟进",
+                    "closed": false,
+                    "pending_review": false,
+                    "origin": "family",
+                    "origin_label": "家长录入",
+                    "lines": [
+                      "今晚请家长在《出游回执》勾选参加或不参加并签名；",
+                      "下周一由孩子交回。"
+                    ],
+                    "plan_lines": [],
+                    "complete_words": "",
+                    "facts": [
+                      {
+                        "role": "due",
+                        "kind": "deadline",
+                        "label": "截止",
+                        "value": "2026-11-09",
+                        "known": true,
+                        "state": ""
+                      }
+                    ],
+                    "today": false,
+                    "when": "later",
+                    "publications": [],
+                    "published_at": "",
+                    "publisher": "",
+                    "progress": null,
+                    "records": [],
+                    "wrong": []
+                  }
+                ],
+                "undated": 0
+              }
+            ],
+            "closed": [],
+            "wrong": [
+              {
+                "subject": "数学",
+                "items": [
+                  {
+                    "id": 2,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:24:07.599866",
+                    "title": "数学错题：第2题",
+                    "subject": "数学",
+                    "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                    "note_truncated": false,
+                    "attachments": [
+                      "23d17f78c37c61fed9cb40e0ea733aca"
+                    ],
+                    "followup_kind": "",
+                    "related_record_id": 1,
+                    "assistance": "",
+                    "practice_relation": "",
+                    "followups": [],
+                    "state": "待订正",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                    "task_title": "数学：完成练习册第12页第2至4题"
+                  }
+                ]
+              }
+            ],
+            "upcoming": [],
+            "undated": [],
+            "materials": [],
+            "counts": {
+              "open": 5,
+              "closed": 0,
+              "upcoming": 0,
+              "material": 0,
+              "undated": 0,
+              "today": 0,
+              "overdue": 0,
+              "later": 5,
+              "earlier": 0,
+              "unknown": 0,
+              "passed": 0
+            },
+            "schedule": {
+              "lessons": [],
+              "plans": [],
+              "cancelled": 0,
+              "completed": 0
+            },
+            "schedule_error": "",
+            "week": [
+              {
+                "day": "2026-11-02",
+                "open": 5,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-03",
+                "open": 5,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-04",
+                "open": 5,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-05",
+                "open": 5,
+                "today": 4,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-06",
+                "open": 5,
+                "today": 0,
+                "overdue": 4,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-07",
+                "open": 5,
+                "today": 0,
+                "overdue": 4,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-08",
+                "open": 5,
+                "today": 0,
+                "overdue": 4,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              }
+            ],
+            "learning": {
+              "subjects": [
+                {
+                  "subject": "数学",
+                  "course": [],
+                  "evidence": [
+                    {
+                      "kind": "wrong",
+                      "record_id": 2,
+                      "subject": "数学",
+                      "day": "2026-11-04",
+                      "title": "数学错题：第2题",
+                      "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                      "note_truncated": false,
+                      "state": "待订正",
+                      "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                      "task_title": "数学：完成练习册第12页第2至4题",
+                      "topics": [],
+                      "lines": [
+                        [
+                          "原错题",
+                          "2026-11-04 · 待订正"
+                        ]
+                      ],
+                      "next": "先订正。还没有知识点诊断；可从原作业的错题卡开始。"
+                    }
+                  ]
+                }
+              ],
+              "pack": {
+                "installed": true,
+                "message": ""
+              }
+            }
+          },
+          "child-2": {
+            "groups": [],
+            "closed": [],
+            "wrong": [],
+            "upcoming": [],
+            "undated": [],
+            "materials": [],
+            "counts": {
+              "open": 0,
+              "closed": 0,
+              "upcoming": 0,
+              "material": 0,
+              "undated": 0,
+              "today": 0,
+              "overdue": 0,
+              "later": 0,
+              "earlier": 0,
+              "unknown": 0,
+              "passed": 0
+            },
+            "schedule": {
+              "lessons": [],
+              "plans": [],
+              "cancelled": 0,
+              "completed": 0
+            },
+            "schedule_error": "",
+            "week": [
+              {
+                "day": "2026-11-02",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-03",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-04",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-05",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-06",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-07",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              },
+              {
+                "day": "2026-11-08",
+                "open": 0,
+                "today": 0,
+                "overdue": 0,
+                "closed": 0,
+                "upcoming": 0,
+                "schedule": 0
+              }
+            ],
+            "learning": {
+              "subjects": [],
+              "pack": {
+                "installed": true,
+                "message": ""
+              }
+            }
+          }
+        },
+        "asr": {
+          "configured": false
+        },
+        "llm": {
+          "configured": true
+        },
+        "children": [
+          {
+            "id": "child-1",
+            "name": "示例甲",
+            "label": "示例甲",
+            "age": "10岁",
+            "grade": "四年级",
+            "classroom": "",
+            "version": 0,
+            "history": []
+          },
+          {
+            "id": "child-2",
+            "name": "示例乙",
+            "label": "示例乙",
+            "age": "13岁",
+            "grade": "初一",
+            "classroom": "",
+            "version": 0,
+            "history": []
+          }
+        ],
+        "tasks": [
+          {
+            "id": "MANUAL-fb7f1cbb735f20665aee",
+            "child": "示例甲",
+            "title": "家长：填写《出游回执》并签名交回",
+            "due": "2026-11-09",
+            "original_status": "待跟进",
+            "source": "家长录入",
+            "action": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。",
+            "focus": {
+              "mode": "next",
+              "next_action": "",
+              "waiting_for": "",
+              "review_on": "",
+              "version": 1,
+              "updated": "2026-11-04T23:23:37.341470+08:00",
+              "category": "",
+              "published_on": "",
+              "due_on": "2026-11-09",
+              "scheduled_on": "",
+              "box": "inbox",
+              "title": "",
+              "goal": "",
+              "subject": ""
+            },
+            "agenda": {
+              "category": "todo",
+              "published_on": "",
+              "published_at": "",
+              "publications": [],
+              "due_on": "2026-11-09",
+              "due_kind": "deadline",
+              "complete_on": "",
+              "scheduled_on": "",
+              "category_confirmed": false,
+              "publication_known": false,
+              "box": "inbox",
+              "subjects": [],
+              "subject_state": "general",
+              "subject_basis": ""
+            },
+            "action_lines": [
+              "今晚请家长在《出游回执》勾选参加或不参加并签名；",
+              "下周一由孩子交回。"
+            ],
+            "update": null,
+            "history": []
+          },
+          {
+            "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+            "child": "示例甲",
+            "title": "数学：完成练习册第12页第2至4题",
+            "due": "2026-11-05",
+            "original_status": "待跟进",
+            "source": "家长录入",
+            "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+            "focus": {
+              "mode": "next",
+              "next_action": "",
+              "waiting_for": "",
+              "review_on": "",
+              "version": 1,
+              "updated": "2026-11-04T23:23:37.337177+08:00",
+              "category": "",
+              "published_on": "",
+              "due_on": "2026-11-05",
+              "scheduled_on": "",
+              "box": "inbox",
+              "title": "",
+              "goal": "",
+              "subject": ""
+            },
+            "progress": {
+              "feedback": 1,
+              "wrong": 1,
+              "wrong_ids": [
+                2
+              ],
+              "clues": 0,
+              "retries": 0,
+              "history": 0
+            },
+            "agenda": {
+              "category": "homework",
+              "published_on": "",
+              "published_at": "",
+              "publications": [],
+              "due_on": "2026-11-05",
+              "due_kind": "deadline",
+              "complete_on": "",
+              "scheduled_on": "",
+              "category_confirmed": false,
+              "publication_known": false,
+              "box": "inbox",
+              "subjects": [
+                "数学"
+              ],
+              "subject_state": "known",
+              "subject_basis": "own_words"
+            },
+            "update": null,
+            "history": []
+          },
+          {
+            "id": "MANUAL-7d063ba964af92377533",
+            "child": "示例甲",
+            "title": "英语：明天带《单词听写本》",
+            "due": "2026-11-05",
+            "original_status": "待跟进",
+            "source": "家长录入",
+            "action": "明天英语课带《单词听写本》；不用在家练习。",
+            "focus": {
+              "mode": "next",
+              "next_action": "",
+              "waiting_for": "",
+              "review_on": "",
+              "version": 1,
+              "updated": "2026-11-04T23:23:37.332988+08:00",
+              "category": "",
+              "published_on": "",
+              "due_on": "2026-11-05",
+              "scheduled_on": "",
+              "box": "inbox",
+              "title": "",
+              "goal": "",
+              "subject": ""
+            },
+            "agenda": {
+              "category": "homework",
+              "published_on": "",
+              "published_at": "",
+              "publications": [],
+              "due_on": "2026-11-05",
+              "due_kind": "deadline",
+              "complete_on": "",
+              "scheduled_on": "",
+              "category_confirmed": false,
+              "publication_known": false,
+              "box": "inbox",
+              "subjects": [
+                "英语"
+              ],
+              "subject_state": "known",
+              "subject_basis": "own_words"
+            },
+            "action_lines": [
+              "明天英语课带《单词听写本》；",
+              "不用在家练习。"
+            ],
+            "update": null,
+            "history": []
+          },
+          {
+            "id": "MANUAL-c9f61f30ed505b29902d",
+            "child": "示例甲",
+            "title": "语文：朗读《晚照》2遍",
+            "due": "2026-11-05",
+            "original_status": "待跟进",
+            "source": "家长录入",
+            "action": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+            "focus": {
+              "mode": "next",
+              "next_action": "",
+              "waiting_for": "",
+              "review_on": "",
+              "version": 1,
+              "updated": "2026-11-04T23:23:37.328769+08:00",
+              "category": "",
+              "published_on": "",
+              "due_on": "2026-11-05",
+              "scheduled_on": "",
+              "box": "inbox",
+              "title": "",
+              "goal": "",
+              "subject": ""
+            },
+            "agenda": {
+              "category": "homework",
+              "published_on": "",
+              "published_at": "",
+              "publications": [],
+              "due_on": "2026-11-05",
+              "due_kind": "deadline",
+              "complete_on": "",
+              "scheduled_on": "",
+              "category_confirmed": false,
+              "publication_known": false,
+              "box": "inbox",
+              "subjects": [
+                "语文"
+              ],
+              "subject_state": "known",
+              "subject_basis": "own_words"
+            },
+            "update": null,
+            "history": []
+          },
+          {
+            "id": "MANUAL-10a9c26033074119c07f",
+            "child": "示例甲",
+            "title": "英语：明天英语课听写",
+            "due": "2026-11-05",
+            "original_status": "待跟进",
+            "source": "家长录入",
+            "action": "明天英语课听写。",
+            "focus": {
+              "mode": "next",
+              "next_action": "",
+              "waiting_for": "",
+              "review_on": "",
+              "version": 1,
+              "updated": "2026-11-04T23:23:37.324617+08:00",
+              "category": "",
+              "published_on": "",
+              "due_on": "2026-11-05",
+              "scheduled_on": "",
+              "box": "inbox",
+              "title": "",
+              "goal": "",
+              "subject": ""
+            },
+            "agenda": {
+              "category": "homework",
+              "published_on": "",
+              "published_at": "",
+              "publications": [],
+              "due_on": "2026-11-05",
+              "due_kind": "deadline",
+              "complete_on": "",
+              "scheduled_on": "",
+              "category_confirmed": false,
+              "publication_known": false,
+              "box": "inbox",
+              "subjects": [
+                "英语"
+              ],
+              "subject_state": "known",
+              "subject_basis": "own_words"
+            },
+            "action_lines": [],
+            "update": null,
+            "history": []
+          }
+        ],
+        "records": [
+          {
+            "id": 2,
+            "child": "示例甲",
+            "day": "2026-11-04",
+            "category": "学习进展",
+            "subject": "数学",
+            "title": "数学错题：第2题",
+            "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+            "source": "错题照片核对",
+            "score": null,
+            "total": null,
+            "created": "2026-11-04T23:24:07.599866",
+            "attachments": [
+              "23d17f78c37c61fed9cb40e0ea733aca"
+            ],
+            "related_record_id": 1,
+            "followup_kind": "",
+            "assistance": "",
+            "practice_relation": "",
+            "comparison_note": "",
+            "care_choice": "",
+            "care_review_on": "",
+            "request_key": "384893208aad4e6cb0389883c65c2227-01",
+            "request_hash": "8c812cbf9d027f8128577e104f1ce964e11c347583326b0aedb6873b6def658d",
+            "transcript": "",
+            "transcript_state": "",
+            "linked_task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+            "linked_task_at": "2026-11-04T23:24:07.599866",
+            "review_output_ids": null
+          },
+          {
+            "id": 1,
+            "child": "示例甲",
+            "day": "2026-11-04",
+            "category": "学习进展",
+            "subject": "数学",
+            "title": "反馈：数学：完成练习册第12页第2至4题",
+            "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+            "source": "事项:MANUAL-c0b2fcc39a7b680c4e6b",
+            "score": null,
+            "total": null,
+            "created": "2026-11-04T23:23:37.378627",
+            "attachments": [
+              "23d17f78c37c61fed9cb40e0ea733aca"
+            ],
+            "related_record_id": null,
+            "followup_kind": "",
+            "assistance": "",
+            "practice_relation": "",
+            "comparison_note": "",
+            "care_choice": "",
+            "care_review_on": "",
+            "request_key": "84984315fd114ce0b70b8187742f7bee",
+            "request_hash": "e33b707271d6a53fd33683496499f51721be32c3ac31ff0ded170153b73cfa3a",
+            "transcript": "",
+            "transcript_state": "",
+            "linked_task_id": "",
+            "linked_task_at": "",
+            "review_output_ids": null
+          }
+        ],
+        "sync": {},
+        "sync_error": "",
+        "attachments": [],
+        "uploads": [
+          {
+            "id": "23d17f78c37c61fed9cb40e0ea733aca",
+            "name": "fake-homework-page.png",
+            "size": 29661,
+            "mime": "image/png",
+            "url": "/upload/23d17f78c37c61fed9cb40e0ea733aca"
+          }
+        ],
+        "care": {
+          "items": [],
+          "error": ""
+        },
+        "growth": "",
+        "sources": "",
+        "record_categories": [
+          "学习进展",
+          "课程进度",
+          "成绩",
+          "兴趣",
+          "情绪",
+          "家长观察"
+        ],
+        "rewards": {
+          "rules_version": "growth-v1",
+          "note": "能量和徽章是鼓励记录与尝试的产品规则，不是学习能力或教育评价。只按学习进展、兴趣及指定来源等结构字段计算，不解读正文判断是否完成。每个来源最多奖励一次，每个孩子每天每类最多10能量；重复记录保留但不加分。成绩、情绪、普通家长观察、老师反馈、陪伴建议回应及待办勾选不计分。不比较兄弟，不按成绩加分，没有连续打卡或断签扣分。纠正或移除原记录后会重新计算，不保留已被纠正事实的奖励。",
+          "children": [
+            {
+              "id": "child-1",
+              "name": "示例甲",
+              "energy": 0,
+              "level": 0,
+              "progress": 0,
+              "next_level_at": 10,
+              "badges": [],
+              "events": []
+            },
+            {
+              "id": "child-2",
+              "name": "示例乙",
+              "energy": 0,
+              "level": 0,
+              "progress": 0,
+              "next_level_at": 10,
+              "badges": [],
+              "events": []
+            }
+          ]
+        },
+        "reading": {
+          "tasks": [],
+          "balances": [
+            {
+              "child_id": "child-1",
+              "child": "示例甲",
+              "earned": 0,
+              "reserved": 0,
+              "spent": 0,
+              "available": 0
+            },
+            {
+              "child_id": "child-2",
+              "child": "示例乙",
+              "earned": 0,
+              "reserved": 0,
+              "spent": 0,
+              "available": 0
+            }
+          ],
+          "redemptions": []
+        },
+        "printing": {
+          "printers": [],
+          "error": "",
+          "jobs": []
+        },
+        "today": "2026-11-04",
+        "today_calendar": {
+          "events": [],
+          "timetables": [],
+          "source_error": "",
+          "agenda": [
+            {
+              "id": "MANUAL-fb7f1cbb735f20665aee",
+              "task_id": "MANUAL-fb7f1cbb735f20665aee",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "家长：填写《出游回执》并签名交回",
+              "agenda": {
+                "category": "todo",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-09",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [],
+                "subject_state": "general",
+                "subject_basis": ""
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。",
+              "touched": true,
+              "day": "2026-11-04"
+            },
+            {
+              "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+              "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "数学：完成练习册第12页第2至4题",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "数学"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+              "touched": true,
+              "day": "2026-11-04"
+            },
+            {
+              "id": "MANUAL-7d063ba964af92377533",
+              "task_id": "MANUAL-7d063ba964af92377533",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "英语：明天带《单词听写本》",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "英语"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "明天英语课带《单词听写本》；不用在家练习。",
+              "touched": true,
+              "day": "2026-11-04"
+            },
+            {
+              "id": "MANUAL-c9f61f30ed505b29902d",
+              "task_id": "MANUAL-c9f61f30ed505b29902d",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "语文：朗读《晚照》2遍",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "语文"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+              "touched": true,
+              "day": "2026-11-04"
+            },
+            {
+              "id": "MANUAL-10a9c26033074119c07f",
+              "task_id": "MANUAL-10a9c26033074119c07f",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "英语：明天英语课听写",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "英语"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "明天英语课听写。",
+              "touched": true,
+              "day": "2026-11-04"
+            }
+          ],
+          "study": [],
+          "inbox": [
+            {
+              "id": "MANUAL-fb7f1cbb735f20665aee",
+              "task_id": "MANUAL-fb7f1cbb735f20665aee",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "家长：填写《出游回执》并签名交回",
+              "agenda": {
+                "category": "todo",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-09",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [],
+                "subject_state": "general",
+                "subject_basis": ""
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。",
+              "touched": true
+            },
+            {
+              "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+              "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "数学：完成练习册第12页第2至4题",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "数学"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+              "touched": true
+            },
+            {
+              "id": "MANUAL-7d063ba964af92377533",
+              "task_id": "MANUAL-7d063ba964af92377533",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "英语：明天带《单词听写本》",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "英语"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "明天英语课带《单词听写本》；不用在家练习。",
+              "touched": true
+            },
+            {
+              "id": "MANUAL-c9f61f30ed505b29902d",
+              "task_id": "MANUAL-c9f61f30ed505b29902d",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "语文：朗读《晚照》2遍",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "语文"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+              "touched": true
+            },
+            {
+              "id": "MANUAL-10a9c26033074119c07f",
+              "task_id": "MANUAL-10a9c26033074119c07f",
+              "kind": "task",
+              "child_ids": [
+                "child-1"
+              ],
+              "title": "英语：明天英语课听写",
+              "agenda": {
+                "category": "homework",
+                "published_on": "",
+                "published_at": "",
+                "publications": [],
+                "due_on": "2026-11-05",
+                "due_kind": "deadline",
+                "complete_on": "",
+                "scheduled_on": "",
+                "category_confirmed": false,
+                "publication_known": false,
+                "box": "inbox",
+                "subjects": [
+                  "英语"
+                ],
+                "subject_state": "known",
+                "subject_basis": "own_words"
+              },
+              "status": "待跟进",
+              "closed": false,
+              "closed_on": "",
+              "body": "明天英语课听写。",
+              "touched": true
+            }
+          ]
+        },
+        "agent": {
+          "enabled": true,
+          "state": "waiting",
+          "last_run": "",
+          "last_error": "",
+          "failed_jobs": 0,
+          "pending_count": 0,
+          "items": [],
+          "sources": [
+            {
+              "id": "synthetic-group",
+              "platform": "wechat",
+              "child_id": "child-1",
+              "name": "虚构班级",
+              "enabled": true,
+              "last_attempt": "2026-11-04T20:00:00+08:00",
+              "last_success": "2026-11-04T20:00:00+08:00",
+              "last_message_time": "2026-11-04T20:00:00+08:00",
+              "error": "",
+              "unread_count": 0,
+              "pending_message_count": 6,
+              "next_collection_at": "2026-11-04T20:30:00+08:00",
+              "cursor": "506",
+              "collection_check": {
+                "requested_at": "",
+                "completed_at": "",
+                "status": ""
+              }
+            }
+          ],
+          "file_messages": [],
+          "collection_interval_minutes": 60,
+          "linked_upload_ids": []
+        }
+      }
+    },
+    {
+      "step": "read-day",
+      "method": "GET",
+      "path": "/api/day?child_id=child-1&day=2026-11-04",
+      "request": null,
+      "status": 200,
+      "response": {
+        "today": "2026-11-04",
+        "day": "2026-11-04",
+        "child_id": "child-1",
+        "child_name": "示例甲",
+        "children": [
+          {
+            "id": "child-1",
+            "name": "示例甲"
+          },
+          {
+            "id": "child-2",
+            "name": "示例乙"
+          }
+        ],
+        "source_error": "",
+        "groups": [
+          {
+            "subject": "数学",
+            "items": [
+              {
+                "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                "kind": "task",
+                "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                "title": "数学：完成练习册第12页第2至4题",
+                "subject": "数学",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": {
+                  "feedback": 1,
+                  "wrong": 1,
+                  "wrong_ids": [
+                    2
+                  ],
+                  "clues": 0,
+                  "retries": 0,
+                  "history": 0
+                },
+                "records": [
+                  {
+                    "id": 1,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:23:37.378627",
+                    "title": "反馈：数学：完成练习册第12页第2至4题",
+                    "subject": "数学",
+                    "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+                    "note_truncated": false,
+                    "attachments": [
+                      "23d17f78c37c61fed9cb40e0ea733aca"
+                    ],
+                    "followup_kind": "",
+                    "related_record_id": null,
+                    "assistance": "",
+                    "practice_relation": "",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b"
+                  }
+                ],
+                "wrong": [
+                  {
+                    "id": 2,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:24:07.599866",
+                    "title": "数学错题：第2题",
+                    "subject": "数学",
+                    "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                    "note_truncated": false,
+                    "attachments": [
+                      "23d17f78c37c61fed9cb40e0ea733aca"
+                    ],
+                    "followup_kind": "",
+                    "related_record_id": 1,
+                    "assistance": "",
+                    "practice_relation": "",
+                    "followups": [],
+                    "state": "待订正",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                    "task_title": "数学：完成练习册第12页第2至4题"
+                  }
+                ]
+              }
+            ],
+            "undated": 0
+          },
+          {
+            "subject": "英语",
+            "items": [
+              {
+                "id": "MANUAL-7d063ba964af92377533",
+                "kind": "task",
+                "task_id": "MANUAL-7d063ba964af92377533",
+                "title": "英语：明天带《单词听写本》",
+                "subject": "英语",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "明天英语课带《单词听写本》；",
+                  "不用在家练习。"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              },
+              {
+                "id": "MANUAL-10a9c26033074119c07f",
+                "kind": "task",
+                "task_id": "MANUAL-10a9c26033074119c07f",
+                "title": "英语：明天英语课听写",
+                "subject": "英语",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "明天英语课听写。"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              }
+            ],
+            "undated": 0
+          },
+          {
+            "subject": "语文",
+            "items": [
+              {
+                "id": "MANUAL-c9f61f30ed505b29902d",
+                "kind": "task",
+                "task_id": "MANUAL-c9f61f30ed505b29902d",
+                "title": "语文：朗读《晚照》2遍",
+                "subject": "语文",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "今晚朗读《晚照》2遍，请家长签字，明天早读检查"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              }
+            ],
+            "undated": 0
+          },
+          {
+            "subject": "综合事务",
+            "items": [
+              {
+                "id": "MANUAL-fb7f1cbb735f20665aee",
+                "kind": "task",
+                "task_id": "MANUAL-fb7f1cbb735f20665aee",
+                "title": "家长：填写《出游回执》并签名交回",
+                "subject": "综合事务",
+                "category": "todo",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "今晚请家长在《出游回执》勾选参加或不参加并签名；",
+                  "下周一由孩子交回。"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-09",
+                    "known": true,
+                    "state": ""
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              }
+            ],
+            "undated": 0
+          }
+        ],
+        "closed": [],
+        "wrong": [
+          {
+            "subject": "数学",
+            "items": [
+              {
+                "id": 2,
+                "day": "2026-11-04",
+                "created": "2026-11-04T23:24:07.599866",
+                "title": "数学错题：第2题",
+                "subject": "数学",
+                "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                "note_truncated": false,
+                "attachments": [
+                  "23d17f78c37c61fed9cb40e0ea733aca"
+                ],
+                "followup_kind": "",
+                "related_record_id": 1,
+                "assistance": "",
+                "practice_relation": "",
+                "followups": [],
+                "state": "待订正",
+                "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                "task_title": "数学：完成练习册第12页第2至4题"
+              }
+            ]
+          }
+        ],
+        "upcoming": [],
+        "undated": [],
+        "materials": [],
+        "counts": {
+          "open": 5,
+          "closed": 0,
+          "upcoming": 0,
+          "material": 0,
+          "undated": 0,
+          "today": 0,
+          "overdue": 0,
+          "later": 5,
+          "earlier": 0,
+          "unknown": 0,
+          "passed": 0
+        },
+        "schedule": {
+          "lessons": [],
+          "plans": [],
+          "cancelled": 0,
+          "completed": 0
+        },
+        "schedule_error": "",
+        "week": [
+          {
+            "day": "2026-11-02",
+            "open": 5,
+            "today": 0,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-03",
+            "open": 5,
+            "today": 0,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-04",
+            "open": 5,
+            "today": 0,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-05",
+            "open": 5,
+            "today": 4,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-06",
+            "open": 5,
+            "today": 0,
+            "overdue": 4,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-07",
+            "open": 5,
+            "today": 0,
+            "overdue": 4,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-08",
+            "open": 5,
+            "today": 0,
+            "overdue": 4,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          }
+        ],
+        "learning": {
+          "subjects": [
+            {
+              "subject": "数学",
+              "course": [],
+              "evidence": [
+                {
+                  "kind": "wrong",
+                  "record_id": 2,
+                  "subject": "数学",
+                  "day": "2026-11-04",
+                  "title": "数学错题：第2题",
+                  "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                  "note_truncated": false,
+                  "state": "待订正",
+                  "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                  "task_title": "数学：完成练习册第12页第2至4题",
+                  "topics": [],
+                  "lines": [
+                    [
+                      "原错题",
+                      "2026-11-04 · 待订正"
+                    ]
+                  ],
+                  "next": "先订正。还没有知识点诊断；可从原作业的错题卡开始。"
+                }
+              ]
+            }
+          ],
+          "pack": {
+            "installed": true,
+            "message": ""
+          }
+        },
+        "school_pending": 6,
+        "school_read_gaps": [
+          {
+            "name": "虚构班级",
+            "status": "读取待核对"
+          }
+        ]
+      }
+    },
+    {
+      "step": "3-correction",
+      "method": "POST",
+      "path": "/api/record",
+      "request": {
+        "child": "示例甲",
+        "day": "2026-11-04",
+        "category": "学习进展",
+        "subject": "数学",
+        "title": "订正：练习册第12页第2题 2+3",
+        "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+        "followup_kind": "订正",
+        "related_record_id": 2,
+        "request_key": "e5cc18e7662f4548b07a1a16abd9badb"
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "record_id": 3,
+        "replayed": false,
+        "record": {
+          "id": 3,
+          "child": "示例甲",
+          "source": "家长网页记录",
+          "care_choice": "",
+          "care_review_on": ""
+        }
+      }
+    },
+    {
+      "step": "read-day",
+      "method": "GET",
+      "path": "/api/day?child_id=child-1&day=2026-11-04",
+      "request": null,
+      "status": 200,
+      "response": {
+        "today": "2026-11-04",
+        "day": "2026-11-04",
+        "child_id": "child-1",
+        "child_name": "示例甲",
+        "children": [
+          {
+            "id": "child-1",
+            "name": "示例甲"
+          },
+          {
+            "id": "child-2",
+            "name": "示例乙"
+          }
+        ],
+        "source_error": "",
+        "groups": [
+          {
+            "subject": "数学",
+            "items": [
+              {
+                "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                "kind": "task",
+                "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                "title": "数学：完成练习册第12页第2至4题",
+                "subject": "数学",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": {
+                  "feedback": 1,
+                  "wrong": 1,
+                  "wrong_ids": [
+                    2
+                  ],
+                  "clues": 0,
+                  "retries": 0,
+                  "history": 0
+                },
+                "records": [
+                  {
+                    "id": 1,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:23:37.378627",
+                    "title": "反馈：数学：完成练习册第12页第2至4题",
+                    "subject": "数学",
+                    "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+                    "note_truncated": false,
+                    "attachments": [
+                      "23d17f78c37c61fed9cb40e0ea733aca"
+                    ],
+                    "followup_kind": "",
+                    "related_record_id": null,
+                    "assistance": "",
+                    "practice_relation": "",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b"
+                  },
+                  {
+                    "id": 3,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:24:07.649372",
+                    "title": "订正：练习册第12页第2题 2+3",
+                    "subject": "数学",
+                    "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+                    "note_truncated": false,
+                    "attachments": [],
+                    "followup_kind": "订正",
+                    "related_record_id": 2,
+                    "assistance": "",
+                    "practice_relation": "",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b"
+                  }
+                ],
+                "wrong": [
+                  {
+                    "id": 2,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:24:07.599866",
+                    "title": "数学错题：第2题",
+                    "subject": "数学",
+                    "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                    "note_truncated": false,
+                    "attachments": [
+                      "23d17f78c37c61fed9cb40e0ea733aca"
+                    ],
+                    "followup_kind": "",
+                    "related_record_id": 1,
+                    "assistance": "",
+                    "practice_relation": "",
+                    "followups": [
+                      {
+                        "id": 3,
+                        "day": "2026-11-04",
+                        "created": "2026-11-04T23:24:07.649372",
+                        "title": "订正：练习册第12页第2题 2+3",
+                        "subject": "数学",
+                        "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+                        "note_truncated": false,
+                        "attachments": [],
+                        "followup_kind": "订正",
+                        "related_record_id": 2,
+                        "assistance": "",
+                        "practice_relation": ""
+                      }
+                    ],
+                    "state": "已订正",
+                    "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                    "task_title": "数学：完成练习册第12页第2至4题"
+                  }
+                ]
+              }
+            ],
+            "undated": 0
+          },
+          {
+            "subject": "英语",
+            "items": [
+              {
+                "id": "MANUAL-7d063ba964af92377533",
+                "kind": "task",
+                "task_id": "MANUAL-7d063ba964af92377533",
+                "title": "英语：明天带《单词听写本》",
+                "subject": "英语",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "明天英语课带《单词听写本》；",
+                  "不用在家练习。"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              },
+              {
+                "id": "MANUAL-10a9c26033074119c07f",
+                "kind": "task",
+                "task_id": "MANUAL-10a9c26033074119c07f",
+                "title": "英语：明天英语课听写",
+                "subject": "英语",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "明天英语课听写。"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              }
+            ],
+            "undated": 0
+          },
+          {
+            "subject": "语文",
+            "items": [
+              {
+                "id": "MANUAL-c9f61f30ed505b29902d",
+                "kind": "task",
+                "task_id": "MANUAL-c9f61f30ed505b29902d",
+                "title": "语文：朗读《晚照》2遍",
+                "subject": "语文",
+                "category": "homework",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "今晚朗读《晚照》2遍，请家长签字，明天早读检查"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-05",
+                    "known": true,
+                    "state": "next_morning"
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              }
+            ],
+            "undated": 0
+          },
+          {
+            "subject": "综合事务",
+            "items": [
+              {
+                "id": "MANUAL-fb7f1cbb735f20665aee",
+                "kind": "task",
+                "task_id": "MANUAL-fb7f1cbb735f20665aee",
+                "title": "家长：填写《出游回执》并签名交回",
+                "subject": "综合事务",
+                "category": "todo",
+                "status": "待跟进",
+                "closed": false,
+                "pending_review": false,
+                "origin": "family",
+                "origin_label": "家长录入",
+                "lines": [
+                  "今晚请家长在《出游回执》勾选参加或不参加并签名；",
+                  "下周一由孩子交回。"
+                ],
+                "plan_lines": [],
+                "complete_words": "",
+                "facts": [
+                  {
+                    "role": "due",
+                    "kind": "deadline",
+                    "label": "截止",
+                    "value": "2026-11-09",
+                    "known": true,
+                    "state": ""
+                  }
+                ],
+                "today": false,
+                "when": "later",
+                "publications": [],
+                "published_at": "",
+                "publisher": "",
+                "progress": null,
+                "records": [],
+                "wrong": []
+              }
+            ],
+            "undated": 0
+          }
+        ],
+        "closed": [],
+        "wrong": [
+          {
+            "subject": "数学",
+            "items": [
+              {
+                "id": 2,
+                "day": "2026-11-04",
+                "created": "2026-11-04T23:24:07.599866",
+                "title": "数学错题：第2题",
+                "subject": "数学",
+                "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                "note_truncated": false,
+                "attachments": [
+                  "23d17f78c37c61fed9cb40e0ea733aca"
+                ],
+                "followup_kind": "",
+                "related_record_id": 1,
+                "assistance": "",
+                "practice_relation": "",
+                "followups": [
+                  {
+                    "id": 3,
+                    "day": "2026-11-04",
+                    "created": "2026-11-04T23:24:07.649372",
+                    "title": "订正：练习册第12页第2题 2+3",
+                    "subject": "数学",
+                    "note": "订正说明：2+3=5。孩子重摆小棒数出 5 根，并口述“3 和 2 合起来是 5”。家长核对正确。",
+                    "note_truncated": false,
+                    "attachments": [],
+                    "followup_kind": "订正",
+                    "related_record_id": 2,
+                    "assistance": "",
+                    "practice_relation": ""
+                  }
+                ],
+                "state": "已订正",
+                "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                "task_title": "数学：完成练习册第12页第2至4题"
+              }
+            ]
+          }
+        ],
+        "upcoming": [],
+        "undated": [],
+        "materials": [],
+        "counts": {
+          "open": 5,
+          "closed": 0,
+          "upcoming": 0,
+          "material": 0,
+          "undated": 0,
+          "today": 0,
+          "overdue": 0,
+          "later": 5,
+          "earlier": 0,
+          "unknown": 0,
+          "passed": 0
+        },
+        "schedule": {
+          "lessons": [],
+          "plans": [],
+          "cancelled": 0,
+          "completed": 0
+        },
+        "schedule_error": "",
+        "week": [
+          {
+            "day": "2026-11-02",
+            "open": 5,
+            "today": 0,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-03",
+            "open": 5,
+            "today": 0,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-04",
+            "open": 5,
+            "today": 0,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-05",
+            "open": 5,
+            "today": 4,
+            "overdue": 0,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-06",
+            "open": 5,
+            "today": 0,
+            "overdue": 4,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-07",
+            "open": 5,
+            "today": 0,
+            "overdue": 4,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          },
+          {
+            "day": "2026-11-08",
+            "open": 5,
+            "today": 0,
+            "overdue": 4,
+            "closed": 0,
+            "upcoming": 0,
+            "schedule": 0
+          }
+        ],
+        "learning": {
+          "subjects": [
+            {
+              "subject": "数学",
+              "course": [],
+              "evidence": [
+                {
+                  "kind": "wrong",
+                  "record_id": 2,
+                  "subject": "数学",
+                  "day": "2026-11-04",
+                  "title": "数学错题：第2题",
+                  "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+                  "note_truncated": false,
+                  "state": "已订正",
+                  "task_id": "MANUAL-c0b2fcc39a7b680c4e6b",
+                  "task_title": "数学：完成练习册第12页第2至4题",
+                  "topics": [],
+                  "lines": [
+                    [
+                      "原错题",
+                      "2026-11-04 · 已订正"
+                    ]
+                  ],
+                  "next": "还没有知识点诊断；可从原作业的错题卡开始。"
+                }
+              ]
+            }
+          ],
+          "pack": {
+            "installed": true,
+            "message": ""
+          }
+        },
+        "school_pending": 6,
+        "school_read_gaps": [
+          {
+            "name": "虚构班级",
+            "status": "读取待核对"
+          }
+        ]
+      }
+    },
+    {
+      "step": "4-topic-state",
+      "method": "POST",
+      "path": "/api/topic/state",
+      "request": {
+        "child_id": "child-1",
+        "record_id": 2
+      },
+      "status": 200,
+      "response": {
+        "ok": true,
+        "record": {
+          "id": 2,
+          "day": "2026-11-04",
+          "subject": "数学",
+          "title": "数学错题：第2题",
+          "note": "题面：第2题 2+3=6\n学生原答：2+3=6\n可见订正/正确答案：2+3=5\n家长备注：家长核对：照片上是全虚构练习页；第2题 2+3 写成 6，正确是 5。\n知识点（家长核对）：10以内加法计算\n错误类型（家长核对）：加法计算结果错误\n家长对照原作答记录；这不是掌握程度结论。",
+          "basis": "07ec3b3fc22c6e2a7a41c69ea822b6177f8ee3e4cd7d7a7948a4568a9c0ec953"
+        },
+        "links": [],
+        "diagnoses": [],
+        "seen_qids": [],
+        "original_identity": {
+          "status": "no_topic",
+          "qids": []
+        },
+        "task": {
+          "id": "MANUAL-c0b2fcc39a7b680c4e6b",
+          "title": "数学：完成练习册第12页第2至4题"
+        },
+        "reviews": [],
+        "hint": {
+          "text": "10以内加法计算",
+          "status": "none",
+          "candidates": []
+        },
+        "diagnosis_hints": [],
+        "pack": {
+          "installed": true,
+          "sha": "e0f931badaed994fa8e10cfc7a30cdbdffc2dfd5",
+          "review_status": "AI初稿，未经教师审核",
+          "problems": [],
+          "message": ""
+        },
+        "deeptutor": {
+          "available": false,
+          "message": "新题判定组件未配置；可以先做诊断和看说明，复测稍后再记"
+        },
+        "topics": {}
+      }
+    },
+    {
+      "step": "4-topic-search",
+      "method": "POST",
+      "path": "/api/topic/search",
+      "request": {
+        "child_id": "child-1",
+        "record_id": 2,
+        "query": "10以内加法计算"
+      },
+      "status": 200,
+      "response": {
+        "status": "none",
+        "candidates": [],
+        "total": 0,
+        "groups": [],
+        "grade": null,
+        "review_status": "AI初稿，未经教师审核",
+        "child_grades": [
+          4
+        ]
+      }
+    }
+  ]
+}

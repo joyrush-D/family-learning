@@ -1,0 +1,110 @@
+audited family_agent.py sha1 = 517b7517f91d9bc0e08e0a0b6b806f50f54e5d77
+audited test_school_fold_visibility.py sha1 = 87bf3d6504ce0d1fa191f6038e608bb11e880486
+audited family_llm.py sha1 = bf2c974be34b6460d980d18b8e2ffc1498611be1
+NOW = 2026-11-04T20:00:00+08:00  TZ = UTC+08:00
+
+== B1 多行后到原文：卡 body（DB 实测） ==
+  [update] body='完成数学《每日练习》第26页第1—4题。\n后到更正原文（2026-11-04 16:00）：更正：数学《每日练习》第26页只做第1—3题。\n后到更正原文（2026-11-04 16:00）：明天早上交回。'
+    due='2026-11-05' (want '2026-11-05')
+    missing_parts=[]
+    label_present=False
+  [PASS] B1 update due: got='2026-11-05' want='2026-11-05'
+  [PASS] B1 update second line in body: got=True want=True
+  [PASS] B1 update first line in body: got=True want=True
+  [append] body='完成数学《每日练习》第26页第1—4题。\n后到补充原文（2026-11-04 16:00）：补充：数学《每日练习》第26页还要写算式。\n后到补充原文（2026-11-04 16:00）：算式写在练习册上。'
+    due='2026-11-06' (want '2026-11-06')
+    missing_parts=[]
+    label_present=False
+  [PASS] B1 append due: got='2026-11-06' want='2026-11-06'
+  [PASS] B1 append second line in body: got=True want=True
+  [PASS] B1 append first line in body: got=True want=True
+  [cancel] body='完成数学《每日练习》第26页第1—4题。\n取消依据（2026-11-04 16:00）：刚才带落叶那一项取消。\n取消依据（2026-11-04 16:00）：不用带叶子和旧书。'
+    due='' (want '')
+    missing_parts=[]
+    label_present=False
+  [PASS] B1 cancel due: got='' want=''
+  [PASS] B1 cancel second line in body: got=True want=True
+  [PASS] B1 cancel first line in body: got=True want=True
+  [same] body='完成数学《每日练习》第26页第1—4题。\n数学《每日练习》第26页，今晚完成。\n明天早上交。'
+    due='2026-11-06' (want '2026-11-06')
+    missing_parts=[]
+  [PASS] B1 same due: got='2026-11-06' want='2026-11-06'
+  [PASS] B1 same second line in body: got=True want=True
+  [PASS] B1 same first line in body: got=True want=True
+  note: card body 首行仍是原卡自己的第1—4题（原始通知保留，更正在其后带标签行）: 完成数学《每日练习》第26页第1—4题。
+
+== B1b accept 之后 manual_tasks.action（DB 实测） ==
+  [update] action='完成数学《每日练习》第26页。\n后到更正原文（2026-11-04 16:00）：更正：数学《每日练习》第26页只做第1—3题。\n后到更正原文（2026-11-04 16:00）：明天早上交回。'
+    source_refs=['message:s-wechat:m04'] note=True
+    missing_parts=[]
+  [PASS] B1b update all lines in action: got=[] want=[]
+  [PASS] B1b update correction not a cited message: got=False want=False
+  [PASS] B1b update note carries time+words: got=True want=True
+  [append] action='完成数学《每日练习》第26页。\n后到补充原文（2026-11-04 16:00）：补充：数学《每日练习》第26页还要写算式。\n后到补充原文（2026-11-04 16:00）：算式写在练习册上。'
+    source_refs=['message:s-wechat:m04', 'message:s-wechat:m05'] note=False
+    missing_parts=[]
+  [PASS] B1b append all lines in action: got=[] want=[]
+  [PASS] B1b append later message cited: got=True want=True
+  [cancel] action='完成数学《每日练习》第26页。\n取消依据（2026-11-04 16:00）：刚才带落叶那一项取消。\n取消依据（2026-11-04 16:00）：不用带叶子和旧书。'
+    source_refs=['message:s-wechat:m04'] note=True
+    missing_parts=[]
+  [PASS] B1b cancel all lines in action: got=[] want=[]
+  [PASS] B1b cancel correction not a cited message: got=False want=False
+  [PASS] B1b cancel note carries time+words: got=True want=True
+  [same] action='完成数学《每日练习》第26页。\n数学《每日练习》第26页，今晚完成。\n明天早上交。'
+    source_refs=['message:s-wechat:m04', 'message:s-wechat:m05'] note=False
+    missing_parts=[]
+  [PASS] B1b same all lines in action: got=[] want=[]
+  [PASS] B1b same later message cited: got=True want=True
+
+== B2 _school_late_due 改期/误设 ==
+  [PASS] B2 改到11月10日交。: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 推迟到11月10日交。: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 改为11月10日交。: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 改到11月10日。: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 改到11月10日交作业。: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 改到11月10日交回。: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 今晚完成，周五交给我。: got='2026-11-06' want='2026-11-06'
+  [PASS] B2 今天数学课带来。: got='2026-11-04' want='2026-11-04'
+  [PASS] B2 明天数学课带来。: got='2026-11-05' want='2026-11-05'
+  [PASS] B2 今晚完成。: got='' want=''
+  [PASS] B2 第12页范围不变。: got='' want=''
+  [PASS] B2 数学作业。: got='' want=''
+  [PASS] B2 改到11月10日: got='2026-11-10' want='2026-11-10'
+  [PASS] B2 改到下周。: got='' want=''
+  [PASS] B2 上课时间改到11月10日下午。: got='' want=''
+  note: 最后一条是残余提示：非作业句“上课时间改到…”不设本事项截止（更保守）；若产品希望它也改期，需另加作业对象门。
+
+== B2b 改期经 _school_fold_pending 落库 ==
+  [更正：只做第26页第1—3题，改到11月10日交。] folded=True due='2026-11-10'
+  [PASS] B2b 更正：只做第26页第1—3题，改到11月10日交。: got='2026-11-10' want='2026-11-10'
+  [推迟到11月10日交。] folded=True due='2026-11-10'
+  [PASS] B2b 推迟到11月10日交。: got='2026-11-10' want='2026-11-10'
+  [改为11月10日交。] folded=True due='2026-11-10'
+  [PASS] B2b 改为11月10日交。: got='2026-11-10' want='2026-11-10'
+
+== B3 引用约定：note 不以行首 message: 开头 + complete_on 机制 ==
+  note = 后到原文（更正/取消依据，不进本事项日期判断）：2026-11-04 16:00（message:s-wechat:m05）「更正：只做第1—3题，改到11月10日交。」
+  [PASS] B3 note starts with the note banner: got=True want=True
+  [PASS] B3 note is not a cited message line: got=False want=False
+  [PASS] B3 note carries time: got=True want=True
+  [PASS] B3 note carries words: got=True want=True
+  只有 m04（新约定：note 不是行首引用）: due_on='2026-11-10' complete_on='2026-11-04' due_kind='deadline'
+  m04+m05 都被当行首引用（旧场景）: due_on='2026-11-10' complete_on='' due_kind='deadline'
+  [PASS] B3 complete_on kept when only the first notice is cited: got='2026-11-04' want='2026-11-04'
+  [PASS] B3 mechanism: citing the correction drops complete_on (motivation real): got='' want=''
+
+== B3b _fold_school_follows 写 source 的引用约定（静态核对） ==
+  [PASS] B3b dynamic extra is gated to same/append: got=True want=True
+  [PASS] B3b notes use _school_fold_note: got=True want=True
+  [PASS] B3b notes gated to update/cancel: got=True want=True
+  [PASS] B3b no raw ref+text extra for update/cancel: got=True want=True
+  note: _fold_school_follows 端到端需要 app/配置，本轮未动态跑；其写 source 的两个表达式已静态核对。
+
+== B4 _school_role_reselect 排除列表 ==
+  [PASS] B4 exclusion tuple names 'school_folded': got=True want=True
+  [PASS] B4 exclusion is the early any(plan.get(k) for k in (...)) guard: got=True want=True
+  family_agent.py:5510: 'school_folded')):return None
+
+RESULT: GREEN
+sha after probes = 517b7517f91d9bc0e08e0a0b6b806f50f54e5d77

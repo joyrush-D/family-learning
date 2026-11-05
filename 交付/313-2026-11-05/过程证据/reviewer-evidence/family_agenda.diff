@@ -1,0 +1,245 @@
+diff --git a/family_agenda.py b/family_agenda.py
+index 17445fb..a86b732 100644
+--- a/family_agenda.py
++++ b/family_agenda.py
+@@ -1,8 +1,11 @@
+ """Calendar views of existing tasks, school inbox and study sessions; no copied tasks."""
++import collections
+ import datetime as dt
++import difflib
+ import functools
+ import json
+ import re
++import unicodedata
+ import family_agent
+ import family_calendar
+ import family_study
+@@ -999,15 +1002,151 @@ def _stated_clauses(text):
+     return {re.sub(r'^请','',c) for c in clauses}
+ 
+ 
++_CLAUSE_MARKS='，,；;。！!？?'
++_TITLE_REPEAT=0.90  # a whole line this much of the title's own words is a retelling (秋天 第2、3自然段 stays at 0.867)
++_TITLE_PREFIX=0.90  # (完成练习册第18页第2、4、6题 stays at 0.857: only its own words are new)
++_NEAR_REPEAT=0.80   # two lines this similar say one thing; a single clause this close to a shown one adds nothing
++_LABEL_LINE=re.compile(r'^(提交要求|补充要求|补充说明|正文)[：:]\s*')
++_PLAN_LINE=re.compile(r'^家庭安排（计划\s*[^）]*）[：:]\s*(.*)$')
++
++
++def _plain(text):
++    """The words of a line for comparison only: width, case, blanks and punctuation do not make a repeat; never shown."""
++    text=unicodedata.normalize('NFKC',str(text or '')).lower()
++    return ''.join(ch for ch in text if not ch.isspace() and not unicodedata.category(ch).startswith('P'))
++
++
++def _coverage(part,whole):
++    """How much of part's own words whole also has, counted as a multiset (完成《每日练习》 covers 完成英语《每日练习》)."""
++    if not part:return 0.0
++    left=collections.Counter(whole);seen=0
++    for ch in part:
++        if left.get(ch,0):left[ch]-=1;seen+=1
++    return seen/len(part)
++
++
++def _title_prefix_removed(line,title):
++    """C4: the opening of a line that is the title's own words reads once, in the title.
++
++    A prefix is only taken at a spoken punctuation mark (：，；。), never inside 《》 or brackets; it must be long enough
++    for this title (60%), covered by the title almost word for word (90%), and end on a title word, so a line that adds
++    a new word at the cut (完成练习册第18页… has 完成 of its own) keeps the whole line. Returns (rest,True) when taken;
++    rest may be empty (the line only retold the title) and then the whole line is left out."""
++    title=_plain(title)
++    if not title:return line,False
++    cuts=sorted({n for n,ch in enumerate(line) if ch in '：:，,；;。.'}|{len(line)},reverse=True)
++    for cut in cuts:
++        prefix=line[:cut].strip();rest=line[cut+1:].strip() if cut<len(line) else ''
++        part=_plain(prefix)
++        if not part or len(part)<max(2,0.6*len(title)):continue
++        if _coverage(part,title)<_TITLE_PREFIX:continue
++        if part.count(part[-1])>title.count(part[-1]):continue  # the cut may not stop on a word the title does not say
++        return rest,True
++    return line,False
++
++
++def _clause_words(line):
++    """The line's own clauses as comparison words, split at top-level commas and full stops only (the _sentences guard)."""
++    return [x for x in (_plain(part) for part in _sentences(line,_CLAUSE_MARKS)) if x]
++
++
++def _clause_covered(part,shown):
++    """C2/C5: this clause says nothing the shown clauses do not already show: the same words, a shorter form of one
++    (做完放进英语夹 for 做完放进英语夹里), or one so close that only wording differs. An extension (明天早上交练习册
++    over 明天早上交) is never covered: its new words are kept."""
++    for whole in shown:
++        if not whole:continue
++        if part==whole:return True
++        if len(part)>=2 and part in whole:return True
++        if len(part)<=len(whole)+1 and difflib.SequenceMatcher(None,part,whole).ratio()>=_NEAR_REPEAT:return True
++    return False
++
++
++def _line_repeats(line,shown):
++    """C5: a line that reads as one already shown line. Only lines whose every clause is already told, and single-clause
++    lines close enough to a shown line, are left out; a line carrying a new clause stays for that clause."""
++    norm=_plain(line)
++    if not norm:return True
++    clauses=_clause_words(line);shown_clauses=[x for whole in shown for x in _clause_words(whole)]
++    for whole in shown:
++        other=_plain(whole)
++        if not other:continue
++        if difflib.SequenceMatcher(None,norm,other).ratio()<_NEAR_REPEAT:continue
++        if len(clauses)<=1 or all(_clause_covered(clause,shown_clauses) for clause in clauses):return True
++    return False
++
++
++def _clause_repeats(part,shown):
++    """C2: only the same clause, or a shorter form of a shown one (做完放进英语夹 for 做完放进英语夹里), reads as a
++    repeat here. Near wording with its own words (完成后… for 做完…) stays: C5 then judges the whole line, not a clause."""
++    for whole in shown:
++        if not whole:continue
++        if part==whole:return True
++        if len(part)>=2 and part in whole:return True
++    return False
++
++
++def _without_repeats(line,shown):
++    """C2: every clause reads once in the card; C6 keeps every word that is not a repeat. Everything else keeps its
++    place and its own punctuation, so a line that repeats nothing reads exactly as saved."""
++    shown_clauses=[x for whole in shown for x in _clause_words(whole)]
++    kept,local,changed=[],[],False
++    for chunk in _sentences(line,_CLAUSE_MARKS):
++        part=_plain(chunk)
++        if not part:
++            if kept:kept[-1]+=chunk
++            continue
++        if part in local or _clause_repeats(part,shown_clauses+local):
++            changed=True;continue
++        local.append(part);kept.append(chunk)
++    return (''.join(kept) if changed else line),changed
++
++
++def _label_line(content,shown):
++    """C1/C6: a labelled line (提交要求：…) without its label. Its clauses the card already shows are left out; a clause
++    that only extends a shown one (明天早上交练习册 over 明天早上交) is folded into that line so both read once; the
++    rest is returned as the line's own new words. 这一页 still needs its line's 第N页 (_stated_clauses)."""
++    if not content:return '',[]
++    if shown and _stated_clauses(content)<=set().union(*map(_stated_clauses,shown)):return '',[]
++    shown_stated=set().union(*map(_stated_clauses,shown)) if shown else set()
++    shown_clauses=[x for whole in shown for x in _clause_words(whole)]
++    kept,touched=[],set()
++    for chunk in _sentences(content,_CLAUSE_MARKS):
++        part=_plain(chunk)
++        if not part:continue
++        if _clause_covered(part,shown_clauses):
++            continue
++        # 这一页 still needs its line's 第N页: a clause the card's whole line already states is no new requirement.
++        if _stated_clauses(chunk.strip())<=shown_stated:continue
++        extended=None
++        for i,whole in enumerate(shown):
++            for raw in _sentences(whole,_CLAUSE_MARKS):
++                whole_part=_plain(raw)
++                if whole_part and len(part)>len(whole_part) and part.startswith(whole_part):
++                    extended=(i,raw,whole_part);break
++            if extended:break
++        if extended:
++            i,raw,whole_part=extended
++            marks=raw[len(raw.rstrip(_CLAUSE_MARKS)):]
++            shown[i]=shown[i].replace(raw,chunk.rstrip(_CLAUSE_MARKS).strip()+marks,1)
++            touched.add(i);continue
++        kept.append(chunk)
++    return ''.join(kept).strip(),touched
++
++
+ def action_lines(title,action,words=None):
+     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
+ 
+-    Each saved line reads as its own sentences. Only words the card would repeat are left out: a first sentence that is
+-    the title's own words (with or without its leading label such as 语文：), else the title's exact label opening it,
+-    and a 提交要求 line whose words begin with the previous line's last clause, which then reads once in that line.
+-    Every other word stays, in its saved order; partial overlaps stay. The own completion words (completion_words) the
+-    item's agenda carries head the one saved line opening with the same work words. Only after every repeat is read
+-    against whole lines (这一页 needs its line's 第N页) does each shown line read as its own top-level ； parts (_steps)."""
++    Each saved line reads as its own sentences. Only words the card would repeat are left out (C1-C8 of the display
++    contract): a label such as 提交要求： opens no line of its own, a first sentence that is the title's own words (with
++    or without its leading label such as 语文：) goes, an opening the title already reads (≥90% of its words) gives way
++    to the title, a whole line that only retells the title (≥90%) goes, and every clause reads once across the card:
++    the same clause, a shorter form of a shown one, and two lines at ≥0.80 similarity say one thing. A labelled line
++    keeps its new clauses: 明天早上交练习册 folds into 今晚完成，明天早上交, while 交给数学周老师 stays. Everything else
++    keeps its saved order and punctuation. The own completion words (completion_words) the item's agenda carries head
++    the one saved line opening with the same work words. Only after every repeat is read against whole lines (这一页
++    needs its line's 第N页) does each shown line read as its own top-level ； parts (_steps); a line this reading changed
++    never ends on a dangling ； (C8)."""
+     saved=[x.strip() for x in str(action or '').splitlines()]
+     if words:saved=[words['lead']+x if x.startswith(words['work']) else x for x in saved]
+     lines=[x for line in saved if line for x in _sentences(line)]
+@@ -1017,19 +1156,31 @@ def action_lines(title,action,words=None):
+     elif lines and label:
+         own=heading[:label.end()].rstrip()  # the heading already shows this exact label (英语：)
+         if lines[0].startswith(own) and lines[0][len(own):].strip():lines[0]=lines[0][len(own):].strip()
+-    shown=[]
++    shown,edited=[],set()
+     for line in lines:
+-        restated=re.fullmatch(r'提交要求[：:]\s*(.+?)[。.；;！!\s]*',line)
+-        if restated and shown:
+-            previous=shown[-1].rstrip(_LINE_END);clause=re.split(r'[，,；;]',previous)[-1].strip()
+-            if clause and restated[1].startswith(clause):
+-                shown[-1]=previous[:len(previous)-len(clause)]+restated[1]+shown[-1][len(previous):]
+-                continue
+-            # Every clause it restates is one the card already shows (家长听完后在第20页签字 for 请家长听完后在这一页签字 of
+-            # the one 第20页 line): read once. Another page, place, object or any added clause keeps the line.
+-            if _stated_clauses(restated[1])<=set().union(*map(_stated_clauses,shown)):continue
++        line,taken=_title_prefix_removed(line,heading)
++        if taken and not _plain(line):continue
++        labelled=_LABEL_LINE.match(line)
++        if labelled:
++            line=line[labelled.end():].strip();taken=True
++            if not _plain(line):continue
++        if _plain(line) and _coverage(_plain(line),_plain(heading))>=_TITLE_REPEAT:continue
++        if labelled:
++            content,touched=_label_line(line,shown)
++            if not content:continue
++            edited.update(touched)
++            edited.add(len(shown));shown.append(content);continue
++        if _line_repeats(line,shown):continue
++        line,repeated=_without_repeats(line,shown)
++        if not _plain(line):continue
++        if taken or repeated:edited.add(len(shown))
+         shown.append(line)
+-    return [x for line in shown for x in _steps(line)]
++    out=[]
++    for i,line in enumerate(shown):
++        parts=_steps(line)
++        if i in edited:parts=[part.strip().strip('；;，,') for part in parts]
++        out.extend(part for part in parts if _plain(part))
++    return out
+ 
+ 
+ def _cited_by(c):
+@@ -2020,9 +2171,17 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
+                         pubs = pubs + [dict(p, pending=True, role='pending_reminder', label='待核提醒（未采用）', time=n.get('published_at', ''))]
+         # An oral item with no written action shows its saved manual record's own words, with their provenance; nothing guessed.
+         if oral and not lines and str((task or {}).get('title') or '').strip(): lines = ['孩子口述、家长记录：' + task['title'].strip()]
+-        # The parent's own arrangement of this same item, as the family's, on its plan day; the school's words and dates stay.
++        # The parent's own arrangement of this same item, as the family's, on its plan day; the school's words and dates
++        # stay in lines, the family's arrange reads in plan_lines (C7: the two are never one breath).
+         arranged = str(((task or {}).get('focus') or {}).get('next_action') or '').strip()
++        plan_lines = []
+         if arranged: lines = list(lines) + ['家庭安排（计划 ' + (exact_day(a.get('scheduled_on')) or '日期未定') + '）：' + arranged]
++        kept = []
++        for line in lines:
++            family = _PLAN_LINE.match(str(line))
++            if family: plan_lines.extend(x.strip() for x in family[1].splitlines() if x.strip())
++            else: kept.append(line)
++        lines = kept
+         # A past lesson or arranged day the parent keeps open with its own review due now (等学校回复, review_on) is an earlier
+         # arrangement still open (之前安排), listed with its original facts; the review day is never a school date.
+         when = day_role(a, day)
+@@ -2034,7 +2193,7 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
+                     **({'material': True} if x.get('school_material') else {}),
+                     origin='school' if school else 'oral' if oral else 'family',
+                     origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
+-                    lines=lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
++                    lines=lines, plan_lines=plan_lines, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
+                     today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')),
+                     when=when, publications=pubs, published_at=str(a.get('published_at') or ''),
+                     publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),

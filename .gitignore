@@ -423,3 +423,7 @@
 !/designs/family-grove/assets/original-sprout.png
 
 !/test_native_context_ui.cjs
+
+# 交付件与过程证据（仅 delivery/313-2026-11-05 分支）
+!/交付/
+!/交付/**

@@ -1,0 +1,120 @@
+{
+  "upload_status": 200,
+  "upload": {
+    "ok": true,
+    "attachment": {
+      "id": "08c4bc142f73286b4a7f9470dc6116cd",
+      "name": "fake-homework-page.png",
+      "size": 29661,
+      "mime": "image/png",
+      "url": "/upload/08c4bc142f73286b4a7f9470dc6116cd",
+      "sha256": "cddbb626c6de347831203e0720cf626533deb2ac15976c5bc9a817a873a05988",
+      "replayed": false
+    }
+  },
+  "feedback_status": 200,
+  "feedback": {
+    "ok": true,
+    "record_id": 1,
+    "replayed": false,
+    "record": {
+      "id": 1,
+      "child": "示例甲",
+      "source": "事项:AGENT-46d7f691d45e2af7a8132331",
+      "care_choice": "",
+      "care_review_on": ""
+    },
+    "feedback": {
+      "day": "2026-11-04",
+      "category": "学习进展",
+      "subject": "数学",
+      "note": "数学练习册第12页第2至4题：第3、4题完成，第2题 2+3 写成了 6；拍照留档，待订正。",
+      "transcript": "",
+      "transcript_state": "",
+      "assistance": "",
+      "created": "2026-11-04T23:41:12.068764",
+      "related_record_id": null,
+      "followup_kind": "",
+      "comparison_note": "",
+      "record_id": 1,
+      "task_id": "AGENT-46d7f691d45e2af7a8132331",
+      "child": "示例甲",
+      "attachments": [
+        {
+          "id": "08c4bc142f73286b4a7f9470dc6116cd",
+          "name": "fake-homework-page.png",
+          "size": 29661,
+          "mime": "image/png",
+          "url": "/upload/08c4bc142f73286b4a7f9470dc6116cd"
+        }
+      ]
+    },
+    "task": {
+      "id": "AGENT-46d7f691d45e2af7a8132331",
+      "child": "示例甲",
+      "title": "数学：完成练习册第12页第2至4题",
+      "due": "2026-11-05",
+      "original_status": "待跟进",
+      "source": "Agent建议:agent-ddcd18966c5c8c96ed22f141dd43ec38\nmessage:synthetic-group:502\n虚构班级 · 2026-11-04T16:01:00+08:00\n数学：今晚完成练习册第12页第2至4题，写出计算过程，明天交回。",
+      "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+      "focus": {
+        "mode": "next",
+        "next_action": "",
+        "waiting_for": "",
+        "review_on": "",
+        "version": 0,
+        "updated": "",
+        "category": "",
+        "published_on": "",
+        "due_on": "",
+        "scheduled_on": "",
+        "box": "inbox",
+        "title": "",
+        "goal": "",
+        "subject": ""
+      },
+      "advice": "完成后可自查计算过程是否完整。",
+      "school_origin": true,
+      "school_completion_needs_review": false,
+      "agenda": {
+        "category": "homework",
+        "published_on": "2026-11-04",
+        "published_at": "2026-11-04T16:01:00+08:00",
+        "publications": [
+          {
+            "ref": "message:synthetic-group:502",
+            "source_name": "虚构班级",
+            "sender": "虚构数学老师"
+          }
+        ],
+        "due_on": "2026-11-05",
+        "due_kind": "handback",
+        "complete_on": "2026-11-04",
+        "scheduled_on": "",
+        "category_confirmed": false,
+        "publication_known": true,
+        "box": "inbox",
+        "subjects": [
+          "数学"
+        ],
+        "subject_state": "known",
+        "subject_basis": "saved"
+      },
+      "update": null,
+      "history": [],
+      "feedback_ids": [
+        1
+      ],
+      "linked_record_ids": [],
+      "progress": {
+        "feedback": 1,
+        "wrong": 0,
+        "wrong_ids": [],
+        "clues": 0,
+        "retries": 0,
+        "history": 0
+      }
+    },
+    "completion_changed": false
+  }
+}
