@@ -1,0 +1,10 @@
+{
+  "base": "http://127.0.0.1:8833",
+  "child": "child-1",
+  "today": "2026-11-05",
+  "planItems": 0,
+  "failures": [
+    "w360 /api/day 里存在 plan_lines 非空的事项（共 0 条）",
+    "w1440 /api/day 里存在 plan_lines 非空的事项（共 0 条）"
+  ]
+}

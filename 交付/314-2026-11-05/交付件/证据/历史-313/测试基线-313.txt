@@ -1,0 +1,41 @@
+Build 313 Python 测试基线（运行时间 2026-11-04T16:56:24Z UTC）
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51
+family_agent.py: 517b7517f91d9bc0e08e0a0b6b806f50f54e5d77
+family_agenda.py: 932598a705857c718dd5852d4d19f24a98d40a3e
+
+### test_daily_list_expression
+Ran 39 tests in 0.009s
+
+OK
+### test_daily_list_whole_day
+Ran 19 tests in 4.059s
+
+OK
+### test_school_same_ready_notice
+Ran 30 tests in 0.045s
+
+OK
+### test_agenda
+Ran 26 tests in 1.663s
+
+OK
+### test_school_completion_today
+Ran 55 tests in 10.851s
+
+FAILED (failures=3)
+### test_school_fold_visibility
+Ran 21 tests in 0.030s
+
+OK
+
+### school_completion 的 3 条既有失败（与 312 基线逐名相同）
+FAIL: test_a_later_parent_edit_after_the_confirmed_correction_still_comes_first (test_school_completion_today.ConfirmedSchoolHandbackCorrectionTests.test_a_later_parent_edit_after_the_confirmed_correction_still_comes_first)
+FAIL: test_a_parent_note_under_an_accepted_duplicate_append_key_is_still_the_parent_choice (test_school_completion_today.ConfirmedSchoolHandbackCorrectionTests.test_a_parent_note_under_an_accepted_duplicate_append_key_is_still_the_parent_choice) (use_duplicate_key=False)
+FAIL: test_unknown_changed_cancelled_conflicting_or_borrowed_days_stay_unknown (test_school_completion_today.OrdinaryOwnedTimeTests.test_unknown_changed_cancelled_conflicting_or_borrowed_days_stay_unknown)
+
+### 合计
+39 + 19 + 30 + 26 + 55 + 21 = 190 tests；failures=3（仅 test_school_completion_today 的既有 3 条）
+
+### 导入检查
+import OK

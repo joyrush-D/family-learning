@@ -1,0 +1,26 @@
+构建后工作区继续变化（如实记录）
+记录时间: 2026-11-04T15:27:04Z
+
+构建快照（证据/源码版本-310.txt）:
+4c17738bb0917e0eee4c098214502ddbc363b333  app.js
+49c96594783590de3e374056743a938b1688a145  calendar.js
+8348a71661cc22860eb40423224c576bba1109a6  family_agenda.py
+f36453b251f540f2e9665a3353c93a1101df5843  packaging/macos/Sources/Workspace.swift
+2d43a51173500c2d09e2b14fb59c21d86a46bb57  packaging/macos/Sources/WorkspaceAPI.swift
+504afb2283139bb51d882b9445db25da0d46bbe8  test_school_completion_today.py
+1d997f0065d7697c3bc09385907fbad37e144cf7  workbench.css
+b4e38517925ce1b3bf0095ac0532690972285636  family_agent.py
+
+构建结束后工作区:
+4c17738bb0917e0eee4c098214502ddbc363b333  app.js
+4438f52abe2b46638b0148173311571391e93dfb  calendar.js
+8348a71661cc22860eb40423224c576bba1109a6  family_agenda.py
+f36453b251f540f2e9665a3353c93a1101df5843  packaging/macos/Sources/Workspace.swift
+2d43a51173500c2d09e2b14fb59c21d86a46bb57  packaging/macos/Sources/WorkspaceAPI.swift
+504afb2283139bb51d882b9445db25da0d46bbe8  test_school_completion_today.py
+044b048abdc128089b8b35776e81e9b8544cfc8c  workbench.css
+b4e38517925ce1b3bf0095ac0532690972285636  family_agent.py
+
+变化文件: calendar.js、workbench.css（surface 仍在收 UI v2 细节的网页资源）。
+App 二进制未受影响: Swift 源 Workspace.swift/WorkspaceAPI.swift 与 app.js/family_agenda.py 均未变；App 只编译 Swift；网页资源由后台在运行时从 REPO 读取，因此双击体验看到的是当前 REPO 的网页资源。
+如需与某个冻结视觉逐字对齐，请在 surface 冻结后用 311 重建。

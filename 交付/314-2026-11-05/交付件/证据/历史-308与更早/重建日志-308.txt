@@ -1,0 +1,51 @@
+重建开始 2026-11-04T08:07:26Z
+交付目录: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable
+REPO     : /Users/joyrush/.local/share/family-learning/public-integration-20260926
+构建号   : 308
+目标 App : /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+
+=== 1/7 记录源码版本与补丁 ===
+HEAD=58973a6b030123a77a9b860daa8eb51d12926e51
+改动文件数: 6
+补丁: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/fix.patch（66437 字节）
+
+=== 2/7 构建 App（构建号 308） ===
+替换旧 App（旧二进制 sha1: 1befa315bc4103bf37d3dbcb65e4a6d498d35867）
+产物: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+二进制 sha1: 1befa315bc4103bf37d3dbcb65e4a6d498d35867
+
+=== 3/7 签名与 Info.plist 校验 ===
+codesign --verify --deep --strict 通过；CFBundleVersion=308
+
+=== 4/7 二进制里的修复字符串 ===
+二进制含「家庭安排」1 处（UTF-8 字节计数）
+
+=== 5/7 启动全虚构后台 + 播种 + /api/day 断言（不用 8766） ===
+自检端口: 8770
+  投影模式：plan_lines 独立字段（本次修复后）（plan_lines）
+  堆叠要求样式：标签已去掉（本次修复后）（clean）
+  upcoming 列表：（空）
+  说明：本演示后台没有学校消息采集器/模型，学校「即将/待补」事项只能由真实采集流程产生；两条未来事项以「以后安排（明天）」展示，日期与明早状态核对通过。
+  
+  自检通过：今天 5 项（含《晚照》朗读、数学练习册、英语跟读、《出游回执》、《每日练习》堆叠要求），未来事项 2 项在「以后安排」且截止日期为明天；每条 title/lines 非空。
+  
+  自检模式：未打开 App。正在停止演示后台，演示数据随之清除。
+自检通过（退出码 0）；快照已存 证据/api-day-修复后.json
+逐卡核对已存 证据/演示数据核对.txt
+
+=== 6/7 网页 360/1440 截图与家庭安排块 DOM 断言（失败不阻断，但如实记入证据） ===
+起后台用于截图/DOM 断言（--serve，不打开 App，端口 8811；避开 8766/8791/8891）…
+DOM 断言通过；截图: assertions.json payload-day.json w1440-content.txt w1440-home-full.png w1440-plan-detail-MANUAL-aec7d27680d515a98bab.png w1440-plan-detail-MANUAL-aec7d27680d515a98bab.txt w1440-report.json w360-content.txt w360-home-full.png w360-plan-detail-MANUAL-aec7d27680d515a98bab.png w360-plan-detail-MANUAL-aec7d27680d515a98bab.txt w360-report.json 
+
+=== 7/7 汇总 ===
+重建完成: 2026-11-04T08:08:05Z
+REPO HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51 (58973a6)
+构建号: 308
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+App 二进制 sha1: 1befa315bc4103bf37d3dbcb65e4a6d498d35867
+fix.patch: 66437 字节
+二进制含「家庭安排」: 1 处
+--check: 通过（端口 8770）
+api-day: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-修复后.json
+家庭安排块 DOM 断言: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/家庭安排块DOM断言-308.txt（退出码 0）
+重建成功。

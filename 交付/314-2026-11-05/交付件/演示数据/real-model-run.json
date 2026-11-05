@@ -1,0 +1,237 @@
+{
+  "calls": [
+    {
+      "name": "family_agent_selection",
+      "model": "doubao-seed-evolving",
+      "evidence": [
+        "message:synthetic-group:501",
+        "message:synthetic-group:502",
+        "message:synthetic-group:503",
+        "message:synthetic-group:504",
+        "message:synthetic-group:505",
+        "message:synthetic-group:506"
+      ],
+      "ok": true,
+      "result": {
+        "proposals": [
+          {
+            "title_quote": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+            "focus": "school",
+            "due": "2026-11-05",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:501"
+              }
+            ],
+            "task_title": "语文：朗读《晚照》2遍并家长签字",
+            "task_goal": "今晚朗读《晚照》2遍；请家长签字；明天早读接受检查。",
+            "task_advice": "可分段朗读，家长在孩子读完后签字确认。",
+            "learning_subject": "语文",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "ready",
+            "task_reason": "原消息明确布置朗读遍数、家长签字和次日早读检查，要求清楚。",
+            "task_purpose": "learning",
+            "task_submission": "家长签字；明天早读接受检查"
+          },
+          {
+            "title_quote": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+            "focus": "school",
+            "due": "2026-11-05",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:502"
+              }
+            ],
+            "task_title": "数学：完成练习册第12页第2–4题",
+            "task_goal": "今晚完成练习册第12页第2至4题，写出计算过程；明天交回。",
+            "task_advice": "可先列式计算并自查计算过程，按时交回。",
+            "learning_subject": "数学",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "ready",
+            "task_reason": "原消息明确作业页码、题号、写计算过程和交回时间。",
+            "task_purpose": "learning",
+            "task_submission": "明天交回练习册"
+          },
+          {
+            "title_quote": "今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写",
+            "focus": "school",
+            "due": "2026-11-04",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:503"
+              }
+            ],
+            "task_title": "英语：跟读Unit 7第3–10个单词3遍",
+            "task_goal": "今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写。",
+            "task_advice": "可先听一遍音频，再逐词跟读3遍，注意发音。",
+            "learning_subject": "英语",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "ready",
+            "task_reason": "原消息明确听读范围、每词遍数和不用抄写，要求清楚。",
+            "task_purpose": "learning",
+            "task_submission": ""
+          },
+          {
+            "title_quote": "明天英语课听写",
+            "focus": "school",
+            "due": "2026-11-05",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:503"
+              }
+            ],
+            "task_title": "英语：Unit 7第3–10个单词听写（明天）",
+            "task_goal": "明天英语课听写Unit 7第3至10个单词。",
+            "task_advice": "可用今晚跟读的单词做熟悉，明天课堂参加听写。",
+            "learning_subject": "英语",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "ready",
+            "task_reason": "原消息明确通知明天英语课听写及单词范围，需单独记录。",
+            "task_purpose": "learning",
+            "task_submission": ""
+          },
+          {
+            "title_quote": "明天英语课带《单词听写本》，不用在家练习",
+            "focus": "school",
+            "due": "2026-11-05",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:504"
+              }
+            ],
+            "task_title": "英语：明天带《单词听写本》",
+            "task_goal": "明天英语课带《单词听写本》；不用在家练习。",
+            "task_advice": "可提前把《单词听写本》放进书包。",
+            "learning_subject": "",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "ready",
+            "task_reason": "仅要求携带听写本并明确不用在家练习，属于课前物品准备事务。",
+            "task_purpose": "admin",
+            "task_submission": "明天英语课带到课堂"
+          },
+          {
+            "title_quote": "今晚请家长在《出游回执》勾选参加或不参加并签名，下周一由孩子交回",
+            "focus": "school",
+            "due": "2026-11-09",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:505"
+              }
+            ],
+            "task_title": "家长：填写《出游回执》并签名交回",
+            "task_goal": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。",
+            "task_advice": "可今晚填写勾选并签名，放入书包以便下周一交回。",
+            "learning_subject": "",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "ready",
+            "task_reason": "原消息明确家长今晚勾选并签名、孩子下周一交回回执。",
+            "task_purpose": "admin",
+            "task_submission": "下周一由孩子交回《出游回执》"
+          },
+          {
+            "title_quote": "供参考：读物《海边小记》，自愿阅读，不布置作业，不用提交",
+            "focus": "school",
+            "due": "",
+            "evidence": [
+              {
+                "ref": "message:synthetic-group:506"
+              }
+            ],
+            "task_title": "参考：自愿阅读《海边小记》",
+            "task_goal": "供参考：读物《海边小记》，自愿阅读，不布置作业，不用提交。",
+            "task_advice": "无需安排额外练习或提交。",
+            "learning_subject": "",
+            "learning_goal_id": "",
+            "task_change": "new",
+            "task_target_id": "",
+            "task_state": "reference",
+            "task_reason": "仅为自愿阅读参考，原消息明确不布置作业且不用提交，不生成学校任务。",
+            "task_purpose": "optional",
+            "task_submission": "无需提交"
+          }
+        ]
+      }
+    }
+  ],
+  "saved": [
+    {
+      "child": "示例甲",
+      "title": "英语：明天英语课听写",
+      "due": "2026-11-05",
+      "action": "明天英语课听写。",
+      "original_status": "待跟进"
+    },
+    {
+      "child": "示例甲",
+      "title": "语文：朗读《晚照》2遍",
+      "due": "2026-11-05",
+      "action": "今晚朗读《晚照》2遍，请家长签字，明天早读检查",
+      "original_status": "待跟进"
+    },
+    {
+      "child": "示例甲",
+      "title": "英语：明天带《单词听写本》",
+      "due": "2026-11-05",
+      "action": "明天英语课带《单词听写本》；不用在家练习。",
+      "original_status": "待跟进"
+    },
+    {
+      "child": "示例甲",
+      "title": "数学：完成练习册第12页第2至4题",
+      "due": "2026-11-05",
+      "action": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回",
+      "original_status": "待跟进"
+    },
+    {
+      "child": "示例甲",
+      "title": "家长：填写《出游回执》并签名交回",
+      "due": "2026-11-09",
+      "action": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。",
+      "original_status": "待跟进"
+    }
+  ],
+  "listed": [
+    {
+      "title": "家长：填写《出游回执》并签名交回",
+      "due": null,
+      "body": "今晚请家长在《出游回执》勾选参加或不参加并签名；下周一由孩子交回。"
+    },
+    {
+      "title": "数学：完成练习册第12页第2至4题",
+      "due": null,
+      "body": "今晚完成练习册第12页第2至4题，写出计算过程，明天交回"
+    },
+    {
+      "title": "英语：明天带《单词听写本》",
+      "due": null,
+      "body": "明天英语课带《单词听写本》；不用在家练习。"
+    },
+    {
+      "title": "语文：朗读《晚照》2遍",
+      "due": null,
+      "body": "今晚朗读《晚照》2遍，请家长签字，明天早读检查"
+    },
+    {
+      "title": "英语：明天英语课听写",
+      "due": null,
+      "body": "明天英语课听写。"
+    },
+    {
+      "title": "英语：跟读Unit 7第3–10个单词3遍",
+      "due": null,
+      "body": "今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写。"
+    }
+  ]
+}
