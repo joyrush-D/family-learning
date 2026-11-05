@@ -246,7 +246,7 @@ function groveLearningHTML(v){
   +(s.course.length?`<div class="grove-card grove-course"><p class="grove-course-title">课程记录（安排与进度，不是孩子表现）</p>${s.course.map(c=>`<div data-course-record="${esc(c.record_id)}"><strong>${esc(c.title)}</strong>${c.note?`<p>${esc(c.note)}</p>`:''}<p class="small muted">${esc(c.day)} · 出处：${esc(c.source||'未写明')}</p></div>`).join('')}</div>`:'')+'</section>').join('');
 }
 function groveRows(view){return [...(view?.groups||[]),...(view?.undated||[]),...(view?.closed||[])].flatMap(g=>g.items||[])}
-function groveWide(){return matchMedia('(min-width: 900px)').matches}
+function groveWide(){return matchMedia('(min-width: 1200px)').matches}
 function groveFactWords(f){return f.state==='next_morning'?f.label+' 明天':f.state==='overdue'?'已逾期 · '+f.value:f.role==='complete'&&f.today?'今天完成':f.role==='submit'&&f.today?'今天先提交':f.role==='check'&&f.today?'今天先检查':f.label+' '+(f.known?f.value:'日期未写明')}
 function groveChipsHTML(r){
  const chips=[];if(groveWhen[r.when])chips.push(`<span class="grove-chip is-soft" data-when="${esc(r.when)}">${groveWhen[r.when]}</span>`);
@@ -289,14 +289,149 @@ function groveGroupCount(g){const u=g.undated??g.items.filter(r=>r.when==='unkno
 // every original stays in the school information page.
 function groveMaterialLineHTML(view){const m=view.materials||[];return m.length?`<p class="grove-upcoming small muted" data-grove-materials>学校资料待整理，不算当天要做：${m.map(g=>`${esc(g.subject)} ${g.items.length} 条`).join('；')}。<button type="button" data-page="agent">查看原消息与整理状态</button></p>`:''}
 function groveUpcomingHTML(view){const u=view.upcoming||[];return u.length?`<p class="grove-upcoming small muted" data-grove-upcoming>即将/待补：${u.map(x=>`${esc(x.day.slice(5))} ${esc(x.title)}${x.pending_review?'（待补）':''}${x.change?'（'+esc(x.change)+'）':''}`).join('；')}</p>`:''}
+// The shared read-only projection (family_agenda.action_lines) already hands over a card body as complete short
+// sentences, one per line. Keep one sentence per line instead of gluing them with '；' — a sentence that already ends
+// with '。' or '；' would otherwise read as the mechanical "。；" / "；；" string.
+function groveSentenceHTML(lines,cls='grove-lines'){
+ const list=(Array.isArray(lines)?lines:[]).map(x=>String(x??'').trim()).filter(Boolean);
+ return `<span class="${cls}">${list.length?list.map(esc).join('<br>'):'<em>完成标准未提供，待补充</em>'}</span>`;
+}
+// Family arrangements (server plan_lines) are the parent's own plan, not the teacher's requirement: keep them in
+// their own labelled block, never inside the requirement paragraph. An older server sends no plan_lines, so this is empty.
+function grovePlanLines(r){return (Array.isArray(r?.plan_lines)?r.plan_lines:[]).map(x=>String(x??'').trim()).filter(Boolean)}
+// 家庭安排小标签：能拿到计划日（服务端 facts 里 role=scheduled）就带上，拿不到只写“家庭安排”。
+function grovePlanLabel(r){const f=(Array.isArray(r?.facts)?r.facts:[]).find(x=>x&&x.role==='scheduled');const v=f?String(f.value??'').trim():'';return v?`家庭安排（计划 ${v}）`:'家庭安排'}
+// —— 清单卡片：科目色条 + 去科目前缀的标题 + 最多两条完整要点 + 关键约束徽章 + 独立浅色「我家安排」块 ——
+// 一行要点是共享投影给出的完整短句，句子本身怎么结束就怎么显示，不在句尾补分隔符。徽章只从原文已有的字面约束
+// （lines / complete_words / facts）里提取；原文没说就不显示，不补写、不猜。
+const groveSubjectClasses={语文:'chinese',数学:'math',英语:'english'};
+function groveSubjectClass(r){return groveSubjectClasses[String(r?.subject||'').trim()]||'general'}
+function groveTitleText(r){
+ let t=String(r?.title||'').trim();const sub=String(r?.subject||'').trim();
+ if(sub&&(t.startsWith(sub+'：')||t.startsWith(sub+':')))t=t.slice(sub.length+1);
+ else t=t.replace(/^(语文|数学|英语|科学|道德与法治|道法|综合事务|全科|科目待定)\s*[：:]\s*/,'');
+ return t.trim();
+}
+function groveDayDiff(value,today){const a=Date.parse(String(value||'')+'T12:00:00'),b=Date.parse(String(today||'')+'T12:00:00');return Number.isFinite(a)&&Number.isFinite(b)?Math.round((a-b)/86400000):null}
+function groveRelativeDay(value,today){const n=groveDayDiff(value,today);if(n===null)return '';if(n===0)return '今天';if(n===1)return '明天';if(n===2)return '后天';return '周'+'日一二三四五六'[new Date(String(value)+'T12:00:00').getDay()]}
+// 卡片正文第一行常把标题原样再说一遍：只裁「整段标题原文」前缀（前面允许今晚/今天/明早这类时间词），
+// 裁完为空或裁不到就原样显示，不做相似度匹配、不改写正文。
+const groveTimeLead=/^(?:今晚|今天|明早|明天|今早|本周末|周末)?\s*/;
+function groveStripTitlePrefix(line,title){
+ const text=String(line||'').trim(),t=String(title||'').trim();if(!text||!t)return text;
+ const lead=(text.match(groveTimeLead)||[''])[0];
+ for(const head of [lead,lead.replace(/\s+$/,'')]){
+  if(head&&text.startsWith(head)){
+   const rest=text.slice(head.length);
+   if(rest.startsWith(t)){const out=rest.slice(t.length).replace(/^[\s，,。.；;：:、]+/,'');if(out)return out}
+  }
+ }
+ if(text.startsWith(t)){const out=text.slice(t.length).replace(/^[\s，,。.；;：:、]+/,'');if(out)return out}
+ return text.replace(/^[一二三四五六七八九十]+、\s*/,'');
+}
+// 卡片最多两条步骤；第 3 条起折成一行「还有 N 条 · 查看详情」，完整要求在详情页。
+function grovePoints(r){
+ const lines=(Array.isArray(r?.lines)?r.lines:[]).map(x=>String(x??'').trim()).filter(Boolean);
+ const title=groveTitleText(r),shown=lines.slice(0,2).map(x=>groveStripTitlePrefix(x,title));
+ return {points:shown,rest:Math.max(0,lines.length-2),all:lines};
+}
+// 徽章只从原文已有的字面约束里提取，每条 ≤6 字；一屏最多 4 条，多的收成 +N。长句留在详情页。
+function groveBadges(r){
+ const text=[...(r?.lines||[]),r?.complete_words||'',...(r?.facts||[]).map(f=>[f.label,f.value].filter(Boolean).join(' '))].join('\n');
+ const out=[],add=(kind,label)=>{if(label&&!out.some(b=>b.kind===kind&&b.label===label))out.push({kind,label})};
+ if(/家长签字|需签名|请签名/.test(text))add('sign','需签字');
+ const hand=/周五交给|周五交回|周五前交|周五交/.test(text)?'周五交':/明天(?:带去|带到|带来|带)/.test(text)?'明天带':/明早(?:交|带去|带到|带来|带)/.test(text)?'明天交':/后天(?:交|带)/.test(text)?'后天交':'';
+ if(hand)add('bring',hand);
+ if(/听写/.test(text))add('due','课堂听写');
+ else if(/明早交|明早我抽听|明早抽听/.test(text))add('due','明天交');
+ if(/不(?:用|需要|需)录音|无需录音/.test(text))add('quiet','不用录音');
+ if(/不用抄写/.test(text))add('quiet','不用抄写');
+ if(/不(?:用|需要)上传/.test(text))add('quiet','不用上传');
+ if(/不用在群里发|不用发照片|不用拍照/.test(text))add('quiet','不用发照片');
+ if(/读给家长听|读给家长/.test(text))add('quiet','读给家长');
+ if(/在校完成|在学校完成/.test(text))add('quiet','在校完成');
+ return {shown:out.slice(0,4),extra:Math.max(0,out.length-4)};
+}
+// 行内日期事实：相对词、≤6 字；今天到期的截止不当灰色 chip 挂（状态点已说“今天做”），绝对日期只在详情页。
+function groveRowFactWords(f,today){
+ if(f.state==='next_morning')return '明天交';
+ if(f.state==='overdue'){const n=groveDayDiff(f.value,today);return n!==null&&n<0?`已过期 ${-n} 天`:'已过期'}
+ if(!f.known)return `${f.label} 日期未写明`;
+ const rel=groveRelativeDay(f.value,today);
+ if(f.role==='check')return rel?rel+'核对':'需核对';
+ if(f.role==='submit')return rel?rel+'交':'交回日期未定';
+ if(f.role==='complete')return rel?rel+'完成':'完成日期未定';
+ if(rel==='今天')return '';
+ return rel?rel+'截止':'截止日期未定';
+}
+function groveStatusHTML(r){
+ const when=r?.when||'today';
+ if((r?.facts||[]).some(f=>f.state==='next_morning'))return '<span class="grove-status is-due"><i></i>明天交</span>';
+ if(when==='today')return '<span class="grove-status is-today"><i></i>今天做</span>';
+ if(when==='unknown')return '<span class="grove-status is-undated"><i></i>未定</span>';
+ if(when==='overdue')return '<span class="grove-status is-overdue"><i></i>已逾期</span>';
+ return `<span class="grove-status is-later"><i></i>${esc(groveWhen[when]||'以后')}</span>`;
+}
+// 家庭安排是家长自己的计划，不是老师的要求：独立浅色块，标签沿用「我家安排（计划 日期）」。
+function grovePlanHTML(r){
+ const plan=grovePlanLines(r);if(!plan.length)return '';
+ const label=grovePlanLabel(r);
+ return `<span class="grove-plan"><span class="grove-plan-head" data-grove-plan="1">${esc(label)}</span><span class="grove-plan-lines" data-grove-plan-lines>${plan.map(esc).join('<br>')}</span></span>`;
+}
+// —— 后到原文（服务端 follow_ups）：同一事项后来的更正/补充/取消/提醒，各带发送时间与原文。旧后台没有这个键时为空，行为不变。
+// 列表卡只在卡底给一行可点的短提示（不铺原文）；完整原文在详情页按时间顺序列成独立小节。
+function groveFollowUps(r){
+ const raw=Array.isArray(r?.follow_ups)?r.follow_ups:[];
+ return raw.map(f=>{
+  if(!f||typeof f!=='object')return null;
+  const text=String(f.text??'').trim();if(!text)return null;
+  return {label:String(f.label??'').trim()||'后续通知',time:String(f.time??'').trim(),text};
+ }).filter(Boolean).sort((a,b)=>(a.time||'').localeCompare(b.time||''));
+}
+function groveFollowUpKind(label){
+ const s=String(label||'');
+ return /取消|作废/.test(s)?'cancel':/更正|修改|改正/.test(s)?'correct':/补充|追加|补发/.test(s)?'add':'notice';
+}
+// 列表提示与详情都只显示到分钟：2026-11-04 16:00 → 11-04 16:00；不是标准时间就照原样。
+function groveFollowUpTime(t){
+ const s=String(t||'').trim();if(!s)return '';
+ const m=s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})/);
+ return m?`${m[2]}-${m[3]} ${m[4]}:${m[5]}`:s;
+}
+function groveFollowUpsHintHTML(r){
+ const n=groveFollowUps(r).length;if(!n)return '';
+ return `<span class="grove-followups-hint" data-grove-followups="${n}">后续通知 ${n} 条 · 查看 ›</span>`;
+}
+function groveFollowUpsSectionHTML(r){
+ const list=groveFollowUps(r);if(!list.length)return '';
+ return `<section class="grove-card grove-followups" data-grove-followups aria-label="后续通知 ${list.length} 条"><h3>后续通知（${list.length}）</h3>`
+  +`<ul class="grove-followups-list">${list.map(f=>`<li class="grove-followup" data-followup>`
+   +`<span class="grove-followup-time">${esc(groveFollowUpTime(f.time))}</span>`
+   +`<span class="grove-followup-label is-${groveFollowUpKind(f.label)}">${esc(f.label)}</span>`
+   +`<span class="grove-followup-text">${esc(f.text)}</span></li>`).join('')}</ul></section>`;
+}
 function groveRowHTML(r){
  const on=r.id===groveSelected,meta=[groveSource(r),groveProgressWords(r.progress)].filter(Boolean).join(' · ');
  const task=r.task_id?` data-today-task="${esc(r.task_id)}" data-query-target="task:${esc(r.task_id)}"`:'';
- return `<article class="grove-row${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
-  +`${groveCheckHTML(r)}<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
-  +`<span class="grove-title">${esc(r.title)}</span><span class="grove-lines">${r.lines?.length?esc(r.lines.join('；')):'<em>完成标准未提供，待补充</em>'}</span>`
-  +`${r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:''}${groveVersionLine(r.version)}`
-  +`<span class="grove-chips">${groveChipsHTML(r)}</span>${meta?`<span class="grove-meta">${esc(meta)}</span>`:''}</button></article>`;
+ const pts=grovePoints(r),badges=groveBadges(r),steps=['①','②'],today=groveDay||data.today;
+ const times=(r.times||[]).map(t=>`<span class="grove-chip is-leaf" data-plan-time="${esc(t.id)}">日程 ${esc(groveClock(t))}</span>`).join('');
+ // 行内日期事实：[data-fact] 保留（读屏与既有测试都读），文字是相对词，今天到期的截止不挂。
+ const extra=(r.facts||[]).filter(f=>['due','submit','check','complete'].includes(f.role))
+  .map(f=>({f,text:groveRowFactWords(f,today)})).filter(x=>x.text)
+  .map(({f,text})=>`<span class="grove-chip is-fact${f.state==='next_morning'||f.state==='overdue'?' is-coral':''}" data-fact="${esc(f.role)}">${esc(text)}</span>`).join('');
+ const more=pts.rest?`<span class="grove-point-more">还有 ${pts.rest} 条 · 查看详情 ›</span>`:'';
+ return `<article class="grove-row subj-${groveSubjectClass(r)}${on?' is-selected':''}${r.closed?' is-done':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
+  +`${groveTitleText(r)!==String(r.title||'').trim()?`<span class="grove-sr" data-grove-full-title>${esc(r.title)}</span>`:''}${groveCheckHTML(r)}<button type="button" class="grove-open" data-grove-open="${esc(r.id)}" aria-controls="groveDetail" aria-pressed="${on}">`
+  +`<span class="grove-card-head"><span class="grove-title">${esc(groveTitleText(r))}</span>${r.closed?'<span class="grove-status is-done"><i></i>已办</span>':groveStatusHTML(r)}</span>`
+  +(pts.points.length?`<span class="grove-points">${pts.points.map((p,i)=>`<span class="grove-point">${pts.points.length>1?steps[i]+' ':''}${esc(p)}</span>`).join('')}${more}</span>`:'')
+  +(badges.shown.length?`<span class="grove-badges">${badges.shown.map(b=>`<span class="grove-badge is-${b.kind}">${esc(b.label)}</span>`).join('')}${badges.extra?`<span class="grove-badge is-more">+${badges.extra}</span>`:''}</span>`:'')
+  +grovePlanHTML(r)
+  +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:'')
+  +groveVersionLine(r.version)
+  +((times||extra||r.pending_review)?`<span class="grove-chips">${times}${extra}${r.pending_review?'<span class="grove-chip is-coral">待核对</span>':''}</span>`:'')
+  +(meta?`<span class="grove-meta">${esc(meta)}</span>`:'')
+  +groveFollowUpsHintHTML(r)
+  +'</button></article>';
 }
 function groveMaterialHTML(f){
  const tone=f.state==='ready'?' is-leaf':['unread','error'].includes(f.state)?' is-coral':'';
@@ -315,7 +450,7 @@ function groveMaterialsHTML(id){
  if(!m||m.loading)return '<h3>资料</h3><p class="small muted" role="status">正在读取资料…</p>';
  if(m.error)return `<h3>资料</h3><p class="error" role="alert">${esc(m.error)}</p><button type="button" data-grove-materials-retry="${esc(id)}">重新读取资料</button>`;
  const files=m.files||[],unread=files.filter(f=>['unread','error','partial'].includes(f.state)).length;
- return `<h3>资料 · ${files.length} 份${unread?`（${unread} 份尚未读清）`:''}</h3>${files.map(groveMaterialHTML).join('')||'<p class="small muted">这一项没有已保存的原件。</p>'}${m.school_error?`<p class="grove-unclear">${esc(m.school_error)}</p>`:''}`;
+ return `<h3>资料 · ${files.length} 份${unread?`（${unread} 份尚未读清）`:''}</h3>${files.map(groveMaterialHTML).join('')||'<p class="small muted grove-empty-line">这一项没有已保存的原件。</p>'}${m.school_error?`<p class="grove-unclear">${esc(m.school_error)}</p>`:''}`;
 }
 async function groveLoadMaterials(id,force=false){
  if(!force&&groveMaterials.has(id))return;groveMaterials.set(id,{loading:true});
@@ -352,18 +487,32 @@ function groveDetailHTML(r){
  const more=(open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button><button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:'')
   +(open&&homework?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:'')+`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`
   +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(!uncertain&&taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
- const standards=r.lines?.length?`<ul class="grove-standards">${r.lines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
- return back+head(originals||pendingOriginals?`<span class="grove-originals">${originals}${pendingOriginals}</span>`:'')
+ const detailLines=(r.lines||[]).map(l=>groveStripTitlePrefix(l,groveTitleText(r)));
+ const standards=r.lines?.length?`<ul class="grove-standards">${detailLines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>`:'<p class="grove-unclear">完成标准未提供，待补充</p>';
+ const plan=grovePlanLines(r);
+ const d=groveDay||data.today,wd='日一二三四五六'[new Date(d+'T12:00:00').getDay()],dateLabel=groveShort(d)+' 周'+wd;
+ const sourceRefs=(originals||pendingOriginals)?`<span class="grove-detail-refs">${originals}${pendingOriginals}</span>`:'';
+ const completeBits=[r.complete_words?`<p>${esc(r.complete_words)}</p>`:'',
+  (!t.agenda?.due_on&&t.due&&t.due!=='无明确截止')?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:'',
+  t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''].filter(Boolean).join('');
+ return back
+  +`<div class="grove-detail-top"><span class="grove-tag">${esc(r.subject)}</span><span class="grove-detail-date">${esc(dateLabel)}</span>${sourceRefs}</div>`
+  +`<h2 class="grove-h grove-detail-title" aria-label="${esc(r.title)}">${(()=>{const full=String(r.title||'').trim(),short=groveTitleText(r),pre=full.endsWith(short)?full.slice(0,full.length-short.length):'';return pre?`<span class="grove-hide">${esc(pre)}</span>`:''})()}${esc(groveTitleText(r))}</h2>`
+  +((groveSource(r)||r.origin_label)?`<p class="grove-detail-source">${esc([groveSource(r)&&groveSource(r)+' 发布',r.origin_label].filter(Boolean).join(' · '))}</p>`:'')
+  +(facts?`<div class="grove-facts grove-detail-badges">${facts}</div>`:'')
   +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
-  +`<section class="grove-card"><h3>要做什么与完成标准</h3>${standards}${r.complete_words?`<p class="small muted">完成要求：${esc(r.complete_words)}</p>`:''}${!t.agenda?.due_on&&t.due&&t.due!=='无明确截止'?`<p class="small muted">原日期要求：${esc(t.due)}</p>`:''}${t.school_completion_needs_review?'<p class="note" data-school-completion-review>原要求已完成；更正后是否需补做、是否已完成，待家长核对。</p>':''}</section>`
+  +`<section class="grove-card grove-detail-steps"><h3>要做什么</h3>${standards}</section>`
+  +(completeBits?`<section class="grove-card grove-detail-standard"><h3>完成标准</h3>${completeBits}</section>`:'')
+  +groveFollowUpsSectionHTML(r)
+  +(plan.length?`<section class="grove-card grove-plan-card" data-grove-plan-lines><h3>${esc(grovePlanLabel(r))}</h3><ul class="grove-standards">${plan.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></section>`:'')
   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
   +groveVersionHTML(r.version)
-  +`<div class="grove-facts">${facts}</div>`
   +`<section class="grove-card grove-materials" data-grove-materials="${esc(t.id)}" aria-live="polite">${groveMaterialsHTML(t.id)}</section>`
   +(homework?`<div class="grove-actions grove-print">${open?`<button data-homework-print="${esc(t.id)}" data-print-intent="original">打印原卷</button><button data-homework-print="${esc(t.id)}" data-print-intent="reference">打印家长参考</button>`:''}<p class="small muted">打印先在确认里核对依据和所选资料，确认后才排队。</p></div>`:'')
-  +`<section class="grove-card"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted">还没有反馈。照片可以不交，只写几句文字也行；没有反馈不等于没做。</p>'}<div class="grove-actions">${primary}</div></section>`
+  +`<section class="grove-card grove-detail-feedback"><h3>反馈与订正</h3>${taskProgressHTML(t)}${t.update?.note?`<p class="feedback task-feedback-summary">${esc(t.update.note)}</p>`:''}${history?`<ul class="grove-history">${history}</ul>`:'<p class="small muted grove-empty-line">还没有反馈；照片可以不交，写几句文字也成。</p>'}<div class="grove-actions grove-detail-actions">${primary}</div></section>`
   +`<details class="grove-more"><summary>更多操作</summary><div class="tasktools">${more}</div></details>`;
 }
+
 function groveSelect(id,user){
  groveSelected=id;groveScope=groveScopeOf(groveView(),id);
  if(!groveWide()){groveDetailOpen=true;if(user&&!history.state?.grove)history.pushState({grove:id},'',location.pathname+location.search)}
@@ -402,10 +551,20 @@ function todayTasksHTML(){
  const readGap=sources.some(s=>currentSourceStatus(s)!=='最近读取成功')||!!data.sync_error||(!currentSources().length&&!!data.agent?.last_error);
  const originalGap=sources.some(s=>s.unread_count>0);
  const summary=[`共 ${c.open||0} 项`,`今天要做 ${c.today||0}`,...[['later','以后安排'],['overdue','已过期限'],['earlier','之前安排'],['unknown','日期未写明'],['passed','已过'],['upcoming','即将/待补']].filter(([k])=>c[k]).map(([k,l])=>`${l} ${c[k]}`)].join(' · ');
- const groups=(view.groups.map(g=>`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2>`
-  +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')
-  ||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
- const closed=(view.closed||[]).flatMap(g=>g.items||[]);
+ const closedGroups=view.closed||[],closedItems=closedGroups.flatMap(g=>g.items||[]);
+ // 已办的行按科目并到该科目分组末尾（压灰打勾），不在清单外另起一段；scope=已办 仍用下面的完整列表。
+ const closedBySubject=new Map();
+ for(const g of closedGroups)closedBySubject.set(g.subject,[...(closedBySubject.get(g.subject)||[]),...(g.items||[])]);
+ const groups=[];
+ for(const g of view.groups||[]){
+  const items=[...(g.items||[]),...(closedBySubject.get(g.subject)||[])];closedBySubject.delete(g.subject);
+  if(!items.length)continue;
+  groups.push(`<section class="grove-subject subject-group" data-subject="${esc(g.subject)}" id="${esc(taskSubjectID(g.subject))}" tabindex="-1"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount({...g,items}))}</span></h2>`
+   +`${g.subject===subjectUnknown?'<p class="small muted">原消息没有说明科目；可在事项里补充，未补充也照常保留。</p>':''}<div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${items.map(groveRowHTML).join('')}</div></section>`);
+ }
+ for(const [subject,items] of closedBySubject)groups.push(`<section class="grove-subject subject-group" data-subject="${esc(subject)}" id="${esc(taskSubjectID(subject))}" tabindex="-1"><h2 class="grove-tag">${esc(subject)}<span>${esc(items.length+' 项')}</span></h2><div class="grove-rows homework-child" data-homework-child="${esc(currentChild()?.id)}">${items.map(groveRowHTML).join('')}</div></section>`);
+ const groupsHTML=(groups.join('')||'<p class="grove-empty-list">这一天没有已整理的未完成事项；没有反馈不等于没做。</p>')+groveUpcomingHTML(view)+groveMaterialLineHTML(view);
+ const closed=closedItems;
  // Actions with no exact date (server view.undated) and this day's done rows are the day's other two parts, each its own list
  // with the same rows, ids and detail; a direct switch (待办 / 日期未定 N / 已办 N) shows one, never a fold. They are not this day's count.
  const undated=view.undated||[],undatedN=undated.reduce((a,g)=>a+(g.items||[]).length,0);
@@ -414,18 +573,28 @@ function todayTasksHTML(){
  const undatedHTML=undatedN?`<div class="today-task-groups grove-undated" data-grove-undated data-grove-scope-list="undated"${scope==='undated'?'':' hidden'}><p class="small muted">日期未定/待安排 ${undatedN} 项 · 不算这一天</p>${undated.map(g=>`<section class="grove-subject" data-subject="${esc(g.subject)}"><h2 class="grove-tag">${esc(g.subject)}<span>${esc(groveGroupCount(g))}</span></h2><div class="grove-rows">${g.items.map(groveRowHTML).join('')}</div></section>`).join('')}</div>`:'';
  const gap=readGap?'<p class="note today-source-gap" role="status">消息读取有缺口，清单可能缺项。<button data-page="sources" data-collection-check>检查最新消息</button></p>':originalGap?'<p class="note today-source-gap">部分消息原件尚未读全。<button data-page="sources">查看消息来源</button></p>':'';
  const add=data.children.filter(x=>x.name===child).map(x=>`<button class="primary" data-homework-new="${esc(x.id)}">＋ 补录口头作业</button>`).join('');
+ // 顶部压紧：孩子与日期一行、进度一条、下一步按钮一行；孩子切换留在顶部，不随页面滚动浮在卡片上。
+ const doneN=c.closed||0,totalN=((c.today||0)+doneN)||rows.length,pct=totalN?Math.round(doneN*100/totalN):0;
+ const weekday='日一二三四五六'[new Date(day+'T12:00:00').getDay()],heroDate=groveShort(day)+' 周'+weekday;
+ const hero=`<header class="grove-list-head grove-hero"><div class="grove-hero-top"><div class="today-controls">${filters()}</div><span class="grove-hero-date">${esc(heroDate)}</span></div>`
+  +`<div class="grove-hero-main"><h1 id="groveListTitle" class="grove-hero-title">${day===data.today?'今天':'这天'} <strong>${totalN}</strong> 件事</h1>`
+  +`<div class="grove-hero-actions">${add}${day===data.today?`<button type="button" class="grove-quiet" data-grove-day="${esc(calendarAdd(day,1))}">看明天 ›</button>`:`<button type="button" class="grove-quiet" data-grove-day="${esc(data.today)}">回到今天</button><button type="button" class="grove-quiet" data-grove-day="${esc(calendarAdd(day,1))}">看下一天 ›</button>`}</div></div>`
+  +`<div class="grove-progress-row"><span class="grove-progress-words">已完成 ${doneN}</span><div class="grove-progress" role="progressbar" aria-valuemin="0" aria-valuemax="${Math.max(totalN,1)}" aria-valuenow="${doneN}" aria-label="一天的完成进度"><i style="width:${pct}%"></i></div><span class="grove-progress-words">还剩 ${Math.max(0,totalN-doneN)}</span></div>`
+  +`<p class="grove-summary grove-sr" data-grove-summary>${esc([day===data.today?day+' 今天':day,...String(summary).split(' · ')].join(' · '))}</p></header>`;
+ const hasSchedule=!!(view.schedule&&(view.schedule.lessons?.length||view.schedule.plans?.length))||!!view.schedule_error;
  return `<div class="grove" data-view="${groveDetailOpen&&!groveWide()?'detail':'list'}" data-tab="${esc(groveTab)}"><section class="grove-list" aria-labelledby="groveListTitle">`
-  +`<div class="today-controls">${filters()}</div>${groveTabsHTML(view)}`
+  +`<div class="grove-hero-wrap">${hero}${groveTabsHTML(view)}</div>`
   +(groveTab==='wrong'?`<header class="grove-list-head"><div><h1 id="groveListTitle">错题本</h1><p class="grove-summary">该孩子全部错题，按科目；订正后仍保留原题与原作业。</p></div></header><div class="grove-wrongbook">${groveWrongHTML(view)}</div></section></div>`
    :groveTab==='learning'?`<header class="grove-list-head"><div><h1 id="groveListTitle">学习进展</h1><p class="grove-summary">按科目看原错题、知识点线索与再试；线索不等于掌握。</p></div></header><div class="grove-learning-list">${groveLearningHTML(view)}</div></section></div>`
-   :groveWeekHTML(view,day)
-  +`<header class="grove-list-head"><div><h1 id="groveListTitle">当天清单</h1><p class="grove-summary" data-grove-summary>${[day===data.today?day+' 今天':day,...String(summary).split(' · ')].map(s=>`<span class="grove-nowrap">${esc(s)}</span>`).join(' · ')}</p></div>${day===data.today?add:`<button type="button" data-grove-day="${esc(data.today)}">回到今天</button>`}</header>`
-  +`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
-  +groveScheduleHTML(view)
-  +scopeHTML+`<div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${scope==='open'?'':' hidden'}>${groups}</div>`+undatedHTML
-  +(closed.length?`<div class="grove-closed" data-grove-scope-list="closed"${scope==='closed'?'':' hidden'}><p class="small muted">这一天已办 ${closed.length} 项</p><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></div>`:'')
-  +`</section><section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`);
+   :`${r.source_error?`<p class="error" role="status">${esc(r.source_error)}</p>`:''}${gap}${schoolProcessingHTML()}`
+    +(hasSchedule?groveScheduleHTML(view):'')
+    +`<div class="today-task-groups" id="task-groups" data-grove-scope-list="open"${scope==='open'?'':' hidden'}>${groupsHTML}</div>`+undatedHTML+scopeHTML
+    +(closed.length?`<div class="grove-closed" data-grove-scope-list="closed"${scope==='closed'?'':' hidden'}><p class="small muted">这一天已办 ${closed.length} 项</p><div class="grove-rows">${closed.map(groveRowHTML).join('')}</div></div>`:'')
+    +`<div class="grove-week-wrap">${groveWeekHTML(view,day)}</div>`
+    +(!hasSchedule?groveScheduleHTML(view):''))
+  +`</section><section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section></div>`;
 }
+
 function todayTasksLegacyHTML(){
  const r=data.today_calendar;if(!Array.isArray(r?.inbox))return taskInboxHTML();
  const matches=x=>(x.child_ids||[x.child_id]).includes(currentChild()?.id);

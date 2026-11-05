@@ -68,6 +68,10 @@ struct DayItem: Decodable, Hashable, Identifiable {
     let origin: String
     let origin_label: String
     let lines: [String]
+    /// 家庭安排（服务端 plan_lines，从老师要求里拆出来的家长自己的计划）。较早后台不带这个键时为 nil，不当作解码失败。
+    let plan_lines: [String]?
+    /// 后到原文（服务端 follow_ups：更正/补充/取消/提醒，各带发送时间与原文）。较早后台不带这个键时为 nil，不当作解码失败。
+    let follow_ups: [DayFollowUp]?
     let complete_words: String
     let facts: [DayFact]
     let today: Bool
@@ -87,6 +91,8 @@ struct DayItem: Decodable, Hashable, Identifiable {
 }
 
 struct ItemVersion: Decodable, Hashable { let state: String; let change: String?; let note: String? }
+/// 同一事项的后到原文：label=更正/补充/取消/提醒，time=发送时间，text=原文。较早后台没有这个键，按“未提供”处理。
+struct DayFollowUp: Decodable, Hashable { let label: String?; let time: String?; let text: String? }
 /// 以后课堂/待补范围的事项：发生日完整列出，此前只在“即将/待补”一行提到（服务端同一规则，不另计入当天）。
 struct UpcomingItem: Decodable, Hashable { let id: String; let title: String; let subject: String; let day: String; let pending_review: Bool; let change: String? }
 

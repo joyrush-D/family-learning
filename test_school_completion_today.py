@@ -779,7 +779,9 @@ class ActionLinesTests(unittest.TestCase):
                 ('语文：A', '读B！！今晚完成', ['读B！！', '今晚完成']),
                 ('英语：跟读', '英语听录音。今晚完成。', ['英语听录音。', '今晚完成。']),
                 ('语文：A', '英语：读B。今晚完成。', ['英语：读B。', '今晚完成。']),
-                ('英语：跟读', '英语：', ['英语：']),
+                # C3 (display contract): a line that is only the title's own words (英语：) reads once in the title, so no
+                # body line is left to show.
+                ('英语：跟读', '英语：', []),
                 ('读三段并回答', '读三段并回答。每题写出依据。', ['每题写出依据。'])]:
             with self.subTest(title=title, action=action):
                 self.assertEqual(family_agenda.action_lines(title, action), shown)
@@ -789,15 +791,19 @@ class ActionLinesTests(unittest.TestCase):
     def test_only_the_title_s_own_line_and_a_restated_handback_clause_are_left_out(self):
         for title, action, shown in [
                 ('读三段并回答', '读三段并回答', []),
-                ('读三段并回答', '读三段并回答。\n每题写出依据，不少于20字\n提交要求：交纸质稿', ['每题写出依据，不少于20字', '提交要求：交纸质稿']),
+                ('读三段并回答', '读三段并回答。\n每题写出依据，不少于20字\n提交要求：交纸质稿', ['每题写出依据，不少于20字', '交纸质稿']),
                 # A partial overlap with the title is never left out; its own ； parts read as its steps (every word kept).
                 ('写生词', '写生词10个，每个3遍；家长签字', ['写生词10个，每个3遍；', '家长签字']),
-                ('数学：完成同步练习第3课', '完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业', ['完成同步练习第3课，周四交', '提交要求：交同步练习第3课作业']),
+                # C1 (display contract): the 提交要求： label never reads in the body; the requirement after it stays, so
+                # every saved word is still read here. The first line is untouched (its opening is the heading's words).
+                ('数学：完成同步练习第3课', '完成同步练习第3课，周四交\n提交要求：交同步练习第3课作业', ['完成同步练习第3课，周四交', '交同步练习第3课作业']),
                 ('科学：带一个空透明塑料瓶', '明天来校带一个空透明塑料瓶，科学课用。', ['明天来校带一个空透明塑料瓶，科学课用。']),
                 ('英语：跟读Unit 4两遍并家长签字', '听录音跟读 Unit 4 A day at the lake 两遍。', ['听录音跟读 Unit 4 A day at the lake 两遍。']),
                 ('语文：A', '今晚完成，明天交。\n提交要求：明天交。', ['今晚完成，明天交。']),
-                ('语文：A', '今晚完成，不用明天交。\n提交要求：明天交练习册。', ['今晚完成，不用明天交。', '提交要求：明天交练习册。']),
-                ('语文：A', '提交要求：明天交练习册。', ['提交要求：明天交练习册。'])]:
+                # C1 (display contract): a 提交要求： label never reads in the body; a restated clause is still dropped.
+                ('语文：A', '今晚完成，不用明天交。\n提交要求：明天交练习册。', ['今晚完成，不用明天交。', '明天交练习册。']),
+                # C1/C6 (display contract): with nothing shown before it, the label line keeps its whole new requirement.
+                ('语文：A', '提交要求：明天交练习册。', ['明天交练习册。'])]:
             with self.subTest(title=title, action=action):
                 self.assertEqual(family_agenda.action_lines(title, action), shown)
 
@@ -1499,21 +1505,28 @@ class ClearStandardsTests(unittest.TestCase):
         shown = family_agenda.action_lines('英语：朗读课本第20页对话三遍', action)
         self.assertEqual(shown, STEP_CARD_LINES['第20页'])
         self.assertEqual(''.join(shown), CLEAR_EN_GOAL)
-        for action in [
+        for action, kept in [
                 # Two pages: 这一页 has no single antecedent in its instruction.
-                '今晚朗读课本第20页和第21页的对话；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。',
+                ('今晚朗读课本第20页和第21页的对话；请家长听完后在这一页签字；明天早读检查。\n提交要求：家长听完后在第20页签字，明天早读检查。',
+                 '家长听完后在第20页签字'),
                 # Another place on the same page is another signature (N02).
-                '完成第20页后，请家长在本页右上角签字，并在本页下方家长栏再签一次。\n提交要求：家长在第20页签字。',
+                ('完成第20页后，请家长在本页右上角签字，并在本页下方家长栏再签一次。\n提交要求：家长在第20页签字。',
+                 '家长在第20页签字'),
                 # Another signed object (N01).
-                '今晚朗读课本第20页三遍，家长听完后在第20页签字。\n提交要求：请家长在《朗读活动确认单》上签字，明早交给老师。',
+                ('今晚朗读课本第20页三遍，家长听完后在第20页签字。\n提交要求：请家长在《朗读活动确认单》上签字，明早交给老师。',
+                 '《朗读活动确认单》上签字'),
                 # A restated line with a requirement of its own.
-                CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。',
+                (CLEAR_EN_GOAL + '\n提交要求：家长听完后在第20页签字，明天早读检查，带回课本。', '带回课本'),
                 # Root's exact counter-proof on 941547c: 本页 names another material's page (听写本), never 课本第20页.
-                '朗读课本第20页；家长在听写本本页签字。\n提交要求：家长在听写本第20页签字。',
+                ('朗读课本第20页；家长在听写本本页签字。\n提交要求：家长在听写本第20页签字。', '家长在听写本第20页签字'),
                 # Root's frozen guard (static before this run): another material taken out between the page and 本页.
-                '朗读课本第20页；取出听写本；家长在本页签字。\n提交要求：家长在第20页签字。']:
+                ('朗读课本第20页；取出听写本；家长在本页签字。\n提交要求：家长在第20页签字。', '家长在第20页签字')]:
             with self.subTest(action=action):
-                self.assertTrue(any(x.startswith('提交要求') for x in family_agenda.action_lines('英语：朗读', action)))
+                shown = family_agenda.action_lines('英语：朗读', action)
+                # C1 (display contract): the 提交要求： label never reads in the body, but a label line's own new words must
+                # survive every restatement guard: they no longer carry the label that used to mark them.
+                self.assertFalse(any(x.startswith(('提交要求', '补充要求', '补充说明', '正文')) for x in shown), shown)
+                self.assertTrue(any(kept in x for x in shown), (kept, shown))
 
     def test_only_the_item_s_own_check_words_make_its_day_a_check(self):
         sent = '2026-10-21'
@@ -1624,6 +1637,8 @@ class RequirementStepTests(unittest.TestCase):
                 ('英语：A', 'Read page 20; ask a parent to sign.', ['Read page 20; ask a parent to sign.']),
                 # A negation, a quantity and a part in the title's own words all stay: no new omission.
                 ('语文：A', '不用抄写课文；只读第2段两遍。', ['不用抄写课文；', '只读第2段两遍。']),
+                # Unchanged: the line's first clause is the heading's own words, so it is not cut away — the body reads
+                # the whole requirement, both the work and the signature that follows it (no information disappears).
                 ('英语：朗读课本第20页对话三遍', '朗读课本第20页对话三遍；家长签字。', ['朗读课本第20页对话三遍；', '家长签字。']),
                 # Marks alone never make a line.
                 ('语文：A', '读第1段；。', ['读第1段；。']),

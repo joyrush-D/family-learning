@@ -145,6 +145,7 @@
 !/test_school_saved_reread.py
 !/test_school_same_affair.py
 !/test_school_same_ready_notice.py
+!/test_school_fold_visibility.py
 !/test_p1a_requirement_units.py
 !/test_p1b_material_completeness.py
 !/test_p1a_requirement_units.json
@@ -300,6 +301,7 @@
 !/test_daily_list_frozen.py
 !/test_daily_list_progress.py
 !/test_daily_list_whole_day.py
+!/test_daily_list_expression.py
 !/test_daily_action_scope.py
 !/test_image_original_date_scope.py
 !/test_image_original_date_scope.json

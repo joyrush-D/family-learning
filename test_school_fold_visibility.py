@@ -1,0 +1,227 @@
+"""Fictional regressions: a fold's later original stays visible for all four changes and its day wins.
+
+The program folds a proved later notice into the waiting card or the saved task instead of opening an orphan card. These
+tests keep that fold from hiding its own text: every line of the later original stays in order (a correction may state
+its new range on one line and its new day on the next), the labelled replacement and the ground of a cancellation stay
+readable, a moved day counts with or without a hand-back verb, and the later message stays readable in the task's
+sources by the same note convention on both the pending-card and the saved-task path (never a cited message line, which
+the agenda would read as one of the affair's own day-role messages).
+"""
+import datetime as dt
+import json
+import sqlite3
+import unittest
+
+import family_agent as agent
+
+NOW = dt.datetime(2026, 11, 4, 20, 0, tzinfo=agent.TZ)
+
+
+class _DB:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self.connection
+
+    def __exit__(self, *error):
+        return False
+
+
+class _Store:
+    """A store shim with only the read/write surface the fold helpers touch."""
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def _db(self):
+        return _DB(self.connection)
+
+
+def quote(ref, text, time, change='same'):
+    return dict(ref=ref, text=text, time=time, sender='数学李老师', publisher='publisher:fiction-math',
+                kind='text', content_incomplete=False, attachments=[], related_messages=[ref], source='虚构班级')
+
+
+def folded(change, ref='message:fiction-group:9', text='数学《星河练习》第12页第1—3题，今晚完成。'):
+    return dict(item_id='agent-card', refs=[ref], change=change, at=NOW.isoformat(),
+                originals=[dict(ref=ref, text=text, time='2026-11-04T17:00:00+08:00')])
+
+
+class FoldedLinesTest(unittest.TestCase):
+    def test_reminder_lines_stay_as_written(self):
+        lines = agent._school_folded_lines(dict(school_folded=[folded('same')]))
+        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', lines)
+
+    def test_appended_and_updated_lines_stay_labelled(self):
+        appended = agent._school_folded_lines(dict(school_folded=[folded('append', text='交回时间不变。')]))
+        self.assertIn('后到补充原文（2026-11-04 17:00）：交回时间不变。', appended)
+        updated = agent._school_folded_lines(dict(school_folded=[folded('update', text='更正第12页范围：只做第1—3题，第4题不做。')]))
+        self.assertTrue(any(line.startswith('后到更正原文（2026-11-04 17:00）：') and '第4题不做' in line for line in updated), updated)
+
+    def test_every_line_of_a_multiline_correction_stays_in_order(self):
+        text = '更正：数学《每日练习》第26页只做第1—3题。\n明天早上交回。'
+        lines = agent._school_folded_lines(dict(school_folded=[folded('update', text=text)]))
+        joined = '\n'.join(lines)
+        self.assertIn('只做第1—3题', joined)
+        self.assertIn('明天早上交回', joined)
+        self.assertLess(joined.index('只做第1—3题'), joined.index('明天早上交回'))
+
+    def test_every_line_of_a_multiline_cancellation_stays(self):
+        text = '明天美术改用教室材料，刚才收集落叶那一项取消。\n不用带叶子和旧书。'
+        lines = agent._school_folded_lines(dict(school_folded=[folded('cancel', text=text)]))
+        joined = '\n'.join(lines)
+        self.assertIn('取消', joined)
+        self.assertIn('不用带叶子和旧书', joined)
+
+    def test_cancellation_ground_stays_labelled(self):
+        lines = agent._school_folded_lines(dict(school_folded=[folded('cancel', text='刚才带落叶那一项取消，不用带。')]))
+        self.assertTrue(any(line.startswith('取消依据（2026-11-04 17:00）：') and '取消' in line for line in lines), lines)
+
+    def test_a_correction_line_names_the_sending_moment(self):
+        lines = agent._school_folded_lines(dict(school_folded=[folded('update', text='更正：只做第1—3题。')]))
+        self.assertTrue(lines and all(line.startswith('后到更正原文（2026-11-04 17:00）：') for line in lines), lines)
+
+    def test_an_unfolded_plan_adds_nothing(self):
+        self.assertEqual(agent._school_folded_lines({}), [])
+
+    def test_body_carries_every_change_after_the_first_lines(self):
+        plan = dict(school_folded=[folded('update', text='第12页只做第1—3题，第4题不做。')])
+        body = agent._school_folded_body(plan, '完成数学《星河练习》第12页。')
+        self.assertEqual(body.split('\n')[0], '完成数学《星河练习》第12页。')
+        self.assertTrue(any('第4题不做' in line for line in body.split('\n')))
+
+
+class FoldedDueTest(unittest.TestCase):
+    def test_an_update_states_its_own_new_day(self):
+        originals = [dict(text='改为下周一交回。', time='2026-11-04T17:00:00+08:00')]
+        self.assertEqual(agent._school_late_due(originals), '2026-11-09')
+
+    def test_a_reminder_keeping_the_day_states_the_same_day(self):
+        originals = [dict(text='数学《星河练习》今晚完成，周五交给我。', time='2026-11-04T16:00:00+08:00')]
+        self.assertEqual(agent._school_late_due(originals), '2026-11-06')
+
+    def test_a_moved_day_counts_without_a_hand_back_verb(self):
+        for text in ('改到11月10日交。', '推迟到11月10日交。', '改为11月10日交。', '改到11月10日。'):
+            originals = [dict(text=text, time='2026-11-04T17:00:00+08:00')]
+            self.assertEqual(agent._school_late_due(originals), '2026-11-10', text)
+
+    def test_no_stated_day_returns_nothing(self):
+        self.assertEqual(agent._school_late_due([dict(text='第12页范围不变。', time='2026-11-04T17:00:00+08:00')]), '')
+
+    def test_a_plain_completion_day_is_never_a_new_deadline(self):
+        self.assertEqual(agent._school_late_due([dict(text='今晚完成。', time='2026-11-04T17:00:00+08:00')]), '')
+
+
+class FoldPendingTest(unittest.TestCase):
+    """The waiting card keeps one identity: its body shows the later original and its due follows the change."""
+
+    def setUp(self):
+        self.connection = sqlite3.connect(':memory:')
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute('CREATE TABLE agent_items(id TEXT PRIMARY KEY, job_id TEXT, child_id TEXT, kind TEXT, '
+                                'title TEXT, body TEXT, evidence TEXT, due TEXT, created TEXT, updated TEXT, '
+                                'state TEXT, task_id TEXT, plan TEXT)')
+        self.store = _Store(self.connection)
+
+    def tearDown(self):
+        self.connection.close()
+
+    def save_card(self, body, due, plan):
+        self.connection.execute("INSERT INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,created,updated,state,task_id,plan)"
+                                " VALUES('agent-card','job','child-1','school','待核对：数学','%s','[]','%s','%s','%s','pending','','%s')"
+                                % (body, due, NOW.isoformat(), NOW.isoformat(), json.dumps(plan)))
+        self.connection.commit()
+        return self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
+
+    def fold(self, change, incoming_body='数学《每日练习》第26页只做第1—3题，第4题不做，今晚完成。'):
+        row = self.save_card('完成数学《每日练习》第26页。', '2026-11-06', dict(school_task=dict(state='review', goal='完成数学《每日练习》第26页。')))
+        item = dict(child_id='child-1', body=incoming_body, due='2026-11-06',
+                    evidence=[quote('message:fiction-wx:9', incoming_body, '2026-11-04T16:00:00+08:00')])
+        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
+                                              dict(item_id='agent-card', change=change), NOW)
+        self.assertTrue(ok)
+        return self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
+
+    def test_a_replacement_joins_the_body_and_keeps_its_day(self):
+        row = self.fold('update')
+        self.assertIn('第4题不做', row['body'])
+        self.assertEqual(row['due'], '2026-11-06')
+
+    def test_a_multiline_replacement_keeps_both_the_range_and_the_new_day(self):
+        row = self.fold('update', '更正：数学《每日练习》第26页只做第1—3题。\n明天早上交回。')
+        self.assertIn('只做第1—3题', row['body'])
+        self.assertIn('明天早上交回', row['body'])
+        self.assertEqual(row['due'], '2026-11-05')
+
+    def test_a_cancellation_shows_its_ground_and_clears_the_day(self):
+        row = self.fold('cancel', '刚才带两片落叶那一项取消，不用带叶子和旧书。')
+        self.assertIn('取消依据（2026-11-04 16:00）：', row['body'])
+        self.assertIn('不用带叶子和旧书', row['body'])
+        self.assertEqual(row['due'], '')
+
+    def test_a_plain_reminder_keeps_one_body_and_its_day(self):
+        row = self.fold('same')
+        self.assertIn('今晚完成', row['body'])
+        self.assertEqual(row['due'], '2026-11-06')
+
+
+class FoldAcceptTest(unittest.TestCase):
+    """Accepting a card writes the folded lines into the task's action and the later message into its sources."""
+
+    def setUp(self):
+        self.connection = sqlite3.connect(':memory:')
+        self.connection.row_factory = sqlite3.Row
+        self.connection.execute('CREATE TABLE agent_items(id TEXT PRIMARY KEY, task_id TEXT)')
+        self.connection.execute('CREATE TABLE manual_tasks(id TEXT PRIMARY KEY, action TEXT, source TEXT, due TEXT)')
+        self.connection.execute("INSERT INTO agent_items(id,task_id) VALUES('agent-card','TASK-1')")
+        self.connection.execute("INSERT INTO manual_tasks(id,action,source,due) VALUES('TASK-1','完成数学《每日练习》。',"
+                                "'Agent建议:agent-card\\nmessage:fiction-qq:1\\n完成数学《每日练习》。','2026-11-06')")
+        self.connection.commit()
+        self.store = _Store(self.connection)
+
+    def tearDown(self):
+        self.connection.close()
+
+    def plan_for(self, change, text):
+        return dict(school_folded=[dict(refs=['message:fiction-wx:9'], change=change, at=NOW.isoformat(),
+                                        originals=[dict(ref='message:fiction-wx:9', text=text,
+                                                        time='2026-11-04T16:00:00+08:00')])])
+
+    def test_action_source_and_day_after_acceptance(self):
+        plan = self.plan_for('update', '数学《每日练习》第26页只做第1—3题，第4题不做。')
+        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
+        task = self.connection.execute("SELECT * FROM manual_tasks WHERE id='TASK-1'").fetchone()
+        self.assertIn('第4题不做', task['action'])
+        self.assertIn('后到原文', task['source'])
+        self.assertIn('2026-11-04 16:00', task['source'])
+        self.assertIn('只做第1—3题', task['source'])
+        # A replacement is a readable note, never a cited message line: the agenda must not read the old range as a day role.
+        self.assertNotIn('\nmessage:fiction-wx:9', '\n' + task['source'])
+
+    def test_a_reminder_is_still_cited_as_a_message(self):
+        plan = self.plan_for('same', '数学《每日练习》第26页1—3题，今晚做，周五交。')
+        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
+        task = self.connection.execute("SELECT * FROM manual_tasks WHERE id='TASK-1'").fetchone()
+        self.assertIn('message:fiction-wx:9', task['source'])
+
+    def test_the_note_carries_words_and_time_on_both_paths(self):
+        note = agent._school_fold_note(('message:fiction-wx:9', '只做第1—3题，第4题不做。', 'update',
+                                        '2026-11-04T16:00:00+08:00'))
+        self.assertTrue(note.startswith(agent._SCHOOL_FOLD_NOTE))
+        self.assertIn('2026-11-04 16:00', note)
+        self.assertIn('只做第1—3题', note)
+        self.assertFalse(note.startswith('message:'))
+
+    def test_a_second_acceptance_does_not_duplicate_lines(self):
+        plan = dict(school_folded=[folded('same')])
+        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
+        once = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
+        agent._school_accept_fold(self.store, dict(id='agent-card'), plan)
+        twice = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
+        self.assertEqual(once['action'], twice['action'])
+        self.assertEqual(once['source'], twice['source'])
+
+
+if __name__ == '__main__':
+    unittest.main()

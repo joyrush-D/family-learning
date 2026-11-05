@@ -409,6 +409,66 @@ extension DayItem {
     var sourceRefs: [Publication] { var seen = Set<String>(); return (publications ?? []).filter { seen.insert($0.ref).inserted } }
     /// 行内完整标准：各句照原文接起来，句末已有标点的不再补“；”（不出现“。；”）。
     var standardWords: String { lines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
+    /// 家庭安排（服务端 plan_lines）：家长自己的计划，不是老师的要求；单独一段，不并进要求正文。旧后台没有这个键时为空。
+    var planLines: [String] { plan_lines ?? [] }
+    /// 家庭安排各句照原文接起来，与 standardWords 同一规则：句末已有标点的不再补“；”，不出现“。；”。
+    var planWords: String { planLines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
+    /// 家庭安排小标签：能拿到计划日（facts 里 role=scheduled）就带上日期，拿不到只写“家庭安排”。
+    var planLabel: String {
+        if let f = facts.first(where: { $0.role == "scheduled" }), !f.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "家庭安排（计划 \(f.value)）" }
+        return "家庭安排"
+    }
+    /// 后到原文（服务端 follow_ups）：同一事项后来的更正/补充/取消/提醒，只列真正有原文的，按时间顺序。旧后台没有这个键时为空。
+    var followUps: [DayFollowUp] {
+        (follow_ups ?? []).filter { !(($0.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)).isEmpty }
+            .sorted { ($0.time ?? "") < ($1.time ?? "") }
+    }
+    /// 详情小节标题：条数写在标题里，家长一眼看到“后来又有几条”。
+    var followUpTitle: String { "后续通知（\(followUps.count)）" }
+    /// 后到原文的发送时间：只显示到分钟，2026-11-04T16:00 这类写法统一成 2026-11-04 16:00。
+    func followUpTime(_ raw: String?) -> String {
+        let s = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return "" }
+        return String(s.prefix(16)).replacingOccurrences(of: "T", with: " ")
+    }
+    /// 后到原文的标签：服务端给了就照写（更正/补充/取消/提醒），没给不猜。
+    func followUpLabel(_ f: DayFollowUp) -> String {
+        let s = (f.label ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? "后续通知" : s
+    }
+    /// 行内日期角色：当天到期的「截止」不挂（今天的清单本来就是今天做）；其余交回/提交/完成/检查照旧各一条。
+    func rowDayRoles(day: String) -> [DayFact] {
+        dayRoles.filter { f in !(f.role == "due" && f.known && !day.isEmpty && f.value == day) }
+    }
+    /// 清单行最多两条步骤；第 3 条起折成一行「还有 N 条 · 查看详情」，完整要求在详情页。
+    var rowPoints: (shown: [String], rest: Int) {
+        let all = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        return (Array(all.prefix(2)), max(0, all.count - 2))
+    }
+    /// 行内徽章只用短词（≤6 字），最多 4 个：家长扫一眼就知道要不要签字、要不要带、要不要上传；
+    /// 完整句子留在详情页。日期类只在不是「当天到期」时出现（当天到期的截止不挂），用相对词。
+    func rowBadges(day: String) -> (shown: [String], extra: Int) {
+        let body = ([title] + lines + [complete_words]).joined(separator: " ")
+        var all: [String] = []
+        func add(_ w: String) { if !all.contains(w) { all.append(w) } }
+        func has(_ w: String) -> Bool { body.contains(w) }
+        if has("家长签字") || has("签字") || has("签名") { add("需签字") }
+        for f in rowDayRoles(day: day) where f.known {
+            let rel = rowRelative(f.value, day: day)
+            if f.role == "submit" { add(rel + "交") }
+            else if f.role == "check" { add(rel + "核对") }
+            else if f.role == "due" { add(rel == "明天" ? "明天交" : rel + "截止") }
+        }
+        if has("明天带") || has("带到学校") || has("带去学校") { add("明天带") }
+        if has("不用录音") { add("不用录音") }
+        if has("不用抄写") { add("不用抄写") }
+        if has("不用上传") { add("不用上传") }
+        if has("不用发照片") { add("不用发照片") }
+        if has("读给家长") { add("读给家长") }
+        if has("在校完成") { add("在校完成") }
+        if has("课堂听写") || has("听写") { add("课堂听写") }
+        return (Array(all.prefix(4)), max(0, all.count - 4))
+    }
     var sourceWords: String { sourceRefs.count > 1 ? "来源消息\(sourceRefs.count)条" : "" }
     /// 老师与完整发布时间：有发布事实就照写它的原值（未知照写它的原话，如“发布 待核对”）；没有时用原始发布时间的完整日期与时刻。
     var publishWords: String? {
@@ -740,6 +800,20 @@ func factTone(_ f: DayFact) -> (Color, Color) {
     f.state == "next_morning" || f.state == "overdue" ? (Palette.coral, Palette.coralInk) : f.known ? (Palette.wood, Palette.woodInk) : (Palette.paper2, Palette.ink2)
 }
 
+/// 行内相对日期：今天/明天/后天/周X；解析不了就照写原值。
+func rowRelative(_ value: String, day: String) -> String {
+    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.locale = Locale(identifier: "en_US_POSIX")
+    guard let v = f.date(from: value), let d = f.date(from: day) else { return value }
+    let cal = Calendar(identifier: .gregorian)
+    let diff = cal.dateComponents([.day], from: d, to: v).day ?? 0
+    if diff == 0 { return "今天" }
+    if diff == 1 { return "明天" }
+    if diff == 2 { return "后天" }
+    let names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+    let w = cal.component(.weekday, from: v)
+    return names[max(0, min(6, w - 1))]
+}
+
 func factWords(_ f: DayFact) -> String {
     if f.state == "next_morning" { return f.label + " 明天" }  // 只知道日期是明天，不写“明早”
     if f.state == "overdue" { return "已逾期 · " + f.value }
@@ -889,7 +963,7 @@ struct SubjectList: View {
                 Section {
                     ForEach(group.items) { item in
                         ItemRow(item: item, selected: store.selection == item.id || (store.selection == nil && store.lastOpened == item.id),
-                                textWidth: width > 0 ? ItemRow.textWidth(list: width) : nil).tag(item.id).probe("row-" + item.id, text: item.title)
+                                textWidth: width > 0 ? ItemRow.textWidth(list: width) : nil, day: store.current?.day ?? "").tag(item.id).probe("row-" + item.id, text: item.title)
                             .listRowSeparator(.hidden)
                     }
                 } header: {
@@ -931,6 +1005,8 @@ struct ItemRow: View {
     /// 文字一栏的确切宽度。系统列表按行的理想尺寸（不限宽）定行高：只靠 fixedSize 时长文字被量成一行，排开时截成“…”，
     /// 与有无验收锚点无关。给文字栏定宽后，理想尺寸就是这个宽度下完整换行的高度，正式与验收同一布局。
     var textWidth: CGFloat? = nil
+    /// 这一天的日期（如 2026-11-04）：当天到期的「截止」不在行内再挂一次。
+    var day: String = ""
     /// 清单宽度减去：卡片内 58（左 6、叶形 32、间距 8、右 12），行左右留白至多 20+20（M6 截图 860 宽时实测约 16/17），
     /// 常显滚动条至多 16。宁可右侧多留一点空，也不让文字栏比行宽。
     static func textWidth(list: CGFloat) -> CGFloat { max(160, list - 114) }
@@ -942,26 +1018,48 @@ struct ItemRow: View {
                     .lineLimit(nil).fixedSize(horizontal: false, vertical: true)
                 if let first = item.lines.first {
                     // 完整写出，不截断；不加 .help（它把文字包进平台视图，清单行高只按一行算，会截成省略号）。
-                    Text(item.standardWords).font(Palette.body).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(nil)
-                        .fixedSize(horizontal: false, vertical: true).accessibilityHint(first).modifier(FitProbe(id: "row-fit-" + item.id))
+                    let marks = ["①", "②"]
+                    ForEach(Array(item.rowPoints.shown.enumerated()), id: \.offset) { index, line in
+                        Text((item.rowPoints.shown.count > 1 ? marks[index] + " " : "") + line).font(Palette.body).foregroundStyle(Palette.ink2)
+                            .lineSpacing(2).lineLimit(nil).fixedSize(horizontal: false, vertical: true)
+                            .accessibilityHint(index == 0 ? first : "") .modifier(FitProbe(id: index == 0 ? "row-fit-" + item.id : "row-fit-\(item.id)-\(index)"))
+                    }
+                    if item.rowPoints.rest > 0 {
+                        Text("还有 \(item.rowPoints.rest) 条 · 查看详情").font(Palette.small).foregroundStyle(Palette.ink2)
+                            .probe("row-more-" + item.id, text: "还有 \(item.rowPoints.rest) 条 · 查看详情")
+                    }
                     if let v = item.version {
                         // 冒烟锚点只给这一行此刻显示的同一句话，按事项 id 区分（各行的版本提示不再共用一个标识）。
                         let words = v.state == "latest" ? "学校要求已更新：\(v.change ?? "")" : (v.note ?? "有新通知待核对")
                         Text(words).font(Palette.small).foregroundStyle(Palette.coralInk).probe("row-version-" + item.id, text: words)
                     }
                 } else { Text("完成标准未提供，待补充").font(Palette.body).foregroundStyle(Palette.coralInk) }
+                if !item.planLines.isEmpty {
+                    // 家庭安排是家长自己的计划，不是老师要求：单独一行带小标签，不并进上面的要求段落。
+                    Text(item.planLabel + "：" + item.planWords).font(Palette.body).foregroundStyle(Palette.ink2).lineSpacing(2).lineLimit(nil)
+                        .fixedSize(horizontal: false, vertical: true).probe("row-plan-" + item.id, text: item.planWords)
+                }
                 FlowRow(spacing: 6, lineSpacing: 4) {
-                    if item.showsWhen { Badge(text: item.whenLabel, tone: Palette.paper2, ink: Palette.ink2) }
-                    ForEach(item.dayRoles, id: \.self) { f in
-                        let (tone, ink) = factTone(f)
-                        Badge(text: factWords(f), tone: tone, ink: ink)
+                    let badges = item.rowBadges(day: day)
+                    ForEach(badges.shown, id: \.self) { w in
+                        let short = w.hasPrefix("需签字")
+                        let tone = short ? Palette.coral : (w.contains("交") || w.contains("带") ? Palette.leaf100 : Palette.paper2)
+                        let ink = short ? Palette.coralInk : (w.contains("交") || w.contains("带") ? Palette.leafInk : Palette.ink2)
+                        Badge(text: w, tone: tone, ink: ink)
                     }
+                    if badges.extra > 0 { Badge(text: "+" + String(badges.extra), tone: Palette.paper2, ink: Palette.ink2) }
                     ForEach(item.times ?? [], id: \.self) { t in Badge(text: "日程 " + planClock(t.start_time, t.end_time), tone: Palette.leaf100, ink: Palette.leafInk) }
                     if item.pending_review { Badge(text: "待核对", tone: Palette.coral, ink: Palette.coralInk) }
                 }
                 .padding(.top, 2)
                 let meta = [item.source, item.sourceWords, item.progress.map(progressWords) ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
                 if !meta.isEmpty { Text(meta).font(.system(size: 13)).foregroundStyle(Palette.ink2).fixedSize(horizontal: false, vertical: true).probe("row-meta-" + item.id, text: meta) }
+                // 后到原文不铺在清单卡上：只给一行提示，完整原文在详情页按时间顺序列出。
+                if !item.followUps.isEmpty {
+                    let hint = "后续通知 \(item.followUps.count) 条"
+                    Text(hint).font(Palette.small).foregroundStyle(Palette.leafInk).fixedSize(horizontal: false, vertical: true)
+                        .probe("row-followups-" + item.id, text: hint)
+                }
             }
             .frame(width: textWidth, alignment: .leading)
             Spacer(minLength: 0)
@@ -1598,6 +1696,40 @@ struct Inspector: View {
                     if item.pending_review {
                         let hint = "这条学校消息还在待核对，确认后才算正式事项；可在网页版学校信息中核对。"
                         Text(hint).font(Palette.small).foregroundStyle(Palette.coralInk).probe("detail-pending-" + item.id, text: hint)
+                    }
+                }
+                if !item.followUps.isEmpty {
+                    // 后到原文单独成节，紧跟老师的要求之后：时间在左、标签其次、原文可折行不截断，顺序=时间顺序。
+                    section(item.followUpTitle, "bell") {
+                        ForEach(Array(item.followUps.enumerated()), id: \.offset) { index, f in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                    let when = item.followUpTime(f.time)
+                                    if !when.isEmpty {
+                                        Text(when).font(Palette.small).foregroundStyle(Palette.ink2)
+                                            .probe("detail-followup-time-\(item.id)-\(index)", text: when)
+                                    }
+                                    let label = item.followUpLabel(f)
+                                    Badge(text: label, tone: label.contains("取消") ? Palette.coral : Palette.paper2, ink: label.contains("取消") ? Palette.coralInk : Palette.ink2)
+                                }
+                                Text(f.text ?? "").font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3)
+                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                    .probe("detail-followup-\(item.id)-\(index)", text: f.text ?? "")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                }
+                if !item.planLines.isEmpty {
+                    // 家庭安排单独成节，放在老师的要求之后：家长自己的计划，不当作一条要求。
+                    section(item.planLabel, "calendar") {
+                        ForEach(Array(item.planLines.enumerated()), id: \.offset) { index, line in
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Image(systemName: "person.2.fill").font(.system(size: 11)).foregroundStyle(Palette.leaf400).accessibilityHidden(true)
+                                Text(line).font(Palette.body).foregroundStyle(Palette.ink).lineSpacing(3).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                    .probe("detail-plan-\(item.id)-\(index)", text: line)
+                            }
+                        }
                     }
                 }
                 if !item.sourceRefs.isEmpty { sources(item) }

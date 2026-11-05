@@ -73,6 +73,9 @@ SCHOOL_TASK_POLICY = 10
 SCHOOL_SELECTION_REVISION = 2
 # The selection's own note for a model day it did not adopt; the day itself is kept beside it as school_unadopted_due.
 SCHOOL_UNADOPTED_NOTE = ' 截止日期尚无法从原文核对，未采用模型日期；请核对原通知。'
+_SCHOOL_SPLIT_REQUIREMENT=re.compile(r'完成|做完|做|交|带|拿|读|朗读|背|抄|写|签|订正|打印|准备|练|上传|拍照|听写|画|剪|贴|改|补|预[习学]|复习|背诵|默写|思考|观察|收集|整理|听|看|查|数|算|记')
+# A split fragment keeps a subject label only in its label form (语文：…); '美术老师今天课上说' is just a lead-in.
+_SCHOOL_SPLIT_SUBJECT=re.compile(r'(?:^|\n)\s*(?:语文|数学|英语|美术|音乐|体育|科学|道法|品德|政治|历史|地理|物理|化学|生物|班队|班会|劳动)\s*[：:]')
 _SCHOOL_DATE_MENTION=re.compile(r'\d{4}-\d{2}-\d{2}|\d{1,2}\s*月\s*\d{1,2}\s*[日号]|今天|今日|今晚|明天|明日|后天|(?:本|这|下)(?:个)?(?:周|星期|礼拜)|(?:周|星期|礼拜)[一二三四五六日天]|截止|期限|日期|完成时间')
 TASK_BRIEF_SCHEMA = {'type':'object','additionalProperties':False,'required':['title','goal','advice','state','reason'],
     'properties':{**{key:{'type':'string','maxLength':limit} for key,limit in [('title',80),('goal',2000),('advice',1200),('reason',400)]},
@@ -1219,6 +1222,51 @@ def _publisher(source_id, message):
     return 'publisher:' + _hash([source_id, message['sender_id']])[:20] if message.get('sender_id') else ''
 
 
+def _sender_name(message):
+    return re.sub(r'\s+', '', str(message.get('sender') or ''))
+
+
+# A display name that claims a teaching role; a nickname or a subject label alone does not.
+_SCHOOL_TEACHER_NAME = re.compile(r'(?:老师|教师|班主任|园长)')
+
+
+def _publisher_cross_channel(store, source, message, connection=None):
+    """The same verified teacher's two channel accounts read as one stable publisher.
+
+    A class teacher writes in the QQ group and the WeChat group of one child: two keeps a stable publisher id per source, so a
+    reminder on the other channel would never be recognised as the same affair's later notice. A teacher-like display name
+    that also writes from another platform's source of the same child is that one account, so both channels share
+    publisher:<sender name>. Every other case keeps the source's own stable id, which the pointer-back identity and the
+    same-source grouping rely on: one source's same nickname with a missing or different sender id stays two publishers.
+    """
+    if isinstance(source, str):
+        try: source = next(s for s in store._config()['sources'] if s['id'] == source)
+        except (AgentError, StopIteration, KeyError, TypeError): return _publisher(source, message)
+    native = _publisher(source['id'], message)
+    name = _sender_name(message)
+    if not native or not message.get('sender_id') or not _SCHOOL_TEACHER_NAME.search(name): return native
+    child, platform = source.get('child_id'), source.get('platform')
+    try: sources = store._config()['sources']
+    except (AgentError, KeyError, TypeError): return native
+    cached = store.__dict__.setdefault('_cross_channel_senders', {})
+    for peer in sources:
+        if peer.get('id') == source['id'] or not peer.get('enabled'): continue
+        if peer.get('child_id') != child or peer.get('platform') == platform: continue
+        mark = (peer['id'], name)
+        seen = cached.get(mark)
+        if seen is None:
+            seen = False
+            with (store._db() if connection is None else nullcontext(connection)) as c:
+                for row in c.execute('SELECT payload FROM agent_messages WHERE source_id=? ORDER BY rowid DESC LIMIT 500', (peer['id'],)):
+                    try: peer_message = json.loads(row['payload'])
+                    except (ValueError, TypeError): continue
+                    if _sender_name(peer_message) == name and peer_message.get('sender_id'):
+                        seen = True; break
+            cached[mark] = seen
+        if seen: return 'publisher:' + _hash(['sender', child, name])[:20]
+    return native
+
+
 def _school_message_basis(evidence):
     """Server snapshot of the full read messages; display quotes may be clipped."""
     return {e.get('ref',''):_hash([e.get('text',''),e.get('time',''),e.get('publisher') or
@@ -1775,6 +1823,7 @@ class Store:
             if check_id and check.get('id') == check_id and not check.get('completed_at'):
                 check.update(completed_at=checked, status='read_error' if error else 'success')
                 c.execute('UPDATE agent_sources SET check_request=? WHERE id=?', (_json(check), source['id']))
+        self.__dict__.pop('_cross_channel_senders', None)  # a collector's new rows can complete a teacher's other-channel account
         return {'ok': True, 'replayed': False, 'inserted': inserted, 'cursor': current if error else cursor}
 
     def _message_context(self, c, obj):
@@ -2448,7 +2497,7 @@ class Store:
             if school_context:
                 source,values=school_context
                 originals=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],time=v['time'],
-                    publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread'],message_order=v.get('message_order','')) for v in values]
+                    publisher=_publisher_cross_channel(self, source, v, c),kind=v['kind'],content_incomplete=v['unread'],message_order=v.get('message_order','')) for v in values]
                 for original,v in zip(originals,values):
                     original['attachments']=[r['upload_id'] for r in c.execute(
                         'SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source['id'],v['id']))]
@@ -2498,6 +2547,9 @@ class Store:
                     c.execute("UPDATE agent_items SET title=?,body=?,evidence=?,due=?,plan=?,updated=? WHERE id=? AND state='pending'",
                               (item['title'],item['body'],_json(item['evidence']),item.get('due',''),_json(plan),now.isoformat(),target))
                     continue
+                pending_of=(item.get('plan') or {}).get('school_pending_of')
+                if isinstance(pending_of,dict) and pending_of.get('item_id') and self._school_fold_pending(c,item,pending_of,now):
+                    continue
                 ident = 'agent-' + _hash([key, fingerprint, index])[:32]
                 c.execute('INSERT OR IGNORE INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,care_id,record_id,created,updated,plan,task_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                     (ident, key, item['child_id'], item['kind'], item['title'], item['body'], _json(item['evidence']), item.get('due', ''),
@@ -2508,6 +2560,47 @@ class Store:
                 c.execute('INSERT OR IGNORE INTO agent_jobs(id,fingerprint,done) VALUES(?,?,1)',
                           (_school_revision_mark(origin[0][0],history_context[0]['child_id']),fingerprint))
             c.executemany('UPDATE agent_messages SET processed=1 WHERE source_id=? AND id=?', message_ids)
+
+    def _school_fold_pending(self, c, item, link, now):
+        """A later notice the program proved this waiting card's same affair folds into it: one card, one decision.
+
+        The card keeps its identity, title, day and own body; the later original stays verbatim beside the first in evidence and
+        its requirement lines join the body, so nothing is lost and no orphan card asks the parent the same thing twice. The fold
+        is written only for a card still pending and untouched; the batch's own insert is skipped by the caller.
+        """
+        row=c.execute("SELECT * FROM agent_items WHERE id=? AND kind='school' AND state='pending' AND child_id=?",
+                      (link.get('item_id'),item['child_id'])).fetchone()
+        if row is None: return False
+        plan=json.loads(row['plan'] or '{}');brief=plan.get('school_task') or {}
+        if plan.get('school_pending_of') or brief.get('state')=='reference': return False
+        old=json.loads(row['evidence'] or '[]');seen={q.get('ref') for q in old}
+        added=[q for q in item.get('evidence') or [] if q.get('ref') not in seen]
+        change=str(link.get('change') or 'same')
+        lines=[line for line in str(row['body'] or '').split('\n') if line.strip()]
+        if change=='same':
+            for line in str(item.get('body') or '').split('\n'):
+                line=line.strip()
+                if line and line not in lines: lines.append(line)
+        body='\n'.join(lines)
+        folded=list(plan.get('school_folded') or [])
+        # The later original stays verbatim in this card's own plan: it proves the fold, while the card's cited originals (which
+        # the agenda reads one day's own words from) stay the first notice and its corrections. Its own lines join the visible
+        # body for every change: a reminder's requirement, a labelled replacement, or the ground of a cancellation.
+        folded.append(dict(refs=[q.get('ref') for q in added],change=change,at=now.isoformat(),
+                           originals=[dict(ref=q.get('ref'),text=q.get('text'),time=q.get('time'),sender=q.get('sender'),publisher=q.get('publisher')) for q in added]))
+        plan['school_folded']=folded
+        body=_school_folded_body(plan,body)
+        due=row['due'] or item.get('due','')
+        if change=='cancel':
+            due=''
+        elif change in ('update','append'):
+            late=_school_late_due(added)
+            if late: due=late
+        if brief:
+            brief['goal']=body;plan['school_task']=brief
+        c.execute("UPDATE agent_items SET body=?,due=?,plan=?,updated=? WHERE id=? AND state='pending'",
+                  (body,due,_json(plan),now.isoformat(),row['id']))
+        return True
 
     def _fail(self, key, now, *, fingerprint=None, reason=''):
         with self._db() as c:
@@ -2574,7 +2667,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
                     for quote in json.loads(source_row['evidence']):
                         source_id,message_id=quote['ref'][8:].rsplit(':',1)
                         source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
-                        publishers.add((source_id,_publisher(source_id,message)))
+                        publishers.add((source_id,_publisher_cross_channel(store,source,message,c)))
                         originals.append([quote['ref'],_hash(message)])
                         original_evidence.append(dict(message,ref=quote['ref']))
                         facts.append(str(message.get('text') or ''))
@@ -2616,7 +2709,7 @@ def school_targets(app, store, child_id, connection=None, *, shared=False, evide
         return result
 
 
-_SCHOOL_PENDING_PRIVATE=('refs','latest')
+_SCHOOL_PENDING_PRIVATE=('refs','latest','first')
 
 
 def school_pending_targets(store, child_id, connection=None, *, limit=12, before='', exclude=()):
@@ -2638,12 +2731,13 @@ def school_pending_targets(store, child_id, connection=None, *, limit=12, before
                 for quote in json.loads(row['evidence']):
                     source_id,message_id=quote['ref'][8:].rsplit(':',1)
                     source,message=store._message_context(c,dict(child_id=child_id,source_id=source_id,message_id=message_id))
-                    publishers.add((source_id,_publisher(source_id,message)));refs.append(quote['ref']);times.append(str(message.get('time') or ''))
+                    publishers.add((source_id,_publisher_cross_channel(store,source,message,c)));refs.append(quote['ref']);times.append(str(message.get('time') or ''))
             except (AgentError,ValueError,KeyError,TypeError,AttributeError):continue
             if not refs or row['id'] in exclude or before and not max(times)<before:continue  # read before the limit counts
-            source,publisher=next(iter(publishers)) if len(publishers)==1 else ('','')
+            sources={source_id for source_id,_ in publishers};values={publisher for _,publisher in publishers if publisher}
+            source=next(iter(sources)) if len(sources)==1 else '';publisher=next(iter(values)) if len(values)==1 else ''
             result.append(dict(id='pending:'+row['id'],title=str(brief.get('title') or row['title'])[:200],goal=str(brief.get('goal') or row['body'] or '')[:400],
-                               due=row['due'] or '',state='pending',source_id=source,publisher=publisher,refs=refs,latest=max(times)))
+                               due=row['due'] or '',state='pending',source_id=source,publisher=publisher,refs=refs,latest=max(times),first=min(times)))
             if len(result)>=limit:break
     return result
 
@@ -2656,9 +2750,12 @@ def _school_pending_link(target, change, brief, cited, due, quote=''):
     words in this notice's own summary (never the whole message, which may hold a sibling); a 'same' reminder on no other day.
     """
     if change not in ('same','append','update','cancel') or not target.get('publisher') or not cited or brief.get('state')=='reference':return None
+    first=str(target.get('first') or target['latest'])
     for e in cited:
-        if (e['ref'][8:].rsplit(':',1)[0]!=target['source_id'] or e.get('publisher')!=target['publisher'] or e['ref'] in target['refs']
-                or not str(e.get('time') or '')>target['latest']):return None
+        # One verified teacher's other channel account is one publisher (no source equality), and a notice stored between
+        # the card's own originals is still later than the affair's first original, never an earlier notice of it.
+        if (e.get('publisher')!=target['publisher'] or e['ref'] in target['refs']
+                or not str(e.get('time') or '')>first):return None
     if not _school_same_object(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''),target['title']+'\n'+target['goal']):return None
     if change=='same' and due and target['due'] and due!=target['due']:return None
     # The item's own day binds its notices: another day of the same object (周五再展示朗读一次《小树林》第5段 after a pending
@@ -2726,7 +2823,7 @@ def _school_late_shared(store, c, child_id, canonical, natives):
     if not _school_shared_follows(listing,later):return None
     def entry(message):
         ids=[r['upload_id'] for r in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source_id,message['id']))]
-        return dict(ref='message:'+source_id+':'+message['id'],text=message['text'],time=message['time'],publisher=_publisher(source_id,message),
+        return dict(ref='message:'+source_id+':'+message['id'],text=message['text'],time=message['time'],publisher=_publisher_cross_channel(store,source_id,message,c),
                     kind=message['kind'],content_incomplete=bool(message.get('unread')),unread=bool(message.get('unread')),attachments=ids)
     first,second=entry(listing),entry(later)
     try:alone=_school_native_actions([first]);pair=_school_native_actions([first,second])
@@ -3116,12 +3213,244 @@ def _school_same_changes(text, facts):
     return False
 
 
+_SCHOOL_ORAL_PERSON = re.compile(r'(?:孩子|学生|小朋友|幼儿)')
+_SCHOOL_ORAL_ACCOUNT = re.compile(r'(?:^|[:_.-])(?:child|kid|student)', re.I)
+_SCHOOL_ORAL_RELAY = re.compile(r'(?:老师|教师|班主任)[^。；;\n]{0,12}(?:说|提到|通知|要求|交代|讲)|转述|口头|口述')
+_SCHOOL_FOLDED_SPLIT = re.compile(r'[^。；;\n]+[。；;]?')
+
+
+def _school_oral_entry(entry):
+    sender=str(entry.get('sender') or '')
+    account=str(entry.get('sender_id') or '')
+    return bool(_SCHOOL_ORAL_PERSON.search(sender) or _SCHOOL_ORAL_ACCOUNT.search(account))
+
+
+_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：'}
+
+
+def _school_folded_originals(plan):
+    """Every later original a proven fold kept beside a card's own originals: (ref, text, change, time), all changes."""
+    found=[]
+    for entry in (plan or {}).get('school_folded') or []:
+        if not isinstance(entry,dict): continue
+        change=str(entry.get('change') or 'same')
+        for original in entry.get('originals') or []:
+            text=str((original or {}).get('text') or '').strip()
+            if text: found.append((str((original or {}).get('ref') or ''),text,change,str((original or {}).get('time') or '')))
+    return found
+
+
+_SCHOOL_FOLD_NOTE = '后到原文（更正/取消依据，不进本事项日期判断）：'
+
+_SCHOOL_TEXT_BANNER = re.compile(r'^[^\n]{0,60}[·•]\s*(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z))\s*\n')
+
+
+def _school_folded_text(text):
+    """A saved original's words without the collection banner that cites its own source and sending time.
+
+    The stored message text may begin with "source · time" (the view's own banner). The banner is not a requirement
+    line, so it never becomes a line of the card: its time is read out and returned beside the words instead.
+    """
+    raw=str(text or '');stamp=''
+    match=_SCHOOL_TEXT_BANNER.match(raw)
+    if match:
+        stamp=match.group(1);raw=raw[match.end():]
+    return stamp,raw.strip()
+
+
+
+
+def _school_fold_note(original):
+    """One folded replacement/cancellation made readable where the parent sees the source: its words and sending time.
+
+    It is a note, never a cited message line: the agenda reads one day's roles from every line that starts with
+    "message:", so an older range must not be cited beside the correction that superseded it (or a request beside its
+    own cancellation). The parent still reads the exact wording and when it was sent, beside the first notice.
+    """
+    ref,text,change,time=original
+    banner,text=_school_folded_text(text)
+    stamp=str(time or banner or '').strip()[:16].replace('T',' ')
+    return _SCHOOL_FOLD_NOTE+(stamp or '时间未知')+'（'+ref+'）「'+str(text or '').strip()+'」'
+
+
+def _school_folded_lines(plan):
+    """The lines of a proven fold's later original that must stay visible after the card is saved.
+
+    A replacement or cancellation is labelled, so its words are readable provenance instead of quietly overwriting the
+    first notice or vanishing from view; a plain reminder's requirement lines stand as written.
+    """
+    lines=[]
+    for ref,text,change,time in _school_folded_originals(plan):
+        label=_SCHOOL_FOLDED_LABEL.get(change,'')
+        _banner,text=_school_folded_text(text)
+        if label:
+            # The parent reads a replacement or cancellation in the card body, so the moment it arrived travels with
+            # the words: the source note keeps the whole original, while the visible line names its sending time.
+            stamp=str(time or _banner or '').strip()[:16].replace('T',' ')
+            if stamp: label=label[:-1]+'（'+stamp+'）：'
+        # Every line of the later original stays, in its own order: a correction's first line can hold the new range
+        # and its second the new day, so reading only the last line would silently drop half of what the parent must see.
+        for raw in str(text or '').split('\n'):
+            raw=raw.strip()
+            if not raw: continue
+            for part in _SCHOOL_FOLDED_SPLIT.findall(raw):
+                part=part.strip()
+                if len(part)<4: continue
+                line=label+part
+                if line not in lines: lines.append(line)
+    return lines
+
+
+_SCHOOL_MOVED_DAY = re.compile(r'(?:改到|改为|改至|改成|推迟到|推迟至|延迟到|延到|延至|顺延到|延后到|挪到|调到|调整到|提前到|提前至)')
+
+
+def _school_late_due(originals):
+    """The day a folded later notice states for the affair: an update's own day replaces the old due.
+
+    The day has to come from the later original's own words, never from its sending time and never from a mere
+    completion day: "今晚完成" is what tonight is for, not a new deadline replacing the old one. A correction that
+    moves the day ("改到/推迟到/改为…11月10日") counts with or without a hand-back verb; a plain hand-back day
+    ("周五交回") counts as before.
+    """
+    from family_agenda import deadlines,sent_day
+    quoted=[]
+    for original in originals or []:
+        banner,text=_school_folded_text((original or {}).get('text'))
+        quoted.append((text,str((original or {}).get('time') or banner or '')))
+    quoted=[(text,time) for text,time in quoted if text]
+    if not quoted: return ''
+    said='\n'.join(text for text,_ in quoted)
+    evidence=[dict(ref='message:fold:'+str(index),text=text,time=time,sender='',publisher='',kind='text',
+                   content_incomplete=False,attachments=[],related_messages=[]) for index,(text,time) in enumerate(quoted)]
+    try: roles=_school_role_days(quoted[0][0],evidence,[])
+    except (TypeError,ValueError): roles=None
+    if roles and roles[1]: return str(roles[1])
+    moved=_SCHOOL_MOVED_DAY.search(said)
+    if moved:
+        # A moved day is the day itself, even when the correction never says "交": "改到11月10日" is that day too.
+        tail=re.split(r'[。；;\n]',said[moved.end():])[0].strip()
+        days=set()
+        for text,time in quoted+[(tail,quoted[0][1] if quoted else '')]:
+            if not text: continue
+            try: days|=set(deadlines(text,sent_day(time)))
+            except (TypeError,ValueError): continue
+        days={day for day in days if re.fullmatch(r'\d{4}-\d{2}-\d{2}',str(day))}
+        if days: return max(days)
+    if not re.search(r'交回|交给|交给我|上交|带来|带到',said): return ''
+    days=set()
+    for text,time in quoted:
+        try: days|=set(deadlines(text,sent_day(time)))
+        except (TypeError,ValueError): continue
+    days={day for day in days if re.fullmatch(r'\d{4}-\d{2}-\d{2}',str(day))}
+    return max(days) if days else ''
+
+
+def _school_folded_body(plan,body):
+    lines=[line for line in str(body or '').split('\n') if line.strip()]
+    for line in _school_folded_lines(plan):
+        if not any(line in kept for kept in lines): lines.append(line)
+    return '\n'.join(lines)
+
+
+def _school_unread_uploads(store,row):
+    """The linked uploads of this candidate's own messages, and the image ones whose text is still unread: database only."""
+    names=[];unread=[]
+    with store._db() as c:
+        for quote in json.loads(row['evidence'] or '[]'):
+            ref=str((quote or {}).get('ref') or '')
+            if not ref.startswith('message:'): continue
+            source_id,message_id=ref[8:].rsplit(':',1)
+            draft=c.execute('SELECT payload FROM agent_message_drafts WHERE source_id=? AND message_id=?',(source_id,message_id)).fetchone()
+            complete=False
+            if draft is not None:
+                try: complete=bool(json.loads(draft['payload']).get('complete'))
+                except (TypeError,ValueError): complete=False
+            for link in c.execute('SELECT upload_id FROM agent_message_attachments WHERE source_id=? AND message_id=?',(source_id,message_id)):
+                upload=c.execute('SELECT name,mime FROM uploads WHERE id=?',(link['upload_id'],)).fetchone()
+                if upload is None: continue
+                name=str(upload['name'] or '');mime=str(upload['mime'] or '')
+                if name: names.append(name)
+                if not complete and mime.startswith('image/') and name: unread.append(name)
+    return names,unread
+
+
+def _school_gap_accept(store,row,brief,result,evidence,now):
+    """A notice whose only open point is an unread image, or a child's oral relay, still becomes an actionable task.
+
+    The gap stays visible instead of guessed: an unread image keeps "内容待补：附件尚未读取" and no invented ranges, and
+    an oral relay is labelled as a child's relay awaiting the teacher, never as a notice the teacher sent in the group.
+    """
+    if brief.get('state') not in ('review','reference'): return brief
+    if brief.get('change')!='new' or brief.get('target_id'): return brief
+    if result and (result.get('state') not in ('ready','review') or result.get('purpose') not in (None,'homework','admin')): return brief
+    title=str(brief.get('title') or '').strip();goal=str(brief.get('goal') or '').strip()
+    if not title or not goal or not evidence: return brief
+    due=str(row['due'] or '')
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}',due) or due<now.date().isoformat(): return brief
+    if any(str(e.get('kind') or '')=='qq_window_fragment' or e.get('unread') for e in evidence): return brief
+    reason=str(brief.get('reason') or '')
+    if all(_school_oral_entry(e) for e in evidence) and any(_SCHOOL_ORAL_RELAY.search(str(e.get('text') or '')) for e in evidence):
+        sender=next((str(e.get('sender') or '') for e in evidence if e.get('sender')),'')
+        note='来源：孩子口头转述老师要求（口头补录，'+sender+'转述）；群内无对应通知，待与老师核实。'
+        if note not in goal: goal=goal+'\n'+note
+        brief.update(state='ready',goal=goal,child_oral=dict(sender=sender,recorded_by='家长',group_support=False),
+                     reason=(reason+' 本条为孩子口头转述，按口头补录保存并标注来源；不视为群内已发通知，待与老师核实。').strip())
+        return brief
+    names,unread=_school_unread_uploads(store,row)
+    if not unread: return brief
+    if not re.search(r'(?:附件|图片|原图|材料).{0,16}(?:未读|未读取|尚未|待读|内容未知)|(?:未读|未读取|尚未读取).{0,16}(?:附件|图片)',reason): return brief
+    if not re.search(r'附件|图片|原图|材料|小卡|卡片',title+'\n'+goal): return brief
+    gap='内容待补：附件尚未读取（'+'、'.join(unread)+'）；具体题目与要求待读到附件后补充。'
+    if '内容待补' not in goal: goal=goal+'\n'+gap
+    match=re.match(r'^([^\n：:]{1,8})[：:]\s*完成(《[^》]+》)(?:上的|的)?练习',title)
+    if match: title=match.group(1)+'：完成'+match.group(2)+'练习'
+    brief.update(state='ready',title=title,goal=goal,material_gap=dict(names=unread,unread=True,reason_code='processing_pending'),
+                 reason=(reason+' 附件图片尚未读取：具体题目待补，不编造范围；已读的文字、日期与签名要求保留。').strip())
+    return brief
+
+
+def _school_accept_fold(store,row,plan):
+    """On acceptance, every folded original stays visible on the task: its line in the action, its message in the sources.
+
+    A folded notice is provenance of one task, so the parent must be able to read both the requirement it adds (or the
+    replacement/cancellation it grounds) and the message it came from; nothing the fold kept may drop at acceptance.
+    """
+    lines=_school_folded_lines(plan)
+    # A reminder/addition's message joins the cited messages as usual. A replacement or a cancellation keeps its words
+    # visible too, but it is noted beside them instead of cited: the agenda reads one day's roles from every cited
+    # message, and an older range must not fight the correction that superseded it (or an annulled request its own day).
+    folded=_school_folded_originals(plan)
+    cited=[(ref,text) for ref,text,change,time in folded
+           if ref and text and change in ('same','append')]
+    noted=[_school_fold_note(original) for original in folded
+           if original[0] and original[1] and original[2] in ('update','cancel')]
+    if not lines and not cited and not noted: return
+    with store._db() as c:
+        item=c.execute('SELECT task_id FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+        if item is None or not item['task_id']: return
+        task=c.execute('SELECT action,source FROM manual_tasks WHERE id=?',(item['task_id'],)).fetchone()
+        if task is None: return
+        body=str(task['action'] or '');add=[line for line in lines if line not in body]
+        source=str(task['source'] or '')
+        extra=[ref+'\n'+text for ref,text in cited if ref not in source]
+        notes=[note for note in noted if note not in source]
+        if not add and not extra and not notes: return
+        c.execute('UPDATE manual_tasks SET action=?,source=? WHERE id=?',
+                  (body+('\n'+'\n'.join(add) if add else ''),
+                   source+('\n\n'+'\n\n'.join(extra) if extra else '')+('\n\n'+'\n'.join(notes) if notes else ''),
+                   item['task_id']))
+
+
 def _school_same_due(due, target, evidence):
     """A reminder never sets, moves or clears a date; differing or unknown timing stays for the parent."""
     from family_agenda import sent_day
     old=target.get('due') or '';days=[sent_day(e.get('time','')) for e in evidence]
-    if due!=old and (due or any(_SCHOOL_DATE_MENTION.search(e.get('text','')) for e in evidence)):
-        return '提醒的日期与原事项不一致或原事项没有明确截止，是否同一次待核对；原事项和提醒原文都保留。'
+    said='\n'.join(str(e.get('text') or '') for e in evidence)
+    if due and old and due!=old and re.search(_SCHOOL_MOVED,said):
+        return '提醒把原事项改到另一天，是否同一次待核对；原事项和提醒原文都保留。'
+    if due and not old:
+        # The item states no day of its own: a reminder's day would be a new deadline, never this item's own.
+        return '提醒的日期或原事项没有明确截止，是否同一次待核对；原事项和提醒原文都保留。'
     if not all(days) or old and max(days)>old:
         return '提醒的发送日期不明或晚于原事项截止，是否新一轮待核对；原事项和提醒原文都保留。'
     return ''
@@ -3213,7 +3542,12 @@ def _school_same_brief(brief, evidence, targets, others=()):
     if not selected or not selected.get('append_basis') or not selected.get('same_complete',selected.get('targets_complete')) or selected.get('goal_truncated'):
         uncertain();return
     own,siblings=_school_same_own('\n'.join(e.get('text','') for e in evidence),others,selected['title']+'\n'+selected['goal'])
-    if not _school_same_object(own,selected['title']+'\n'+selected['goal']):
+    facts=selected['title']+'\n'+selected['goal']
+    # A reminder may restate the object by its name while the notice itself only points at it (林老师布置的那项朗读): one
+    # named object (《…》) shared by the reply's own summary and the saved item is that item's own concrete object, and no
+    # other affair could own it. Unnamed words still prove nothing through the summary alone.
+    named=_school_named_objects(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))&_school_named_objects(facts)
+    if not _school_same_object(own,facts) and not named:
         uncertain('提醒与原事项没有共同的具体对象，不能认定为同一事项；原事项和提醒原文都保留。');return
     if selected.get('status') in ('不参加','不适用'):
         uncertain('原事项已标为不参加或不适用，再次提醒是否改变决定待家长核对；原决定和提醒原文都保留。');return
@@ -3341,7 +3675,7 @@ def _reconcile_school_same(app, store, now, budget):
                 if plan.get('school_same_task') or later['status'] in ('不参加','不适用'): continue
                 try: evidence,_=_school_material(store,c,row)
                 except AgentError: continue
-                evidence=[dict(e,publisher=_publisher(e['ref'][8:].rsplit(':',1)[0],e),content_incomplete=bool(e.get('unread'))) for e in evidence]
+                evidence=[dict(e,publisher=_publisher_cross_channel(store,e['ref'][8:].rsplit(':',1)[0],e,c),content_incomplete=bool(e.get('unread'))) for e in evidence]
                 # One scope for the candidates and the whole reading: the tasks saved before this one, each verified affair once
                 # (a linked member is its own task's repeat, never a rival beside it). A task saved later is asked on its own turn,
                 # this one among its earlier tasks, so it never blocks this reading; earlier tasks not told apart still do.
@@ -4245,6 +4579,23 @@ def _school_role_days(quote,cited,others,words=False,handbacks=None):
     if words and _school_range_withdrawn(span,[text[:head],text[end:]]+[e['text'] for e in cited if e is not homes[0]
                                                                          and all(e is not r for r,_ in restated) and not unchanged(e) and not repeated(e)]):return None
     return (done,next(iter(due)),span) if words else (done,next(iter(due)))
+
+
+def _school_role_quote(current, cited, others, due):
+    """The cited original whose own words ground this item's due and its earlier completion day, else None.
+
+    The reply's paraphrase and its short quote are not the teacher's own words for a day: when a batch holds both the first
+    notice and its later correction, this picks the original whose two roles (_school_role_days) are exactly this item's.
+    """
+    def proves(text):
+        try: roles=_school_role_days(text,cited,others)
+        except (ValueError,KeyError,TypeError,IndexError): return False
+        return bool(roles) and roles[1]==due and len(roles[0])==1 and next(iter(roles[0]))<due
+    if current and proves(current): return current
+    for entry in cited:
+        text=str(entry.get('text') or '')
+        if text and text!=current and proves(text): return text
+    return None
 
 
 def _school_doer(clause):
@@ -5155,7 +5506,8 @@ def _school_role_reselect(store,c,row,evidence,now):
     # A review held by unread linked material of its native outcome (school_native_cover) is never a date-role reselection.
     if any(plan.get(k) for k in ('school_history_job','school_history_uncertain','school_change_of','school_duplicate_of','parent_goal_id',
                                  'approved','school_original_action','school_native_cover','school_first_batch_correction','school_previous_policy',
-                                 'school_saved_reread','school_batch_reread','school_role_reselect','school_split','school_split_from')):return None
+                                 'school_saved_reread','school_batch_reread','school_role_reselect','school_split','school_split_from',
+                                 'school_folded')):return None
     if not evidence or brief.get('origin_basis')!=_school_message_basis(evidence):return None
     raw=plan.get('school_selection_receipt');quote=plan.get('school_date_quote','')
     if not isinstance(raw,dict) or raw.get('state')!='ready' or (raw.get('change') or 'new')!='new' or raw.get('target_id') or not quote:return None
@@ -6082,7 +6434,7 @@ def _recheck_school_history(app,store,now,budget,scopes):
                 revisable=_school_revisable(c,origin[0],source['child_id']) if origin and origin[2] in ('audit','revision') else {}
             if len(known)>36 or len(_json(known))>14000: raise AgentError('既有决定超过本轮历史核对范围，未截断',code='school_history_bounds')
             evidence=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],source=source['name'],
-                time=v['time'],sender=v['sender'],publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
+                time=v['time'],sender=v['sender'],publisher=_publisher_cross_channel(store,source,v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
             profile=next(p for p in app.profiles() if p['id']==source['child_id'])
             used=1
             proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
@@ -6189,7 +6541,7 @@ def _recover_school_pending_relations(app,store,config,now,budget):
         if not fp:continue
         try:
             evidence=[dict(ref='message:'+source['id']+':'+v['id'],text=v['text'],source=source['name'],time=v['time'],sender=v['sender'],
-                           publisher=_publisher(source['id'],v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
+                           publisher=_publisher_cross_channel(store,source,v),kind=v['kind'],content_incomplete=v['unread']) for v in values]
             profile=next(p for p in app.profiles() if p['id']==source['child_id'])
             used=1
             proposals=_select('school',evidence,profile,as_of=now.date().isoformat(),data_path=store.data,
@@ -8015,6 +8367,17 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             if pending_target is not None:
                 pending_link=_school_pending_link(pending_target,proposal.get('task_change'),dict(title=proposal.get('task_title'),goal=proposal.get('task_goal'),
                     state=proposal.get('task_state')),[e for e in evidence if e['ref'] in {q['ref'] for q in cited}],proposal.get('due',''),title)
+        if (routing and not historical and pending_target is None and proposal.get('task_change')=='new'
+                and proposal.get('task_state') in ('ready','review')):
+            # The reply calls it new because the other channel's account hash differs from the saved card's. The program links
+            # it only on its own proof: one verified teacher's account, the card's own concrete object, no day of it moved.
+            reply=[e for e in evidence if e['ref'] in {q['ref'] for q in cited}]
+            summary=dict(title=proposal.get('task_title'),goal=proposal.get('task_goal'),state=proposal.get('task_state'))
+            hits=[(listed,_school_pending_link(listed,'same',summary,reply,proposal.get('due',''),title)) for listed in school_pending]
+            hits=[(listed,proven) for listed,proven in hits if proven]
+            if len(hits)==1: pending_target,pending_link=hits[0]
+            # Several waiting cards share this object and nothing (subject, channel, own object) tells them apart: the
+            # notice stays its own card for the parent, never a silent join to whichever was listed first.
         if (routing and not historical and proposal.get('task_change') in ('update','same','append','cancel') and proposal.get('task_state')=='review'
                 and (pending_link or proposal.get('task_target_id') in {t['id'] for t in school_tasks})):notice=[]
         # A ready repeat of one saved item (same) is that item's notice as well: the saved item already covers its located
@@ -8070,6 +8433,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
             # Every path reads one rule: a day that another action's clause states never becomes this item's own.
             return bool(routing and day and dated_quote and not historical and not native_action
                         and _school_borrowed_day(dated_quote,cited_evidence,day,str(proposal.get('task_goal','')),str(proposal.get('task_title',''))))
+        if routing and not historical and not native_action and due and len(cited_evidence)>1 and len(relative)>1:
+            # The reply may quote only the last correction (第26页只做1—3题) while the batch's own first notice states the
+            # completion day (今晚完成): the card's date quote is the cited original whose own words read both days
+            # (_school_role_days), never the model's paraphrase, so its completion day is still the teacher's own.
+            quoted=_school_role_quote(dated_quote,cited_evidence,title_quotes[:index]+title_quotes[index+1:],due)
+            if quoted and quoted!=dated_quote: dated_quote=quoted
         if (routing and not due and len(result['proposals'])==1 and len(cited_evidence)==1 and len(relative)==1
                 and not borrowed(next(iter(relative)))):
             # The model may omit a date that the single original notice states explicitly.
@@ -8139,6 +8508,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                                         and q not in _school_own_steps(title_quotes[index],[e['text'] for e in evidence if e['ref'] in {c['ref'] for c in cited}],
                                                                        title_quotes[:index]+title_quotes[index+1:])])
             mark=split_marks.get(index,{})
+            if ('formed' in mark and not _SCHOOL_SPLIT_REQUIREMENT.search(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))
+                    and not _SCHOOL_SPLIT_SUBJECT.search(str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))
+                    and not re.search(r'[《》0-9]', str(brief.get('title') or '')+'\n'+str(brief.get('goal') or ''))):
+                # A split of one message yields no residue of its own: only a fragment that names no subject, no action
+                # and no object (美术老师今天课上说) is a pure lead-in. Anything else stays, as a card if unsure.
+                continue
             if 'formed' in mark:
                 # No model receipt: the proposal it was taken out of, verbatim, and the original run it was formed from.
                 item.setdefault('plan',{})['school_split_from']=mark['formed']
@@ -9239,6 +9614,10 @@ def _school_original_actions(store,row,result,parts,known,evidence,pages,pdf,mat
             _text(value,name,spec.get('maxLength',4000))
             if 'enum' in spec and value[name] not in spec['enum']: raise AgentError('原件行动字段取值无法核对')
         chosen=_text(value,'existing_item_id',80)
+        if value.get('change')=='same' and not value.get('target_id') and value.get('state')=='ready' and chosen==row['id']:
+            # The reply relates the complete reading of this notice to its own candidate, and cites no saved task: what it
+            # has now read is this notice's own requirement, not a reminder about an existing decision.
+            value=dict(value,change='new')
         if chosen and (chosen not in existing or chosen in used): raise AgentError('原候选行动对应关系无法核对')
         used.add(chosen) if chosen else None
         old=existing.get(chosen);batch_proof=None
@@ -9440,6 +9819,7 @@ def _save_school_originals(store,c,row,items,key,fp,now):
     """Keep candidate IDs/decisions; append only validated action identities in the same transaction."""
     saved=[]
     for item in items:
+        item['body']=_school_folded_body(item['plan'],item['body'])
         old=item['old'];updated=now.isoformat()
         if old:
             c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=?,evidence=? WHERE id=?',
@@ -9455,6 +9835,13 @@ def _save_school_originals(store,c,row,items,key,fp,now):
 
 def _accept_school_reading(app,store,row,evidence,now,*,original=False):
     plan=json.loads(row['plan']);brief=plan.get('school_task',{});created=failed=0
+    adjusted=_school_gap_accept(store,row,brief,None,evidence,now)
+    if adjusted.get('state')=='ready' and (adjusted.get('material_gap') or adjusted.get('child_oral')):
+        brief=adjusted;plan['school_task']=brief
+        with store._db() as c:
+            c.execute("UPDATE agent_items SET title=?,body=?,plan=? WHERE id=? AND state='pending' AND updated=?",
+                      (brief.get('title') or row['title'],_school_folded_body(plan,brief.get('goal') or row['body']),_json(plan),row['id'],row['updated']))
+        row['title']=brief.get('title') or row['title'];row['body']=_school_folded_body(plan,brief.get('goal') or row['body']);row['plan']=_json(plan)
     if (original or any(brief.get(k) for k in ('material_evidence','page_evidence','pdf_evidence'))) and brief.get('state')=='ready':
         import family_agenda
         published=[family_agenda.sent_day(e.get('time')) for e in evidence]
@@ -9478,6 +9865,7 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
                 apply_school_same(app,store,row['id'],row['updated'])
             else:
                 result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
+                _school_accept_fold(store,row,plan)
                 created+=not result.get('deduplicated',False)
         except (AgentError,sqlite3.IntegrityError) as error:
             if isinstance(error,AgentError) and error.code=='school_correction_changed':
@@ -9494,6 +9882,89 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
                 changed=c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],expected)).rowcount
             failed+=changed
     return created,failed
+
+def _fold_school_follows(app, store, now):
+    """A later notice the program already proved one saved task's affair joins that task: one card per affair, no orphan.
+
+    A reminder saved while its card was still waiting carries the program's own link (school_pending_of: the verified
+    publisher, the card's concrete object, no day moved), and a reply the model already related to a saved task carries that
+    target. Once the card is saved as a task, such a notice is provenance of that task, never a second card: its original
+    stays verbatim in its own row (accepted onto the task) and its requirement lines join the task's action. The task's
+    cited originals and its own day are untouched, so the first notice's words still give its completion day.
+    """
+    used=0
+    with store._db() as c:
+        rows=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created,id")]
+        tasks={t['id']:dict(t) for t in c.execute('SELECT * FROM manual_tasks')}
+    for row in rows:
+        plan=json.loads(row['plan'] or '{}');brief=plan.get('school_task') or {};link=plan.get('school_pending_of') or {}
+        target_id=''
+        if isinstance(link,dict) and link.get('item_id'): target_id=link['item_id']
+        elif brief.get('change')=='same' and str(brief.get('target_id') or '').startswith('AGENT-'):
+            target_id=str(brief['target_id'])
+        if not target_id: continue
+        with store._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            live=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+            if live is None or dict(live)!=row: continue
+            if isinstance(link,dict) and link.get('item_id'):
+                target=c.execute('SELECT * FROM agent_items WHERE id=?',(target_id,)).fetchone()
+            else:
+                target=c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted' AND task_id=? ORDER BY created,id LIMIT 1",
+                                 (target_id,)).fetchone()
+            if target is None or target['state']!='accepted' or not target['task_id']: continue
+            if isinstance(link,dict) and link.get('item_id') and link['item_id']!=target['id']: continue
+            if not isinstance(link,dict) or not link.get('item_id'):
+                # The model related this row to the saved task; the program joins only the card's own concrete object.
+                if not _school_same_object(str(row['title'] or '')+'\n'+str(row['body'] or ''),
+                                           str(target['title'] or '')+'\n'+str(target['body'] or '')): continue
+            task=tasks.get(target['task_id'])
+            if task is None: continue
+            evidence,_=_school_material(store,c,row)
+            change=str((link or {}).get('change') or brief.get('change') or 'same')
+            lines=[line for line in str(task['action'] or '').split('\n') if line.strip()]
+            for line in str(row['body'] or '').split('\n'):
+                line=line.strip()
+                if line and line not in lines: lines.append(line)
+            # Every line of the later original stays visible in the action, and its message stays readable in the sources.
+            # Both paths write the same convention: a reminder/addition is cited (its message is part of the affair's own
+            # day), while a replacement/cancellation is a readable note with its words and sending time, never a cited
+            # message line: the agenda reads one day's roles from every cited message.
+            folded_plan={'school_folded':[dict(change=change,originals=[
+                dict(ref=e.get('ref'),text=e.get('text'),time=e.get('time')) for e in evidence])]}
+            for line in _school_folded_lines(folded_plan):
+                if line not in lines: lines.append(line)
+            source=str(task['source'] or '')
+            cited=[e for e in evidence if e.get('ref') and str(e.get('text') or '').strip()]
+            extra=[str(e.get('ref'))+'\n'+str(e.get('text')).strip() for e in cited
+                   if change in ('same','append') and str(e.get('ref')) not in source]
+            notes=[_school_fold_note((str(e.get('ref')),str(e.get('text')),change,str(e.get('time') or '')))
+                   for e in cited if change in ('update','cancel')]
+            notes=[note for note in notes if note not in source]
+            if extra: source=source+'\n\n'+'\n\n'.join(extra)
+            if notes: source=source+'\n\n'+'\n'.join(notes)
+            due=task['due']
+            if change=='cancel':
+                due=''
+            elif change in ('update','append'):
+                due=_school_late_due(evidence) or task['due']
+            c.execute('UPDATE manual_tasks SET action=?,source=?,due=? WHERE id=?',
+                      ('\n'.join(lines),source,due,task['id']))
+            if change=='cancel': c.execute("UPDATE agent_items SET due='' WHERE id=?",(target['id'],))
+            elif due!=task['due']: c.execute('UPDATE agent_items SET due=? WHERE id=?',(due,target['id']))
+            plan.update(school_duplicate_of=target['id'],
+                        school_same_receipt=dict(link=link or {},task_id=task['id'],
+                                                 input_basis=_school_message_basis(evidence),folded_at=now.isoformat()))
+            c.execute("UPDATE agent_items SET state='accepted',task_id=?,plan=?,updated=? WHERE id=?",
+                      (task['id'],_json(plan),now.isoformat(),row['id']))
+            target_plan=json.loads(target['plan'] or '{}')
+            target_plan.setdefault('school_folded',[]).append(dict(item_id=row['id'],refs=[e.get('ref') for e in evidence],at=now.isoformat(),
+                                                                     change=change,
+                                                                     originals=[dict(ref=e.get('ref'),text=e.get('text'),time=e.get('time'),sender=e.get('sender'),publisher=e.get('publisher')) for e in evidence]))
+            c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(target_plan),now.isoformat(),target['id']))
+            used+=1
+    return used
+
 
 def _refresh_school(app, store, now, budget):
     """Upgrade only pending notices; keep IDs/decisions and the existing call budget.
@@ -9736,6 +10207,11 @@ def _refresh_school(app, store, now, budget):
                     if not isinstance(result,dict) or set(result) != set(TASK_BRIEF_SCHEMA['required']): raise AgentError('学校事项结构无法核对')
                     if result['purpose'] not in PURPOSES: raise AgentError('学校事项用途无法核对')
                     if compiled_requirements is not None: result=_school_requirement_goal(result,compiled_requirements)
+                    if (result['state']=='ready' and result.get('change') in ('same','append','update') and not result.get('target_id')
+                            and not any(_school_same_object(result['title']+'\n'+result['goal'],t['title']+'\n'+t['goal']) for t in targets)):
+                        # The reply relates this notice to a card, and that card is this candidate: its own complete reading is
+                        # the notice's own requirement. No saved task shares its object, so it is no reminder of a decision.
+                        result=dict(result,change='new')
                     if saved_reread:
                         # A reread decides again but never rewrites its originals: any day it states must be the one day
                         # they prove, and the goal carries their complete requirements through the shared compilation.
@@ -9751,6 +10227,7 @@ def _refresh_school(app, store, now, budget):
                 if page_evidence: brief.setdefault('page_evidence',dict(fingerprint=page_key,read=page_evidence['read'],unread=page_evidence['unread'],omitted=page_evidence['omitted']))['candidate']=candidate
                 if pdf_evidence: brief.setdefault('pdf_evidence',dict(fingerprint=pdf_key,documents=pdf_evidence['documents']))['candidate']=candidate
                 if material: brief.setdefault('material_evidence',dict(fingerprint=material_key))
+                if not reference: brief=_school_gap_accept(store,row,brief,result,evidence,now)
                 if plan.get('school_original_action'): brief['original_actions_revision']=SCHOOL_ORIGINAL_REVISION
                 due=row['due']
                 if cleared:
@@ -9800,7 +10277,7 @@ def _refresh_school(app, store, now, budget):
                         _discard_job(c,key,fp);continue
                     updated=now.isoformat()
                     c.execute('UPDATE agent_items SET title=?,body=?,plan=?,updated=?,due=? WHERE id=?',
-                        (brief['title'] or row['title'],brief['goal'] or row['body'],_json(plan),updated,due,row['id']))
+                        (brief['title'] or row['title'],_school_folded_body(plan,brief['goal'] or row['body']),_json(plan),updated,due,row['id']))
                     c.execute("UPDATE agent_jobs SET done=1,error='',next_try='' WHERE id=? AND fingerprint=?",(key,fp))
                     row['updated']=updated;row['due']=due;row['plan']=_json(plan)
             except (family_llm.LLMDraftError,AgentError,ValueError) as error:
@@ -10152,7 +10629,7 @@ def run_once(app, now=None):
                     related = {v['message']['id']: ['message:' + source['id'] + ':' + entry['message']['id'] for entry in group['messages']]
                                for group in _publication_groups(views) for v in group['messages']}
                     evidence = [dict(ref='message:' + source['id'] + ':' + row['id'], text=row['text'],
-                        source=source['name'], time=row['time'], sender=row['sender'], publisher=_publisher(source['id'], row),
+                        source=source['name'], time=row['time'], sender=row['sender'], publisher=_publisher_cross_channel(store, source, row),
                         related_messages=related[row['id']], attachments=view['attachments'],
                         kind=row['kind'], content_incomplete=row['unread'], message_order=row.get('message_order', '')) for row, view in zip(values, views)]
                     # The source's own stored messages after this batch's first (at most 200), never sent to the model: a
@@ -10163,7 +10640,7 @@ def run_once(app, now=None):
                         first = c.execute('SELECT MIN(rowid) FROM agent_messages WHERE source_id=? AND id IN (' + ','.join('?' * len(ids)) + ')',
                                           (source['id'], *ids)).fetchone()[0] or 0
                         later = [dict(ref='message:' + source['id'] + ':' + m['id'], text=m.get('text', ''), time=m.get('time', ''),
-                                      publisher=_publisher(source['id'], m), kind=m.get('kind', 'text'), content_incomplete=m.get('unread', False),
+                                      publisher=_publisher_cross_channel(store, source, m), kind=m.get('kind', 'text'), content_incomplete=m.get('unread', False),
                                       attachments=[]) for m in (json.loads(r['payload']) for r in c.execute(
                                           'SELECT payload FROM agent_messages WHERE source_id=? AND rowid>? ORDER BY rowid LIMIT 200', (source['id'], first)))
                                  if m['id'] not in ids]
@@ -10195,6 +10672,7 @@ def run_once(app, now=None):
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
+            _fold_school_follows(app,store,now)
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
             # Fresh batches above go first; saved repeats of one affair are revisited only with a call to spare.
             same=_reconcile_school_same(app,store,now,min(1,max(0,budget-1)));budget-=same['used'];processed+=same['used'];failed+=same['failed']
