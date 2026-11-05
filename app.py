@@ -519,7 +519,11 @@ def school_coverage(child_id,now=None):
     try:
         mine=[s for s in agent['sources'] if s.get('child_id')==child_id]
         pending=sum(s['pending_message_count'] for s in mine if type(s.get('pending_message_count')) is int and s['pending_message_count']>0)
-        gaps=[dict(name=str(s.get('name') or '学校消息来源'),status=status) for s in mine for status in [school_read_status(s,agent,now)] if status!=SCHOOL_READ_OK]
+        # A source whose messages ran out of automatic attempts carries the same line in its error; hand it over verbatim
+        # as an optional reason, leaving name/status and the gap filter untouched.
+        gaps=[dict(name=str(s.get('name') or '学校消息来源'),status=status,
+                   **({'reason':str(s['error'])} if str(s.get('error') or '').startswith(family_agent.SCHOOL_READ_GAP_PREFIX) else {}))
+              for s in mine for status in [school_read_status(s,agent,now)] if status!=SCHOOL_READ_OK]
     except (KeyError,TypeError,AttributeError): return None
     return dict(school_pending=pending,school_read_gaps=gaps)
 

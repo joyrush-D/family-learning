@@ -302,6 +302,7 @@
 !/test_daily_list_progress.py
 !/test_daily_list_whole_day.py
 !/test_daily_list_expression.py
+!/test_school_read_gap.py
 !/test_daily_action_scope.py
 !/test_image_original_date_scope.py
 !/test_image_original_date_scope.json

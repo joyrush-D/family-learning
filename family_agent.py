@@ -26,6 +26,13 @@ import family_teacher_public
 
 TZ = family_review.TIMEZONE
 MAX_ATTEMPTS = 3
+# A school-message batch that keeps failing because the model never finished its answer is not dropped for good after
+# the three immediate attempts: it is retried at these delays (minutes from the failure), first after 70 minutes so the
+# shorter observation windows of the saved jobs are untouched, then every 6 hours, then once a day. Five consecutive
+# failures therefore leave one retry per day. Content-level refusals (AgentError/ValueError) keep the three-attempt
+# limit and the next_try='' hand-over to the explicit retry, exactly as before.
+SCHOOL_RETRY_MINUTES = (70, 360, 1440)
+SCHOOL_READ_GAP_PREFIX = '消息整理有缺口，清单可能缺项：'
 FOCUS = {
     'school': '请核对这条通知是否适用于本孩子，以及要准备什么、何时完成；确认后可加入待办。',
     'explain': '可以请孩子用自己的话说说这一步怎么想的、在哪里需要帮助，再记录一次实际尝试。',
@@ -1627,7 +1634,8 @@ class Store:
                     PRIMARY KEY(source_id,message_id,fingerprint,first_page));
                 CREATE TABLE IF NOT EXISTS agent_jobs (
                     id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
-                    next_try TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', done INTEGER NOT NULL DEFAULT 0);
+                    next_try TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', done INTEGER NOT NULL DEFAULT 0,
+                    retries INTEGER NOT NULL DEFAULT 0, retry_at TEXT NOT NULL DEFAULT '');
                 CREATE TABLE IF NOT EXISTS agent_items (
                     id TEXT PRIMARY KEY, job_id TEXT NOT NULL, child_id TEXT NOT NULL, kind TEXT NOT NULL,
                     title TEXT NOT NULL, body TEXT NOT NULL, evidence TEXT NOT NULL, due TEXT NOT NULL,
@@ -1652,6 +1660,13 @@ class Store:
                     c.execute("ALTER TABLE agent_items ADD COLUMN plan TEXT NOT NULL DEFAULT '{}'")
             if 'check_request' not in columns:
                 c.execute("ALTER TABLE agent_sources ADD COLUMN check_request TEXT NOT NULL DEFAULT '{}'")
+            job_columns = {row['name'] for row in c.execute('PRAGMA table_info(agent_jobs)')}
+            if 'retries' not in job_columns or 'retry_at' not in job_columns:
+                c.execute('BEGIN IMMEDIATE')
+                if 'retries' not in job_columns:
+                    c.execute('ALTER TABLE agent_jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0')
+                if 'retry_at' not in job_columns:
+                    c.execute("ALTER TABLE agent_jobs ADD COLUMN retry_at TEXT NOT NULL DEFAULT ''")
 
     @contextmanager
     def _db(self):
@@ -2396,9 +2411,11 @@ class Store:
             c.execute('BEGIN IMMEDIATE')
             row = c.execute('SELECT * FROM agent_jobs WHERE id=?', (key,)).fetchone()
             if row and row['fingerprint'] == fingerprint:
-                if row['done'] or (model and row['attempts'] >= MAX_ATTEMPTS) or row['next_try'] > now.isoformat(): return None
+                retry_at = str(row['retry_at'] or '') if 'retry_at' in row.keys() else ''
+                due = bool(retry_at) and retry_at <= now.isoformat()
+                if row['done'] or (model and row['attempts'] >= MAX_ATTEMPTS and not due) or row['next_try'] > now.isoformat(): return None
                 if not claim: return fingerprint
-                if model: c.execute('UPDATE agent_jobs SET attempts=attempts+1 WHERE id=?', (key,))
+                if model: c.execute("UPDATE agent_jobs SET attempts=attempts+1,retry_at='' WHERE id=?", (key,))
                 return fingerprint
             if keep_budget and row and (not row['done'] or row['fingerprint'].startswith('discarded:')):
                 # A recovery identity keeps its attempts, backoff and error history under any later request, a round dropped
@@ -2607,13 +2624,23 @@ class Store:
 
     def _fail(self, key, now, *, fingerprint=None, reason=''):
         with self._db() as c:
-            row = c.execute('SELECT fingerprint,attempts FROM agent_jobs WHERE id=? AND done=0 AND attempts>0', (key,)).fetchone()
+            row = c.execute('SELECT fingerprint,attempts,retries FROM agent_jobs WHERE id=? AND done=0 AND attempts>0', (key,)).fetchone()
             if row is None: return
             if fingerprint is not None and row['fingerprint'] != fingerprint: return
             fingerprint = row['fingerprint']
-            attempt = row['attempts']
+            attempt = row['attempts']; retries = row['retries'] if 'retries' in row.keys() else 0
+            # Only a model answer that never completed is worth another automatic try; a content refusal keeps its limit.
+            draft = isinstance(reason, family_llm.LLMDraftError)
             reason=''.join(char for char in str(reason) if ord(char)>=32 and ord(char)!=127).strip()[:300]
             message='模型整理未成功'+(('：'+reason) if reason else '')+'；原始资料保留。'
+            if draft and attempt >= MAX_ATTEMPTS and key.startswith('messages:'):
+                # A permanent read gap would lose the messages and tell nobody: schedule the next bounded retry and let the
+                # buyer retry, the source card and school_read_gaps see the same line (_school_read_gap_reconcile).
+                retry_at = (now + dt.timedelta(minutes=SCHOOL_RETRY_MINUTES[min(retries, len(SCHOOL_RETRY_MINUTES) - 1)])).isoformat()
+                message += ' 自动尝试共3次未成功，已记为读取缺口，将于 ' + retry_at + ' 自动再试；原始资料保留。'
+                c.execute('UPDATE agent_jobs SET next_try=?,error=?,retries=retries+1,retry_at=? WHERE id=? AND fingerprint=? AND done=0 AND attempts=?',
+                    ('', message, retry_at, key, fingerprint, attempt))
+                return
             message+=(' 自动尝试共3次，达到自动重试上限后需人工重试。' if attempt>=MAX_ATTEMPTS else
                       ' 将按计划自动进行第'+str(attempt+1)+'次尝试。')
             c.execute('UPDATE agent_jobs SET next_try=?,error=? WHERE id=? AND fingerprint=? AND done=0 AND attempts=?',
@@ -10684,6 +10711,53 @@ def _photo_batches(app, now, budget):
         return {'used': 0, 'failed': 1, 'saves': 0}
 
 
+def _school_read_gap_reconcile(store, config, now):
+    """Record, refresh or clear one visible read-gap line per source whose message batch ran out of automatic attempts.
+
+    The line goes to agent_sources.error — the field the web source card shows and the read-gap check counts — and never
+    replaces a collection or authorisation error: only our own prefixed line is rewritten or cleared, so a real error stays.
+    app.py returns the same text as an optional gap reason, so the buyer sees the source, the message ids, the cause and
+    when the next bounded retry is due, instead of a list that silently lacks the item.
+    """
+    if not config.get('enabled'): return 0
+    with store._db() as c:
+        current = {row['id']: str(row['error'] or '') for row in c.execute('SELECT id,error FROM agent_sources')}
+    changed = 0
+    for source in config.get('sources') or []:
+        if not isinstance(source, dict) or not source.get('enabled'): continue
+        ident = str(source.get('id') or '')
+        if ident not in current: continue
+        gaps = []
+        for values in _school_pending_batches(store, ident):
+            key = 'messages:' + _hash([ident, [v['id'] for v in values]])[:40]
+            fingerprint = _hash({'school_learning_policy': 8, 'messages': values})
+            with store._db() as c:
+                job = c.execute('SELECT fingerprint,attempts,error,retry_at FROM agent_jobs WHERE id=? AND done=0', (key,)).fetchone()
+            if job is None or job['fingerprint'] != fingerprint or job['attempts'] < MAX_ATTEMPTS: continue
+            gaps.append(([v['id'] for v in values], job['attempts'], str(job['error'] or ''), str(job['retry_at'] or '')))
+        text = ''
+        if gaps:
+            ids = [message_id for gap in gaps for message_id in gap[0]]
+            attempt = max(gap[1] for gap in gaps)
+            reason = next((match.group(1) for gap in gaps for match in [re.search(r'模型整理未成功：(.*?)；原始资料保留', gap[2])] if match), '')
+            reason = ' '.join(str(reason).split())[:120] or '模型未完成整理'
+            retry = next((gap[3] for gap in gaps if gap[3]), '')
+            text = (SCHOOL_READ_GAP_PREFIX + '来源「' + str(source.get('name') or ident) + '」(' + ident + ') 有 '
+                    + str(len(ids)) + ' 条消息（' + ids[0] + ('…' + ids[-1] if len(ids) > 1 else '') + '）整理失败 '
+                    + str(attempt) + ' 次：' + reason + ('；下次自动重试 ' + retry if retry else '；自动重试已达上限，需人工核对') + '。')
+        was = current[ident]
+        if was.startswith(SCHOOL_READ_GAP_PREFIX):
+            new = text
+        elif text and not was.strip():
+            new = text
+        else:
+            continue  # a real collection error keeps the field; the retry schedule still runs silently
+        if new != was:
+            with store._db() as c:
+                c.execute('UPDATE agent_sources SET error=? WHERE id=?', (new, ident))
+            changed += 1
+    return changed
+
 def run_once(app, now=None):
     now = _now(now); store = Store(_round_connect(app.connect), app.profiles, app.DATA, app=app)
     config = store._config()
@@ -10787,6 +10861,7 @@ def run_once(app, now=None):
             recovered=_recover_school_ack_originals(store,config,now)
             created+=recovered['created'];failed+=recovered['failed']
             _school_audit_boundary(store)  # before this round's intake; fixed once, zero model calls
+            _school_read_gap_reconcile(store, config, now)  # a permanent read gap must stay visible and keep its retry
             history_scopes=_history_scopes(store,config,now)
             # Share the original three-call budget; alternate five-minute windows under the one-minute Agent service.
             history_reserve=int(bool(history_scopes) and now.minute//5%2==0 and budget>0)
