@@ -1354,3 +1354,6 @@ body.grove-wide[data-page="home"] aside nav.grove-rail-sets button{min-height:0!
 
 /* Build 321 修正：详情栏按钮的统一 min-height:36 会压过核对入口，单独提到 44（点击区要求）。 */
 .grove3 .grove-detail-bar .grove-checkup-start{min-height:44px!important;height:auto!important;padding:0 14px!important}
+
+/* Build 321 深链接：找不到事项时的页顶灰字提示（不打断今天页）。 */
+.grove3 .grove-deep-notice{margin:0 auto 10px;max-width:940px;padding:8px 12px;border:1px solid var(--g-line);border-radius:10px;background:var(--g-surface2);color:var(--g-muted);font-size:12.5px}

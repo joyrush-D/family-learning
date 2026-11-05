@@ -164,6 +164,34 @@ let taskLinkPending='',taskLinkIntent='';
 // words, its original task (or none) and the existing topic-diagnosis panel for exactly that record and child; nothing is saved here.
 let recordTopicPending=null;
 {const m=/^#wrong=(\d{1,12})&child=([^&]{1,100})&do=topic$/.exec(location.hash);if(m)recordTopicPending={id:Number(m[1]),child:decodeURIComponent(m[2])}}
+
+// Build 321：网页深链接 `?child_id=<id>&day=<YYYY-MM-DD>&task=<task_id>&checkup=1#checkup`（hash 与 query 都认，也兼容
+// `#task=<id>&checkup=1`）：选中该事项所在 scope → 打开详情浮层 → 直接进「核对这份作业」第一步。找得到之前只读 /api/state
+// 与 /api/day，没有任何写请求；找不到就回落今天页并在页顶给一行灰字提示，不白屏。
+let groveDeep=null,groveDeepBusy=false;
+{try{const q=new URLSearchParams(location.search),h=new URLSearchParams(String(location.hash||'').replace(/^#/,''));const get=k=>q.get(k)||h.get(k)||'';const task=get('task').trim(),checkup=get('checkup')==='1';if(task&&checkup)groveDeep={task,day:get('day').trim(),child:get('child_id').trim(),checkup:true,done:false,notice:''}}catch{}}
+function groveDeepNoticeHTML(){return groveDeep&&groveDeep.notice?`<p class="note grove-deep-notice" role="status" data-grove-deep-notice>${esc(groveDeep.notice)}</p>`:''}
+function groveDeepStripUrl(){try{const url=new URL(location.href);for(const k of ['task','checkup'])url.searchParams.delete(k);const hp=new URLSearchParams(String(url.hash||'').replace(/^#/,''));hp.delete('task');hp.delete('checkup');const hash=hp.toString();url.hash=hash?'#'+hash:'';history.replaceState(history.state,'',url.pathname+(url.search||'')+(url.hash||''))}catch{}}
+function groveDeepMiss(){if(!groveDeep)return;groveDeep.done=true;groveDeep.notice='没找到这件作业';groveDeepStripUrl();if(page==='home')render()}
+async function groveDeepRun(){
+ if(!groveDeep||groveDeep.done)return;groveDeepBusy=true;
+ try{
+  if(groveDeep.child){const owner=data.children.find(c=>c.id===groveDeep.child);if(!owner){groveDeepBusy=false;return groveDeepMiss()}if(owner.name!==child){if(!selectChild(owner.id)){groveDeepBusy=false;return groveDeepMiss()}groveDeepBusy=false;return render()}}
+  const day=groveDeep.day||data.today;
+  if(groveDay!==day&&day!==data.today){groveDay=day;await groveLoadDay(day,true)}
+  else if(groveDay!==day){groveDay=day}
+  const view=groveView();
+  let row=view?groveRows(view).find(r=>String(r.task_id||'')===groveDeep.task||String(r.id||'')===groveDeep.task):null,scope='open';
+  if(!row&&view){const extra=[...(view.upcoming||[]).map(x=>x.item||x),...((view.undated||[]).flatMap(g=>g.items||[]))];row=extra.find(r=>String(r.task_id||'')===groveDeep.task||String(r.id||'')===groveDeep.task)||null;if(row)scope='upcoming'}
+  if(!row){groveDeepBusy=false;return groveDeepMiss()}
+  groveScope=scope;groveSelected=row.id;groveDetailOpen=true;render();
+  if(typeof groveShowDetail==='function')groveShowDetail();
+  if(groveDeep.checkup&&typeof checkupEligible==='function'&&checkupEligible(row)&&typeof checkupOpen==='function')checkupOpen(row.id);
+  groveDeep.done=true;groveDeepStripUrl();
+ }catch(e){console.error('grove deep link',e);groveDeepBusy=false;groveDeepMiss();return}
+ finally{groveDeepBusy=false}
+}
+function groveDeepTick(){if(!groveDeep||groveDeep.done||groveDeepBusy||page!=='home'||!data)return;setTimeout(()=>{groveDeepRun()},30)}
 // The original wrong record's later corrections and re-checks, each its own saved record; none is shown as none, never as corrected.
 function recordTopicFollowups(r){const f=data.records.filter(x=>x.related_record_id===r.id&&['订正','复测','独立复测'].includes(x.followup_kind)).sort((a,b)=>String(a.day||'').localeCompare(String(b.day||''))||a.id-b.id);
  return `<section class="record-topic-original" data-record-topic-followups><h3>订正与复测</h3>${f.length?f.map(x=>`<p class="source" data-record-followup="${esc(x.id)}">${esc(x.day||'')} · ${esc(x.followup_kind)}：${esc(x.note||x.title||'')}</p>`).join(''):'<p class="small muted">还没有订正或复测记录。</p>'}</section>`}
@@ -873,7 +901,7 @@ function todayTasksHTML(){
  const phoneWeek=mode==='desktop'?'':`<div class="grove-cal-bottom">${groveWeekHTML(view,day)}</div>`;
  const body=groveTab==='wrong'?`${tabCal}<div class="grove-wrongbook">${groveWrongHTML(view)}</div>`
   :groveTab==='learning'?`${tabCal}<div class="grove-learning-list">${groveLearningHTML(view)}</div>`
-  :`${mode==='desktop'?'':errorHTML}${mode==='desktop'?'':chipsAdd}${phoneCal}${mode==='desktop'?errorHTML:''}${upcomingStrip}${listHTML}${mode==='desktop'?'':phoneWeek}`;
+  :`${groveDeepNoticeHTML()}${mode==='desktop'?'':errorHTML}${mode==='desktop'?'':chipsAdd}${phoneCal}${mode==='desktop'?errorHTML:''}${upcomingStrip}${listHTML}${mode==='desktop'?'':phoneWeek}`;
  const otherBar=groveTab==='wrong'||groveTab==='learning'
   ?`<header class="grove-list-head grove-bar"><div class="grove-bar-main"><div class="grove-bar-title"><h1 id="groveListTitle" class="grove-bar-h">${groveTab==='wrong'?'错题本':'学习进展'}</h1><p class="grove-bar-sub">${groveTab==='wrong'?'该孩子全部错题，按科目；订正后仍保留原题与原作业。':'按科目看原错题、知识点线索与再试；线索不等于掌握。'}</p></div></div><p class="grove-summary grove-sr" data-grove-summary>${esc(day)}</p></header>`
   :bar;
@@ -1152,6 +1180,7 @@ function groveNavToAside(){const nav=groveNavEl(),aside=document.querySelector('
 function groveAfterRender(){
  const home=page==='home',view=home?groveView():null,mode=groveMode(),wide=home&&mode==='desktop'&&!!view;
  document.body.classList.toggle('grove-wide',wide);
+ groveDeepTick();
  // 318：整页重渲染后恢复浮层状态（详情保存/刷新后浮层仍在原卡上）。
  if(home){const root=document.querySelector('.grove3');
   if(root){const open=!!(groveDetailOpen&&groveSelected&&groveView());root.classList.toggle('is-detail',open);root.dataset.view=open?'detail':'list';const bd=root.querySelector('.grove-detail-backdrop');if(bd)bd.hidden=!open}}
