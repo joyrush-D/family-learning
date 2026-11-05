@@ -227,7 +227,7 @@ function revealTaskLink(){
 // The day list shows one of its three parts at a time (待办 / 日期未定 / 已办), switched directly like the Mac app's.
 let groveScope='open';
 function groveScopeOf(view,id){return (view?.undated||[]).some(g=>g.items.some(r=>r.id===id))?'undated':(view?.closed||[]).some(g=>(g.items||[]).some(r=>r.id===id))?'closed':'open'}
-let groveSelected='',groveDetailOpen=false,groveStamp=null,groveDay='',groveTab='calendar',groveCancelledOpen=false;const groveMaterials=new Map(),groveDays=new Map();
+let groveSelected='',groveDetailOpen=false,groveStamp=null,groveDay='',groveTab='calendar',groveCancelledOpen=false,groveLearningFocus=null,groveFocusChild='';const groveMaterials=new Map(),groveDays=new Map();
 const groveWhen={later:'以后安排',overdue:'已过期限',earlier:'之前安排',unknown:'日期未写明',passed:'已过'};
 // Today is data.today_view; another day of the week strip is the same server projection read once by GET /api/day (one
 // request gives that day's list, lessons/plans and the week's counts). A new data load clears the cache, so a save is re-read.
@@ -268,10 +268,15 @@ function groveWrongHTML(v){
   +`<div class="grove-wrong-side"><span class="grove-chip${w.state==='待订正'?' is-coral':' is-leaf'}">${esc(w.state||'待订正')}</span>${w.task_id?`<button type="button" data-task="${esc(w.task_id)}" data-grove-wrong-task="${esc(w.id)}">回原作业</button>`:`<button type="button" data-record="${esc(w.id)}" data-grove-wrong-record-open="${esc(w.id)}">查看 / 更正原记录</button><button type="button" data-followup="${esc(w.id)}" data-followup-kind="订正" data-grove-wrong-correct="${esc(w.id)}">记订正 / 复测</button>`}</div></article>`).join('')}</div></section>`).join('');
 }
 function groveLearningHTML(v){
- const l=v.learning;if(!l)return '<p class="small muted">这一版后台还没有提供学习进展；原错题仍在错题本。</p>';
+ const l=v.learning;
+ const focus=groveLearningFocus;
+ const bar=focus?`<div class="grove-learning-focus" data-learning-focus-bar><span>只看：<strong>${esc(focus.task_title||'这份作业')}</strong></span><button type="button" data-learning-focus-clear>全部</button></div>`:'';
+ if(!l)return bar+'<p class="small muted">这一版后台还没有提供学习进展；原错题仍在错题本。</p>';
  const pack=l.pack?.installed?'':'<p class="small muted" data-learning-pack="missing">数学知识包未安装或版本不符：原错题、订正和清单照常可用，暂不能做知识点诊断。</p>';
- if(!l.subjects.length)return pack+'<p class="grove-empty-list" data-learning-empty>还没有可核对的学习记录。记下错题或课程记录后，这里按科目列出原记录与知识点线索。</p>';
- return pack+l.subjects.map(s=>`<section class="grove-subject" data-learning-subject="${esc(s.subject)}"><h2 class="grove-tag">${esc(s.subject)}${s.evidence.length?`<span>${s.evidence.length} 道原错题</span>`:''}</h2>`
+ const subjects=focus?l.subjects.map(s=>({...s,evidence:(s.evidence||[]).filter(e=>String(e.task_id||'')===String(focus.task_id)),course:[]})).filter(s=>s.evidence.length):l.subjects;
+ if(focus&&!subjects.length)return bar+pack+'<p class="grove-empty-list" data-learning-focus-empty>这份作业还没有核对记录。</p>';
+ if(!subjects.length)return bar+pack+'<p class="grove-empty-list" data-learning-empty>还没有可核对的学习记录。记下错题或课程记录后，这里按科目列出原记录与知识点线索。</p>';
+ return bar+pack+subjects.map(s=>`<section class="grove-subject" data-learning-subject="${esc(s.subject)}"><h2 class="grove-tag">${esc(s.subject)}${s.evidence.length?`<span>${s.evidence.length} 道原错题</span>`:''}</h2>`
   +s.evidence.map(e=>`<article class="grove-card grove-learning" data-learning-record="${esc(e.record_id)}"><div class="grove-learning-head"><strong>${esc(e.title)}</strong><span class="grove-chip${e.state==='待订正'?' is-coral':' is-leaf'}">${esc(e.state||'')}</span></div>`
    +(e.topics?.length?`<p class="grove-chips">${e.topics.map(t=>{const linked=t.state==='linked',current=t.basis==='current';return `<span class="grove-chip${current&&!linked?' is-leaf':current?'':' is-soft'}" data-topic-basis="${esc(t.basis)}" data-topic-state="${linked?'linked':'diagnosed'}">${linked?(current?'已关联 ':'历史关联 '):current?'知识点 ':'历史 '}${esc(t.name)}${linked&&current?' · 待诊断':''}</span>`}).join('')}</p>`:'')
    +`<dl class="grove-evidence">${(e.lines||[]).map(([k,x])=>`<div><dt>${esc(k)}</dt><dd>${esc(x)}</dd></div>`).join('')}</dl>`
@@ -631,6 +636,31 @@ function groveTimelineHTML(r){
  return `<section class="grove-card grove-timeline" data-timeline data-timeline-span="${info.span||''}" data-timeline-days="${info.span||''}"><h3>时间线</h3><div class="grove-tl">${nodes.join('')}</div><p class="grove-tl-note">${esc(note)}</p></section>`;
 }
 
+// Build 324 A：卡片上的「这份作业核对完沉淀了什么」（只读 item.progress；全 0 不渲染）。
+function groveWorkProgressHTML(r){
+ const p=r&&r.progress;if(!p)return '';
+ const wrong=Number(p.wrong)||0,clues=Number(p.clues)||0,retries=Number(p.retries)||0;
+ if(!(wrong||clues||retries))return '';
+ const parts=[];
+ if(wrong)parts.push(`已核对 ${wrong} 道错题`);
+ if(clues)parts.push(`知识点线索 ${clues} 条`);
+ if(retries)parts.push(`独立再试 ${retries} 次`);
+ const shown=parts.slice(0,2);
+ return `<span class="grove-badge is-progress" data-work-progress data-wrong="${wrong}" data-clues="${clues}" data-retries="${retries}" title="${esc(parts.join(' · '))}">${esc(shown.join(' · '))}${parts.length>2?' …':''}</span>`;
+}
+// Build 324 B：详情「核对与进展」节（家里安排之后、后续通知之前）。
+function groveProgressSectionHTML(r){
+ const p=r&&r.progress;if(!p)return '';
+ const wrong=Number(p.wrong)||0,clues=Number(p.clues)||0,retries=Number(p.retries)||0,history=Number(p.history)||0;
+ if(!(wrong||clues||retries||history))return '';
+ const rows=[];
+ if(wrong)rows.push(`<li data-progress-wrong="${wrong}"><button type="button" class="grove-progress-row" data-progress-goto="wrong"><span>错题 <b>${wrong}</b> 道</span><span class="grove-progress-more">看错题本 ›</span></button></li>`);
+ if(clues)rows.push(`<li data-progress-clues="${clues}"><button type="button" class="grove-progress-row" data-progress-goto="learning"><span>知识点线索 <b>${clues}</b> 条（不等于掌握）</span><span class="grove-progress-more">看学习进展 ›</span></button></li>`);
+ if(retries)rows.push(`<li data-progress-retries="${retries}">独立再试 <b>${retries}</b> 次</li>`);
+ if(history)rows.push(`<li data-progress-history="${history}">更正前的诊断 <b>${history}</b> 条（作历史）</li>`);
+ const taskId=String(r.task_id||''),taskTitle=String(r.title||'');
+ return `<section class="grove-card grove-progress-card" data-detail-progress data-progress-task="${esc(taskId)}" data-progress-task-title="${esc(taskTitle)}"><h3>核对与进展</h3><ul class="grove-progress-list">${rows.join('')}</ul><div class="grove-progress-actions"><button type="button" data-progress-goto="learning">看学习进展</button><button type="button" data-progress-goto="wrong">看错题本</button></div></section>`;
+}
 function groveRowHTML(r){
  const on=r.id===groveSelected,planBadge=grovePlanBadgeHTML(r),pts=grovePoints(r),badges=groveBadges(r),today=groveDay||data.today;
  const task=r.task_id?` data-today-task="${esc(r.task_id)}" data-query-target="task:${esc(r.task_id)}"`:'';
@@ -639,6 +669,7 @@ function groveRowHTML(r){
  // 视觉上与徽章同一行（CSS display:contents），并去掉与徽章重复的词，长句留给详情。
  const factChipsRaw=(r.facts||[]).filter(f=>['due','submit','check','complete'].includes(f.role))
   .map(f=>({label:groveRowFactWords(f,today),state:f.state,role:f.role})).filter(x=>x.label);
+ const workProgress=groveWorkProgressHTML(r);
  const allBadges=[];
  if(planBadge)allBadges.push(planBadge);
  for(const b of badges.shown)allBadges.push({label:b.label,html:`<span class="grove-badge is-${b.kind}">${esc(b.label)}</span>`});
@@ -659,7 +690,7 @@ function groveRowHTML(r){
   +groveCardHeadHTML(r)
   +`<span class="grove-title">${esc(groveTitleText(r))}</span>`
   +(pts.points.length?`<span class="grove-points">${pts.points.map((p,i)=>`<span class="grove-point">${pts.points.length>1?['①','②'][i]+' ':''}${esc(p)}</span>`).join('')}${more}</span>`:'')
-  +(capped.length?`<span class="grove-badges">${capped.map(b=>b.html).join('')}${hiddenBadges?`<span class="grove-badge is-more">+${hiddenBadges}</span>`:''}</span>`:'')
+  +((capped.length||workProgress)?`<span class="grove-badges">${capped.map(b=>b.html).join('')}${workProgress}${hiddenBadges?`<span class="grove-badge is-more">+${hiddenBadges}</span>`:''}</span>`:'')
   +(factChips?`<span class="grove-chips is-facts grove-sr">${factChips}</span>`:'')
   +(workGap?`<span class="grove-badges is-work-gap"><span class="grove-badge is-gap" data-work-gap="${esc(workGap.kind||'photo')}">待补照片</span></span>`:'')
   +groveSpanHTML(r)
@@ -767,8 +798,9 @@ function groveDetailHTML(r){
   +`<section class="grove-card grove-steps"><h3>要做什么</h3>${standards}</section>`
   +negHTML
   +(completeBits?`<section class="grove-card grove-detail-standard"><h3>完成标准</h3>${completeBits}</section>`:'')
-  +groveFollowUpsSectionHTML(r)
   +(plan.length?`<section class="grove-card grove-plan-card" data-grove-plan-lines data-family-plan="1"><h3>${esc(grovePlanLabel(r))}</h3><ul class="grove-plan-list">${plan.map(l=>`<li>${esc(l)}</li>`).join('')}</ul></section>`:'')
+  +groveProgressSectionHTML(r)
+  +groveFollowUpsSectionHTML(r)
   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<p class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</p>`:'')
   +groveVersionHTML(r.version)
   +sourcesSection
@@ -814,9 +846,12 @@ document.addEventListener('click',e=>{
  const open=e.target.closest('[data-grove-open]');if(open){groveSelect(open.dataset.groveOpen,true);return}
  // Switching the part only shows another list: no re-render, so the selected row's detail and any unsaved input there stay.
  const part=e.target.closest('[data-grove-scope]');if(part){const next=part.dataset.groveScope;if(next!==groveScope){groveScope=next;render()}return}
- const tab=e.target.closest('[data-grove-tab]');if(tab){groveTab=tab.dataset.groveTab;groveDetailOpen=false;render();return}
+ const goto=e.target.closest('[data-progress-goto]');
+ if(goto){const sec=e.target.closest('[data-detail-progress]'),taskId=sec?.dataset.progressTask||'',taskTitle=sec?.dataset.progressTaskTitle||'';groveLearningFocus=goto.dataset.progressGoto==='learning'&&taskId?{task_id:taskId,task_title:taskTitle}:null;groveTab=goto.dataset.progressGoto;groveDetailOpen=false;render();return}
+ if(e.target.closest('[data-learning-focus-clear]')){groveLearningFocus=null;render();return}
+ const tab=e.target.closest('[data-grove-tab]');if(tab){groveLearningFocus=null;groveTab=tab.dataset.groveTab;groveDetailOpen=false;render();return}
  const pick=e.target.closest('[data-grove-day],[data-grove-week]');
- if(pick){const day=pick.dataset.groveDay||calendarAdd(groveDay||data.today,+pick.dataset.groveWeek);groveDay=day===data.today?'':day;groveSelected='';groveScope='open';groveDetailOpen=false;render();if(groveDay)groveLoadDay(groveDay);return}
+ if(pick){const day=pick.dataset.groveDay||calendarAdd(groveDay||data.today,+pick.dataset.groveWeek);groveDay=day===data.today?'':day;groveSelected='';groveScope='open';groveDetailOpen=false;groveLearningFocus=null;render();if(groveDay)groveLoadDay(groveDay);return}
  const again=e.target.closest('[data-grove-day-retry]');if(again){groveLoadDay(groveDay,true);return}
  if(e.target.closest('[data-grove-back]')){groveCloseDetail();if(history.state?.grove)history.back();return}
  const retry=e.target.closest('[data-grove-materials-retry]');if(retry)groveLoadMaterials(retry.dataset.groveMaterialsRetry,true);
@@ -1179,6 +1214,8 @@ let groveSiteNav=null;
 function groveNavEl(){if(groveSiteNav&&groveSiteNav.isConnected)return groveSiteNav;groveSiteNav=document.querySelector('nav[aria-label="主导航"]');return groveSiteNav}
 function groveNavToAside(){const nav=groveNavEl(),aside=document.querySelector('aside');if(!nav||!aside||nav.parentElement===aside)return;const sf=aside.querySelector('.sidefoot');if(sf&&sf.parentElement===aside)aside.insertBefore(nav,sf);else aside.appendChild(nav)}
 function groveAfterRender(){
+ if(groveLearningFocus&&groveFocusChild&&groveFocusChild!==child)groveLearningFocus=null;
+ groveFocusChild=child||'';
  const home=page==='home',view=home?groveView():null,mode=groveMode(),wide=home&&mode==='desktop'&&!!view;
  document.body.classList.toggle('grove-wide',wide);
  groveDeepTick();

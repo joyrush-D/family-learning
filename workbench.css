@@ -1360,3 +1360,23 @@ body.grove-wide[data-page="home"] aside nav.grove-rail-sets button{min-height:0!
 
 /* Build 322 深链接：核对面板去掉程序化 focus 的默认蓝框（键盘焦点仍在内部控件上） */
 .grove3 .grove-checkup:focus,.grove3 .grove-checkup:focus-visible{outline:none!important}
+
+/* Build 324：作业「核对与进展」在清单卡片、详情浮层与学习进展聚焦上的一条可见路径 */
+.grove3 .grove-progress-card h3{margin:0 0 7px}
+.grove3 .grove-progress-list{list-style:none;margin:0 0 9px;padding:0;display:flex;flex-direction:column;gap:6px;font-size:13px;line-height:1.45;color:var(--g-ink2)}
+.grove3 .grove-progress-list li{display:flex;align-items:center;gap:8px}
+.grove3 .grove-progress-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;min-height:38px;padding:0;border:0;background:transparent;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.grove3 .grove-progress-row:hover .grove-progress-more{text-decoration:underline}
+.grove3 .grove-progress-more{color:var(--g-accent);font-size:12px;white-space:nowrap}
+.grove3 .grove-progress-actions{display:flex;gap:8px;flex-wrap:wrap}
+.grove3 .grove-progress-actions button{flex:1 1 auto;min-height:40px;padding:0 12px;border-radius:9px;border:1px solid var(--g-line2);background:var(--g-surface2);color:var(--g-ink);font-size:12.5px}
+.grove3 .grove-learning-focus{display:flex;align-items:center;gap:8px;max-width:940px;margin:0 auto 8px;padding:7px 10px;border:1px solid var(--g-line);border-radius:9px;background:var(--g-surface2);font-size:12.5px;color:var(--g-ink2);overflow-wrap:anywhere}
+.grove3 .grove-learning-focus strong{font-weight:600;color:var(--g-ink)}
+.grove3 .grove-learning-focus button{margin-left:auto;flex:0 0 auto;min-height:30px;padding:0 12px;border-radius:8px;border:1px solid var(--g-line2);background:var(--g-surface);color:var(--g-ink2);font-size:12px}
+@media(max-width:899px){
+ .grove3 .grove-work-progress{font-size:12px}
+ .grove3 .grove-progress-actions button{min-height:44px}
+}
+/* Build 324 A：进展做成徽章行里的一枚淡 chip，不额外占一行高度 */
+.grove3 .grove-badge.is-progress{font-size:12px;line-height:1.2;padding:2px 6px;border-color:transparent;background:transparent;color:var(--g-muted);white-space:nowrap}
+@media(max-width:899px){.grove3 .grove-badge.is-progress{font-size:11.5px}}
