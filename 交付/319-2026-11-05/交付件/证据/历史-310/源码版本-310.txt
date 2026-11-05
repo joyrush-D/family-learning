@@ -1,0 +1,24 @@
+记录时间: 2026-11-04T15:24:20Z
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51
+构建号: 310
+工作区改动文件（git status --porcelain）:
+   M app.js
+   M calendar.js
+   M family_agenda.py
+   M packaging/macos/Sources/Workspace.swift
+   M packaging/macos/Sources/WorkspaceAPI.swift
+   M test_school_completion_today.py
+   M workbench.css
+改动文件 sha1:
+  4c17738bb0917e0eee4c098214502ddbc363b333  app.js
+  49c96594783590de3e374056743a938b1688a145  calendar.js
+  8348a71661cc22860eb40423224c576bba1109a6  family_agenda.py
+  f36453b251f540f2e9665a3353c93a1101df5843  packaging/macos/Sources/Workspace.swift
+  2d43a51173500c2d09e2b14fb59c21d86a46bb57  packaging/macos/Sources/WorkspaceAPI.swift
+  504afb2283139bb51d882b9445db25da0d46bbe8  test_school_completion_today.py
+  1d997f0065d7697c3bc09385907fbad37e144cf7  workbench.css
+被 .gitignore 忽略的新文件 sha1:
+  625a74f3459412e502d3bd86ca71fb7a6ff57432  test_daily_list_expression.py
+fix.patch sha1: ea2f3d1ab4c6b33877f7cb07733816eb1e3e5884
+fix.patch 字节数: 99128

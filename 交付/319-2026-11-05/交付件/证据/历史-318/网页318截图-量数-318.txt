@@ -1,0 +1,55 @@
+# 网页 318 截图与实测量数（虚构数据）
+
+生成时间: 2026-11-05T11:09:12Z
+来源: work/surface-evidence/ui6/（surface 用全虚构 demo 数据实测的 318 网页 UI；本文件由 delivery 复核后拷入）
+截图目录: 证据/screens-318/（12 张：w{360,390,768,1024,1200,1440}-{list,overlay}.png）
+
+## 断言与计数
+
+- metrics.json failures: []
+- 计数同源: 标题「今天 5 件事」、计数行「今天要做 · 5」、/api/day counts.today=5、counts.open=5（closed=0/upcoming=0/undated=1）——四处一致；分组 语文2/英语1/数学1/综合事务1。
+- 每卡: 1 个状态圆点（不是勾选框）+ 1 个状态图标；点圆点 POST /api/task → 200 ok 卡片变已完成；再点取消恢复未完成（p0-1）。
+- 徽章只留原文: 数学卡徽章 ["需签字","周五交"]；被隐藏的事实 chip 仍保留在 DOM 供无障碍/测试（p0-2）。
+- 主导航: 宽屏不再放进左栏，移到看板顶部一行 #groveTopNav（为 test_calendar_learning_ui 断言保留可见可点），左栏重复项去掉（p1-3）。
+
+## 六宽度量数（metrics.json）
+
+| 宽度 | 模式 | 首卡 top | 行数 | 状态圆点 | 标题 | 计数行 | 计数chip | listMoved | 浮层 (x,y,w,h) | 左栏宽 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 360 | phone | 200 | 5 | 5 | 今天 5 件事 | 今天要做 · 5 | 1 | False | (0,232,360,484) | 360 |
+| 390 | phone | 200 | 5 | 5 | 今天 5 件事 | 今天要做 · 5 | 1 | False | (0,257,390,523) | 390 |
+| 768 | phone | 200 | 5 | 5 | 今天 5 件事 | 今天要做 · 5 | 1 | False | (0,278,760,558) | 768 |
+| 1024 | medium | 384 | 5 | 5 | 今天 5 件事 | 今天要做 · 5 | 2 | False | (576,18,430,864) | 188 |
+| 1200 | desktop | 188 | 5 | 5 | 今天 5 件事 | 今天要做 · 5 | 1 | False | (752,18,430,824) | 212 |
+| 1440 | desktop | 188 | 5 | 5 | 今天 5 件事 | 今天要做 · 5 | 1 | False | (992,18,430,824) | 212 |
+
+图例（六宽度一致）: 未完成 / 已完成 / 过期 / 取消；浮层内锚点: 标题✓、行数1、反馈✓、标记✓（plan/follow/source 依数据而定，本份虚构数据 plan=false、follow=false）。
+
+## 浮层详情与列表不动
+
+- `listMoved=false`（六个宽度）：打开浮层前后列表容器 x/y/w/h 与 scrollTop、docH 完全一致（stack.before/after 相同），即详情在浮层里、列表不位移。
+- 手机端浮层从底部弹出（360: y=232 h=484；390: 257/523；768: 278/558），桌面/中等为右侧面板（1024: x=576 w=430；1200/1440: x=752/992 w=430，y=18 h=824）。
+
+## p0-p1-fixes.json 摘要
+
+- build: 318 P0-1/P0-2/P1-3
+- sha1: {"calendar.js": "f0a37c8fb1827162b39bd289b977eb24501efd9f", "workbench.css": "0800b098d3a1e0d938d0646e6ade5d87fd429cb4", "app.js": "4c17738bb0917e0eee4c098214502ddbc363b333 (unchanged)"}
+- 行数: {"calendar.js": 1068, "workbench.css": 1254, "app.js": 2564}
+- p0_1_merged_control: 每卡 1 圆点 + 1 图标；点圆点 POST 200，卡片变已完成，再点恢复。
+- p0_2_badges_only_original_words: 数学卡徽章只留原文 需签字/周五交。
+- p1_3_duplicates: 站点导航移到 #groveTopNav（宽屏看板顶部一行），左栏不再重复。
+
+## 截图清单（sha1）
+
+- `证据/screens-318/w1024-list.png` — 139353 B — sha1 81b4c6d04986a5585f29b8b885ebbbe18d9fc7d5
+- `证据/screens-318/w1024-overlay.png` — 171087 B — sha1 535df3cdcb3bc028e1430759d897eb30004abbcc
+- `证据/screens-318/w1200-list.png` — 134557 B — sha1 07212476374f3bada6f36eef048a383e1bcc9659
+- `证据/screens-318/w1200-overlay.png` — 187600 B — sha1 0590085e091ce29e1024fdc3dc7829de1c19bdc3
+- `证据/screens-318/w1440-list.png` — 139485 B — sha1 076266a28ab7f1507f3cc5125001d1ceedd42c41
+- `证据/screens-318/w1440-overlay.png` — 192912 B — sha1 22ba434d7aa1cdf0279886d630f858528bf4a876
+- `证据/screens-318/w360-list.png` — 83482 B — sha1 f39921f07c17ef5c608c6d468f3757909c6fa5a2
+- `证据/screens-318/w360-overlay.png` — 55879 B — sha1 10198252675ef9fff5854072dd577e1cb785c6d4
+- `证据/screens-318/w390-list.png` — 91570 B — sha1 663a747744df6de6dd36ac836526bf84cd9b2d79
+- `证据/screens-318/w390-overlay.png` — 66831 B — sha1 2aa1602e4adfe46d203732d01bdffd17ac17a6e7
+- `证据/screens-318/w768-list.png` — 113729 B — sha1 d966c16c8adf09316fa91b039a8465c67da6db5f
+- `证据/screens-318/w768-overlay.png` — 86229 B — sha1 b747b18b1e771b1ec07ac74343faff98d3bd19da

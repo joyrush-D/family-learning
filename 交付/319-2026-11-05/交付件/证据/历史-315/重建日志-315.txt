@@ -1,0 +1,60 @@
+重建开始 2026-11-05T05:51:23Z
+交付目录: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable
+REPO     : /Users/joyrush/.local/share/family-learning/public-integration-20260926
+构建号   : 315
+目标 App : /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+
+=== 1/8 记录源码版本与补丁 ===
+HEAD=cbb78689b6d066d1991748ab273af0b43c8e9904
+改动文件数: 6
+补丁: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/fix.patch-315（84228 字节）
+
+=== 2/8 构建 App（构建号 315） ===
+替换旧 App（旧二进制 sha1: 10288c9eeb8db9ad378295f404da4a67ab54c8f6）
+产物: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+二进制 sha1: 10288c9eeb8db9ad378295f404da4a67ab54c8f6
+
+=== 3/8 签名与 Info.plist 校验 ===
+codesign --verify --deep --strict 通过；CFBundleVersion=315
+
+=== 4/8 二进制里的修复字符串 ===
+二进制含「家庭安排」1 处（UTF-8 字节计数）
+二进制含 DayFollowUp 符号 323 处
+
+=== 5/8 启动全虚构后台 + 播种 + /api/day 断言（不用 8766） ===
+自检端口: 8770
+  投影模式：plan_lines 独立字段（本次修复后）（plan_lines）
+  堆叠要求样式：标签已去掉（本次修复后）（clean）
+  upcoming 列表：（空）
+  说明：本演示后台没有学校消息采集器/模型，学校「即将/待补」事项只能由真实采集流程产生；两条未来事项以「以后安排（明天）」展示，日期与明早状态核对通过。
+  
+  自检通过：今天 5 项（英语：完成《每日练习》、英语：跟读Unit 7第3—10个单词、数学：练习册第12页第2至4题、语文：朗读《晚照》、班主任：填写《出游回执》）；以后安排 2 项；日期未写明 0 项；每条 title/lines 非空。
+  
+  自检模式：未打开 App。正在停止演示后台，演示数据随之清除。
+自检通过（退出码 0）；快照已存 证据/api-day-修复后-315.json
+逐卡核对已存 证据/演示数据核对-315.txt
+真模型播种自检通过（退出码 0，模型事项 6 条；证据 证据/真模型播种输出-315.txt）
+十八渠道自检通过（退出码 0；证据 证据/十八渠道自检-输出-315.txt）
+
+=== 6/8 网页新 UI 六宽度截图 + 量数 + 断言（360/390/768/1024/1200/1440；失败不阻断但如实记入） ===
+六宽度断言通过（failures: []，nonGet: []）；证据 证据/网页六宽度-315.txt、截图 证据/screens-315/六宽度/
+
+=== 6b/8 十八渠道 360/1440 UI 断言与截图（失败不阻断，如实记入证据） ===
+起十八渠道后台（--serve，不打开 App，端口 8833）…
+十八渠道 UI 证据: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/十八渠道UI断言-315.txt（surface断言rc=1，G4 rc=0）
+
+=== 8/8 汇总 ===
+重建完成: 2026-11-05T05:52:30Z
+REPO HEAD: cbb78689b6d066d1991748ab273af0b43c8e9904 (cbb7868)
+构建号: 315
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+App 二进制 sha1: 10288c9eeb8db9ad378295f404da4a67ab54c8f6
+fix.patch: 84228 字节（sha1 88b8f7b62e9fd69e205a8560d5793c61a4383402）
+二进制含「家庭安排」: 1 处
+真模型播种自检: 0（证据 真模型播种输出-315.txt）
+--check: 通过（端口 8770）
+api-day: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-修复后-315.json（真模型: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-真模型-315.json）
+网页六宽度证据: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/网页六宽度-315.txt（rc 0）
+十八渠道自检: 0（证据 十八渠道自检-输出-315.txt）
+十八渠道 UI 断言: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/十八渠道UI断言-315.txt（surface rc=1，G4 rc=0）
+重建成功。

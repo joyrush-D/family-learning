@@ -1,0 +1,19 @@
+构建后工作区复核（构建: 2026-11-05T10:24:04Z，副本 /tmp/rel-317）
+复核时间: 2026-11-05T10:25:15Z
+
+主仓库 git status:
+ M calendar.js
+ M packaging/macos/Sources/Workspace.swift
+ M workbench.css
+
+主仓库 vs 副本 sha1（构建后）:
+OK packaging/macos/Sources/Workspace.swift            3336dcfa4e2e26032e94e37e8aaaa388814f25ae
+OK packaging/macos/Sources/WorkspaceAPI.swift         85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0
+OK calendar.js                                        b8c43ef8044bbc0c16648ad9aeb6d5b3ac894b44
+OK workbench.css                                      d5e85f0f10f2dadfaa977c8dcc9d92aa04083d20
+OK app.js                                             4c17738bb0917e0eee4c098214502ddbc363b333
+OK family_agent.py                                    3d8807c865287b8fc46fc6ff7495df4b40fd1235
+OK family_agenda.py                                   ff9c3f85696ee2a555bf77bc50b566aef881be1c
+OK family_llm.py                                      bf2c974be34b6460d980d18b8e2ffc1498611be1
+
+结论: 构建输入来自冻结副本，构建后主仓库与副本各文件 sha1 仍一致，无漂移；主仓库仅 3 个 M 文件。

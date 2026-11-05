@@ -1,0 +1,193 @@
+记录时间: 2026-11-05T05:18:58Z
+十八渠道后台: http://127.0.0.1:8833（--serve，不打开 App）
+
+### 一、surface assert_plan_lines_ui.cjs（退出码 1）
+说明：本快照没有 plan_lines 事项，该脚本的「必须存在 plan_lines」门槛预期不满足；其余 360/1440 断言应通过。
+命令: PLAYWRIGHT_CHANNEL=chrome SURFACE_BASE=http://127.0.0.1:8833 SURFACE_OUT=/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/screens-314/十八渠道/surface-assert node assert_plan_lines_ui.cjs
+payload: child=child-1 today=2026-11-05 plan_items=0
+ok   - w360 正文不出现「。；」
+ok   - w360 正文不出现「；；」
+ok   - w360 无横向溢出
+ok   - w360 无 pageerror
+ok   - w360 无写请求
+ok   - w1440 正文不出现「。；」
+ok   - w1440 正文不出现「；；」
+ok   - w1440 无横向溢出
+ok   - w1440 无 pageerror
+ok   - w1440 无写请求
+{
+  "base": "http://127.0.0.1:8833",
+  "child": "child-1",
+  "today": "2026-11-05",
+  "planItems": 0,
+  "failures": [
+    "w360 /api/day 里存在 plan_lines 非空的事项（共 0 条）",
+    "w1440 /api/day 里存在 plan_lines 非空的事项（共 0 条）"
+  ]
+}
+ASSERTIONS FAILED: 2
+
+### assertions.json
+{
+  "base": "http://127.0.0.1:8833",
+  "child": "child-1",
+  "today": "2026-11-05",
+  "planItems": 0,
+  "failures": [
+    "w360 /api/day 里存在 plan_lines 非空的事项（共 0 条）",
+    "w1440 /api/day 里存在 plan_lines 非空的事项（共 0 条）"
+  ]
+}
+### 二、G4 量测工具（工具/g4_children.cjs，退出码 0）
+十八渠道快照冻结在 2026-11-04：脚本先点周条的 11月4日（data-grove-day=2026-11-04）再切孩子，量的是冻结场景。
+阈值：360 首卡 ≤200px；清单 ≤1.5 屏；无截断/横向溢出/写请求/pageerror。
+命令: SURFACE_BASE=http://127.0.0.1:8833 SURFACE_OUT=/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/screens-314/十八渠道 SURFACE_DAY=2026-11-04 node 工具/g4_children.cjs
+w360-child-1: heading=这天 3 件事 day=? rows=3 firstTop=281.48 listScreens=1.10 gapBanner=0 overflowX=true trunc=0 writes=0 errors=0
+w360-child-2: heading=这天 2 件事 day=? rows=2 firstTop=281.48 listScreens=0.79 gapBanner=0 overflowX=true trunc=0 writes=0 errors=0
+w1440-child-1: heading=这天 3 件事 day=? rows=3 firstTop=118.55 listScreens=0.68 gapBanner=0 overflowX=false trunc=0 writes=0 errors=0
+w1440-child-2: heading=这天 2 件事 day=? rows=2 firstTop=118.55 listScreens=0.45 gapBanner=0 overflowX=false trunc=0 writes=0 errors=0
+
+### g4-report.json
+{
+  "w360-child-1": {
+    "rowCount": 3,
+    "hiddenRowCount": 0,
+    "viewport": {
+      "w": 360,
+      "h": 800
+    },
+    "firstRowTop": 281.484375,
+    "rowTops": [
+      281.484375,
+      504.4375,
+      704.34375
+    ],
+    "lastRowBottom": 877.515625,
+    "screensToLastRow": 1.09689453125,
+    "docH": 1326,
+    "screensTotal": 1.6575,
+    "gapBanner": null,
+    "overflowX": true,
+    "overflowEls": [
+      "grove-set",
+      "I",
+      "grove-set",
+      "grove-set-dot is-cancelled",
+      "I",
+      "grove-set"
+    ],
+    "trunc": [],
+    "heading": "这天 3 件事",
+    "cards": [
+      "英语：完成《每日练习》并明天带来 | 确认完成 | 英语 · 英语唐老师 · 16:05 | 完成《每日练习》并明天带来 | ① 英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。 | ② 看图选词第1—3题。 | 还有 3 条 · 查看详情 › | 明天带 | 不用录音 | 不用发照片 | 今天完",
+      "数学：完成《每日练习》第26页第1—3题 | 确认完成 | 数学 · 数学周老师 · 15:40 | 完成《每日练习》第26页第1—3题 | ① 第4题不做。 | ② 每题写出算式并验算。 | 还有 3 条 · 查看详情 › | 需签字 | 周五交 | 今天完成 | 后天截止 | 后续通知 1 条 · 查看 ›",
+      "确认完成 | 语文 · 语文林老师 · 15:45 | 朗读《风经过小巷》第2、3自然段 | ① 各读两遍，读给家长听； | ② 明早老师抽听。 | 还有 5 条 · 查看详情 › | 明天交 | 不用录音 | 不用上传 | 读给家长 | 明天核对"
+    ],
+    "selectedDay": null,
+    "upcomingLine": null,
+    "detail": "‹ 返回清单 | 11月4日 周三 · 英语 | 英语：完成《每日练习》并明天带来 | 英语唐老师 16:05 发布 · 学校消息 | 发布 | 2026-11-04 16:05 | 完成 | 2026-11-04 | 截止 | 2026-11-05 | 明天 | 英语唐老师 | 原件 1 | 原件 2 | 要做什么 | 英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。 | 看图选词第1—3题。 | 标星单词 under、near 各抄写一遍。 | 补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。 | 不做什么 | 不需要录音。 | 来源消息 | 英语唐老师 | 虚构四年级A班 · 2026-11-04 16:05 | 看原消息 | 英语唐老师 | 虚构四年级A班 · 2026-11-04 16:05 | 看原消息 | 资料 · 0 份 | 这一",
+    "errors": [],
+    "writes": []
+  },
+  "w360-child-2": {
+    "rowCount": 2,
+    "hiddenRowCount": 0,
+    "viewport": {
+      "w": 360,
+      "h": 800
+    },
+    "firstRowTop": 281.484375,
+    "rowTops": [
+      281.484375,
+      457.25
+    ],
+    "lastRowBottom": 630.609375,
+    "screensToLastRow": 0.78826171875,
+    "docH": 1192,
+    "screensTotal": 1.49,
+    "gapBanner": null,
+    "overflowX": true,
+    "overflowEls": [
+      "grove-set",
+      "I",
+      "grove-set",
+      "grove-set-dot is-done",
+      "I"
+    ],
+    "trunc": [],
+    "heading": "这天 2 件事",
+    "cards": [
+      "语文：完成《识字小卡》练习 | 确认完成 | 语文 · 语文郑老师 · 16:20 | 完成《识字小卡》练习 | ① 完成附件《识字小卡》上的练习。 | ② 完成后请家长在卡片下方签名。 | 还有 3 条 · 查看详情 › | 明天交 | 今天完成",
+      "数学：完成《计算小卡》第4页1—6题 | 确认完成 | 数学 · 数学陈老师 · 15:50 | 完成《计算小卡》第4页1—6题 | ① 完成数学《计算小卡》第4页第1—6题。 | ② 今晚做完，后续说明：仍是第4页1—6题，做过的不用再做一遍。 | 还有 4 条 · 查看详情 › | 今天完成 | 明天交"
+    ],
+    "selectedDay": null,
+    "upcomingLine": "即将/待补：11-05 明天带一盒彩笔；11-05 带一张一寸证件照交班主任",
+    "detail": "‹ 返回清单 | 11月4日 周三 · 语文 | 语文：完成《识字小卡》练习 | 语文郑老师 16:20 发布 · 学校消息 | 发布 | 2026-11-04 16:20 | 完成 | 2026-11-04 | 交回 | 2026-11-05 | 明天 | 语文郑老师 | 原件 1 | 原件 2 | 要做什么 | 完成附件《识字小卡》上的练习。 | 完成后请家长在卡片下方签名。 | 明早交给语文老师，卡片下方需家长签名。 | 内容待补：附件尚未读取（识字小卡.jpg）； | 具体题目与要求待读到附件后补充。 | 来源消息 | 语文郑老师 | 虚构二年级B班 · 2026-11-04 16:20 | 看原消息 | 语文郑老师 | 虚构二年级B班 · 2026-11-04 16:20 | 看原消息 | 资料 · 0 份 | 这一项没有已保存的原件。 | 学校原件出处当前无法核对；已关联的作答",
+    "errors": [],
+    "writes": []
+  },
+  "w1440-child-1": {
+    "rowCount": 3,
+    "hiddenRowCount": 0,
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "firstRowTop": 118.546875,
+    "rowTops": [
+      118.546875,
+      300.625,
+      468.90625
+    ],
+    "lastRowBottom": 611.78125,
+    "screensToLastRow": 0.6797569444444445,
+    "docH": 900,
+    "screensTotal": 1,
+    "gapBanner": null,
+    "overflowX": false,
+    "overflowEls": [],
+    "trunc": [],
+    "heading": "这天 3 件事",
+    "cards": [
+      "英语：完成《每日练习》并明天带来 | 确认完成 | 英语 · 英语唐老师 · 16:05 | 完成《每日练习》并明天带来 | ① 英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。 | ② 看图选词第1—3题。 | 还有 3 条 · 查看详情 › | 明天带 | 不用录音 | 不用发照片 | 今天完",
+      "数学：完成《每日练习》第26页第1—3题 | 确认完成 | 数学 · 数学周老师 · 15:40 | 完成《每日练习》第26页第1—3题 | ① 第4题不做。 | ② 每题写出算式并验算。 | 还有 3 条 · 查看详情 › | 需签字 | 周五交 | 今天完成 | 后天截止 | 后续通知 1 条 · 查看 ›",
+      "确认完成 | 语文 · 语文林老师 · 15:45 | 朗读《风经过小巷》第2、3自然段 | ① 各读两遍，读给家长听； | ② 明早老师抽听。 | 还有 5 条 · 查看详情 › | 明天交 | 不用录音 | 不用上传 | 读给家长 | 明天核对"
+    ],
+    "selectedDay": null,
+    "upcomingLine": null,
+    "detail": "11月4日 周三 · 英语 | 英语：完成《每日练习》并明天带来 | 英语唐老师 16:05 发布 · 学校消息 | 发布 | 2026-11-04 16:05 | 完成 | 2026-11-04 | 截止 | 2026-11-05 | 明天 | 英语唐老师 | 原件 1 | 原件 2 | 要做什么 | 英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。 | 看图选词第1—3题。 | 标星单词 under、near 各抄写一遍。 | 补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。 | 不做什么 | 不需要录音。 | 来源消息 | 英语唐老师 | 虚构四年级A班 · 2026-11-04 16:05 | 看原消息 | 英语唐老师 | 虚构四年级A班 · 2026-11-04 16:05 | 看原消息 | 资料 · 0 份 | 这一项没有已保存的原件",
+    "errors": [],
+    "writes": []
+  },
+  "w1440-child-2": {
+    "rowCount": 2,
+    "hiddenRowCount": 0,
+    "viewport": {
+      "w": 1440,
+      "h": 900
+    },
+    "firstRowTop": 118.546875,
+    "rowTops": [
+      118.546875,
+      264.515625
+    ],
+    "lastRowBottom": 402.5,
+    "screensToLastRow": 0.44722222222222224,
+    "docH": 900,
+    "screensTotal": 1,
+    "gapBanner": null,
+    "overflowX": false,
+    "overflowEls": [],
+    "trunc": [],
+    "heading": "这天 2 件事",
+    "cards": [
+      "语文：完成《识字小卡》练习 | 确认完成 | 语文 · 语文郑老师 · 16:20 | 完成《识字小卡》练习 | ① 完成附件《识字小卡》上的练习。 | ② 完成后请家长在卡片下方签名。 | 还有 3 条 · 查看详情 › | 明天交 | 今天完成",
+      "数学：完成《计算小卡》第4页1—6题 | 确认完成 | 数学 · 数学陈老师 · 15:50 | 完成《计算小卡》第4页1—6题 | ① 完成数学《计算小卡》第4页第1—6题。 | ② 今晚做完，后续说明：仍是第4页1—6题，做过的不用再做一遍。 | 还有 4 条 · 查看详情 › | 今天完成 | 明天交"
+    ],
+    "selectedDay": null,
+    "upcomingLine": "即将/待补：11-05 明天带一盒彩笔；11-05 带一张一寸证件照交班主任",
+    "detail": "11月4日 周三 · 语文 | 语文：完成《识字小卡》练习 | 语文郑老师 16:20 发布 · 学校消息 | 发布 | 2026-11-04 16:20 | 完成 | 2026-11-04 | 交回 | 2026-11-05 | 明天 | 语文郑老师 | 原件 1 | 原件 2 | 要做什么 | 完成附件《识字小卡》上的练习。 | 完成后请家长在卡片下方签名。 | 明早交给语文老师，卡片下方需家长签名。 | 内容待补：附件尚未读取（识字小卡.jpg）； | 具体题目与要求待读到附件后补充。 | 来源消息 | 语文郑老师 | 虚构二年级B班 · 2026-11-04 16:20 | 看原消息 | 语文郑老师 | 虚构二年级B班 · 2026-11-04 16:20 | 看原消息 | 资料 · 0 份 | 这一项没有已保存的原件。 | 学校原件出处当前无法核对；已关联的作答或手工资料仍可使用",
+    "errors": [],
+    "writes": []
+  }
+}

@@ -1,0 +1,9 @@
+ M app.js
+ M calendar.js
+ M family_agenda.py
+ M packaging/macos/Sources/Workspace.swift
+ M packaging/macos/Sources/WorkspaceAPI.swift
+ M test_school_completion_today.py
+
+# 被 .gitignore 忽略的新文件（不在上面 porcelain 输出里，仍已写入 fix.patch）
+  625a74f3459412e502d3bd86ca71fb7a6ff57432  test_daily_list_expression.py

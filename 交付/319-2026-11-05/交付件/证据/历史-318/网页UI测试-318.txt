@@ -1,0 +1,117 @@
+# 网页 6 个 UI 测试（Build 318，隔离副本 /tmp/rel-318 串行实跑）
+
+运行时间: 2026-11-05T11:09:36Z
+流程同 317：每个测试自己起全虚构后台、自动挑空闲端口，串行；不联外网。
+环境: NODE=codex-runtime node; PLAYWRIGHT_MODULE=.../node_modules/playwright; PLAYWRIGHT_CHANNEL=chrome; FAMILY_TEST_PYTHON=/opt/homebrew/bin/python3.11
+
+## 退出码（MANIFEST）
+test_calendar_learning_ui.cjs exit=0
+test_school_completion_today_ui.cjs exit=0
+test_oral_teacher_dates_ui.cjs exit=0
+test_child_study_ui.cjs exit=0
+test_today_ui.cjs exit=1
+test_daily_list_actual_scope_ui.cjs exit=1
+
+## 期望与判定
+- 期望与 317 相同：前 4 个 exit=0；test_today_ui.cjs exit=1（既有失败 homework source is visible before expanding details，69:128）；test_daily_list_actual_scope_ui.cjs exit=1（既有失败 360 future items are 以后安排，52:126），不改测试。
+
+## 偏差说明
+- test_calendar_learning_ui.cjs 直接 chromium.launch()、不读 PLAYWRIGHT_CHANNEL；本机 Playwright 的 chromium_headless_shell 未安装（下载会联网，禁止），按其自身支持的 CHROMIUM_EXECUTABLE 指向系统 Chrome，exit=0。其余 5 个走 PLAYWRIGHT_CHANNEL=chrome。
+
+## test_calendar_learning_ui.cjs（exit=0）
+```
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/socketserver.py", line 691, in process_request_thread
+    self.finish_request(request, client_address)
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/socketserver.py", line 361, in finish_request
+    self.RequestHandlerClass(request, client_address, self)
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/socketserver.py", line 755, in __init__
+    self.handle()
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/http/server.py", line 440, in handle
+    self.handle_one_request()
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/http/server.py", line 428, in handle_one_request
+    method()
+  File "/private/tmp/rel-318/app.py", line 2948, in do_GET
+    except (OSError,sqlite3.Error,json.JSONDecodeError): return self.reply(500,{'error':'读取失败，记录未更改'})
+                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/rel-318/app.py", line 2681, in reply
+    self.end_headers();self.wfile.write(body)
+    ^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/http/server.py", line 542, in end_headers
+    self.flush_headers()
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/http/server.py", line 546, in flush_headers
+    self.wfile.write(b"".join(self._headers_buffer))
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/socketserver.py", line 834, in write
+    self._sock.sendall(b)
+BrokenPipeError: [Errno 32] Broken pipe
+----------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/rel-318/test_native_calendar_learning.py", line 25, in <module>
+{"commit":"","checks":[{"name":"today: server schedule, task time on its row","ok":true,"width":1440},{"name":"one GET /api/day for another day","ok":true,"width":1440,"requests":1},{"name":"week step and back to today","ok":true,"width":1440},{"name":"child switch keeps one child","ok":true,"width":1440},{"name":"wrong record without a task opens its own record","ok":true,"width":1440},{"name":"correction saved once through the record entry and read again on a new page","ok":true,"width":1440},{"name":"wrong book with original task","ok":true,"width":1440},{"name":"linked topic by name, pending diagnosis","ok":true,"width":1440,"topic":"cnm_010"},{"name":"learning evidence and course record apart","ok":true,"width":1440},{"name":"back to the original task","ok":true,"width":1440},{"name":"site nav alone at the bottom, the three entries in the page above the week","ok":true,"width":1440,"buttons":[{"b":"home","hit":true,"h":26},{"b":"calendar","hit":true,"h":26},{"b":"tasks","hit":true,"h":26},{"b":"more","hit":true,"h":26},{"b":"calendar","hit":true,"h":44},{"b":"wrong","hit":true,"h":44},{"b":"learning","hit":true,"h":44}]},{"name":"site nav by real clicks: calendar and its timetable, inbox, more, back to the list","ok":true,"width":1440,"child":"child-1"},{"name":"site nav by real clicks: calendar and its timetable, inbox, more, back to the list","ok":true,"width":1440,"child":"child-2"},{"name":"today: server schedule, task time on its row","ok":true,"width":360},{"name":"one GET /api/day for another day","ok":true,"width":360,"requests":1},{"name":"week step and back to today","ok":true,"width":360},{"name":"child switch keeps one child","ok":true,"width":360},{"name":"status on one line and actions below the text at 360","ok":true,"width":360,"rows":3},{"name":"wrong record without a task opens its own record","ok":true,"width":360},{"name":"correction saved once through the record entry and read again on a new page","ok":true,"width":360},{"name":"wrong book with original task","ok":true,"width":360},{"name":"linked topic by name, pending diagnosis","ok":true,"width":360,"topic":"cnm_010"},{"name":"learning evidence and course record apart","ok":true,"width":360},{"name":"back to the original task","ok":true,"width":360},{"name":"site nav alone at the bottom, the three entries in the page above the week","ok":true,"width":360,"buttons":[{"b":"home","hit":true,"h":50},{"b":"calendar","hit":true,"h":50},{"b":"tasks","hit":true,"h":50},{"b":"more","hit
+    sys.path.insert(0, str(Path(__file__).resolve().parent)); serve_fixture(); raise SystemExit()
+                                                              ^^^^^^^^^^^^^^^
+  File "/private/tmp/rel-318/test_native_calendar_learning.py", line 18, in serve_fixture
+    try: server.serve_forever()
+         ^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/socketserver.py", line 233, in serve_forever
+    ready = selector.select(poll_interval)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.11/3.11.15/Frameworks/Python.framework/Versions/3.11/lib/python3.11/selectors.py", line 415, in select
+    fd_event_list = self._selector.poll(timeout)
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+KeyboardInterrupt
+```
+
+## test_school_completion_today_ui.cjs（exit=0）
+```
+PASS: T02 saved by run_once and served over HTTP: the PE rope reads 安排日：2026-11-05, English keeps 2026-11-04, open/reopen/list/calendar at 360 and 1440
+PASS: own today/tonight work is in Today once with its completion and handback days; handback-only work stays in other homework
+PASS: saved H01 is in Today once on 2026-10-18 (work) and 2026-10-20 (handback), not on 2026-10-16
+PASS: saved Flash27 day shows each own condition once under its title with its date roles, teacher and originals, open/reopen/list at 360 and 1440
+PASS: the R09 recovered English paragraph reads as its own sentences under its title, the other four as before, open/reopen/list at 360 and 1440
+```
+
+## test_oral_teacher_dates_ui.cjs（exit=0）
+```
+{"browser":"156.0.8078.80","checks":[{"width":360,"role":"parent","closeReopenDraft":true,"first503ZeroWrite":true,"lostReceiptSameKey":true,"oneTask":true,"reloadSameDays":true,"agenda":{"complete_on":"2026-11-07","due_on":"2026-11-10","due_kind":"handback","scheduled_on":"2026-11-05"},"taskForm503ZeroWrite":true,"taskFormLostReceiptSameKey":true,"taskFormCopyNotParentDeadline":true,"taskFormStale409ZeroWrite":true,"twoSessionRace409ReloadNoOldDay":true,"studyEditCorrection":"handback cleared, complete changed","draftRequests":0},{"width":360,"role":"child","closeReopenDraft":true,"first503ZeroWrite":true,"lostReceiptSameKey":true,"oneTask":true,"reloadSameDays":true,"blankCompleteStaysUnknown":true,"notConfirmedOrCompleted":true,"draftRequests":0},{"width":1440,"role":"parent","closeReopenDraft":true,"first503ZeroWrite":true,"lostReceiptSameKey":true,"oneTask":true,"reloadSameDays":true,"agenda":{"complete_on":"2026-11-07","due_on":"2026-11-11","due_kind":"handback","scheduled_on":"2026-11-05"},"taskForm503ZeroWrite":true,"taskFormLostReceiptSameKey":true,"taskFormCopyNotParentDeadline":true,"taskFormStale409ZeroWrite":true,"twoSessionRace409ReloadNoOldDay":true,"studyEditCorrection":"handback changed, complete cleared","draftRequests":0},{"width":1440,"role":"child","closeReopenDraft":true,"first503ZeroWrite":true,"lostReceiptSameKey":true,"oneTask":true,"reloadSameDays":true,"blankCompleteStaysUnknown":true,"notConfirmedOrCompleted":true,"draftRequests":0}]}
+```
+
+## test_child_study_ui.cjs（exit=0）
+```
+{
+  "passed": 7,
+  "checks": [
+    "parent explicitly enables homework; session-scoped state excludes other child and parent task inbox",
+    "360px: report, estimate, timer, help, self-report, parent confirmation, refresh and layout",
+    "1440px: report, estimate, timer, help, self-report, parent confirmation, refresh and layout",
+    "five teacher requirements added by the parent read title, own conditions once and keep the saved words on the child card at 360/1440 and after reopen",
+    "a parent next step identical to the saved action reads once; a different next step and the action both stay, at 360/1440 and after reopen",
+    "one saved English paragraph reads as its own sentences under its heading, with or without an identical next step, at 360/1440 and after reopen",
+    "revoke daily homework removes its data while reading entrance stays usable"
+  ],
+  "syntheticOnly": true,
+  "actualPhoneTested": false,
+  "screenshots": null
+}
+```
+
+## test_today_ui.cjs（exit=1）
+```
+AssertionError [ERR_ASSERTION]: homework source is visible before expanding details
+    at /private/tmp/rel-318/test_today_ui.cjs:69:128
+```
+
+## test_daily_list_actual_scope_ui.cjs（exit=1）
+```
+AssertionError [ERR_ASSERTION]: 360 future items are 以后安排
+    at /private/tmp/rel-318/test_daily_list_actual_scope_ui.cjs:52:126 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+TERMINAL exit=1
+```
+
