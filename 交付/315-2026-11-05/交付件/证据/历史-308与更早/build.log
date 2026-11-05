@@ -1,0 +1,7 @@
+=== build start 2026-11-04T07:24:29Z ===
+REPO HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51
+REPO status: 0 changed file(s)
+command: FAMILY_MAC_BUILD_NUMBER=307 ./build.sh /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app: replacing existing signature
+/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/build/一起成长.app
+=== build exit: 0 ===

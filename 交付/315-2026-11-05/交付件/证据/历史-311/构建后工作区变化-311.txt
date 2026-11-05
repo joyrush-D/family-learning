@@ -1,0 +1,13 @@
+# Build 311 构建后工作区变化（如实记录）
+
+构建窗口: 2026-11-04T15:39:33Z – 15:40:13Z（构建 311）
+构建快照: 证据/源码版本-311.txt（HEAD 58973a6，8 个 git 可见修改 + 被 .gitignore 忽略的 test_daily_list_expression.py）
+
+构建结束后 REPO 出现的后续改动：
+- family_llm.py 在构建快照之后被改动（构建时为未修改状态），当前 sha1 903de867bea33313c933d23a2cab68f5f4b504f8，mtime 23:40:45
+
+对 Build 311 App 的影响：无。App 用 swiftc 只编译 packaging/macos/Sources/*.swift；这些文件（Workspace.swift d62e27df、WorkspaceAPI.swift 2d43a511）构建后未再变化，二进制 sha1 77516eb4… 与构建时一致。family_llm.py 属于后台 Python 侧，双击演示时由 REPO 当前代码提供。
+
+网页资源同理：由后台从 REPO 运行时读取，当前网页端即工作区最新（calendar.js 9aa10da9 / workbench.css 8dd06f3a / app.js 4c17738b）。
+
+310 的完整证据已归档到 证据/历史-310/。

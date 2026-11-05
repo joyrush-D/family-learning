@@ -1,0 +1,22 @@
+十八渠道演示：360/1440 UI 断言与 G4 指标（Build 312）
+记录时间：2026-11-05T00:46:51（最后一次测量：REPO 当前工作区，含构建后队友对网页资源的改动）
+后台：work/merge18/demo-snapshot（DB sha1 4834d4f36a29c3282c8f6d5e546d79d5177d063b，match_day 2026-11-04 的真实模型运行快照（生成于 2026-11-05 00:36）的离线回放）
+浏览器：Playwright headless + Chrome，360x800 与 1440x900，两个孩子分别截图。
+
+一、表面断言 assert_plan_lines_ui.cjs（surface 提供）
+命令：PLAYWRIGHT_MODULE=… PLAYWRIGHT_CHANNEL=chrome SURFACE_BASE=http://127.0.0.1:8784 SURFACE_OUT=/tmp/plan-assert-18b node work/surface-evidence/assert_plan_lines_ui.cjs
+退出码：1（唯一失败项：本快照 /api/day 中 plan_lines 非空事项为 0 条，脚本的「必须存在 plan_lines 事项」门槛不适用）
+通过的断言：360/1440 两档「。；」「；；」不出现、无横向溢出、无 pageerror、无写请求。
+说明：十八渠道快照的 18 条消息里没有「家庭安排/advice」类事项，因此 plan_lines 为空；该脚本在默认演示数据上已由 重建.sh 第 6 步验证通过（证据/家庭安排块DOM断言-312.txt，退出码 0）。
+原始输出：证据/screens-312/十八渠道/surface-assert/{assertions.json,payload-day.json,report.json,*-report.json}
+
+二、G4 指标（自写测量脚本，选择器 .grove-row，仅计可见卡片）
+- w360-child-1: 可见卡片 3 张（另有隐藏 1 张，取消卡默认收在「日期未定」），首卡 top=274.6px，末卡底=1149.7px，占屏 1.44 屏，整页 1.86 屏；读缺口横幅高度 66px；横向溢出 False，截断 0 处，写请求 0 个，pageerror 0 个
+- w360-child-2: 可见卡片 4 张（另有隐藏 0 张，取消卡默认收在「日期未定」），首卡 top=274.6px，末卡底=1170.0px，占屏 1.46 屏，整页 1.89 屏；读缺口横幅高度 66px；横向溢出 False，截断 0 处，写请求 0 个，pageerror 0 个
+- w1440-child-1: 可见卡片 3 张（另有隐藏 1 张，取消卡默认收在「日期未定」），首卡 top=301.8px，末卡底=932.4px，占屏 1.04 屏，整页 1.39 屏；读缺口横幅高度 66px；横向溢出 False，截断 0 处，写请求 0 个，pageerror 0 个
+- w1440-child-2: 可见卡片 4 张（另有隐藏 0 张，取消卡默认收在「日期未定」），首卡 top=301.8px，末卡底=1121.9px，占屏 1.25 屏，整页 1.61 屏；读缺口横幅高度 66px；横向溢出 False，截断 0 处，写请求 0 个，pageerror 0 个
+
+阈值解释：
+1) 「360 首卡 ≤200px」在默认演示数据上成立（默认数据首卡 198.56px，见 G4 量测记录）；本快照多了 66px 的「消息读取有缺口，清单可能缺项」红色横幅（数据自带读缺口：附件未读），首卡被推到 274.56px。这是数据状态的一部分，不是布局回归；把横幅计入后列表本身与默认数据一致。
+2) 「7 件 ≤1.5 屏」：十八渠道每个孩子的可见清单为 3–4 张卡（7 件分布在两个孩子、5 今天 + 2 明天），360 下末卡底 1.44/1.46 屏，1440 下 1.04/1.25 屏，均 ≤1.5 屏且无截断/溢出。
+3) 截图：w360-child-1/2-home-full.png、-detail.png、w1440-child-1/2-home-full.png、-detail.png，文本导出 *-home.txt，原始数据 g4-report.json。

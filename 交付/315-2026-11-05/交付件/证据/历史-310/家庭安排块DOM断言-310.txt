@@ -1,0 +1,54 @@
+记录时间: 2026-11-04T15:24:20Z
+脚本: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/surface-evidence/assert_plan_lines_ui.cjs
+命令: PLAYWRIGHT_CHANNEL=chrome SURFACE_BASE=http://127.0.0.1:8811 SURFACE_OUT=/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/screens-310 SURFACE_WIDTHS=360,1440 node assert_plan_lines_ui.cjs
+退出码: 0
+
+### stdout（脚本自身断言输出）
+payload: child=child-1 today=2026-11-04 plan_items=1
+ok   - w360 正文不出现「。；」
+ok   - w360 正文不出现「；；」
+ok   - w360 /api/day 里存在 plan_lines 非空的事项（共 1 条）
+ok   - w360「班主任：填写《出游回执》」清单卡有 [data-grove-plan="1"] 标签
+ok   - w360「班主任：填写《出游回执》」清单卡有 [data-grove-plan-lines] 块
+ok   - w360「班主任：填写《出游回执》」家庭安排标签 = 「家庭安排」（实得「家庭安排」）
+ok   - w360「班主任：填写《出游回执》」清单卡家庭安排逐行 = payload（实得 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]，期望 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]）
+ok   - w360「班主任：填写《出游回执》」要求块不含家庭安排句子
+ok   - w360 详情有 section[data-grove-plan-lines] 独立小节
+ok   - w360 详情小节标题 = 「家庭安排」（实得「家庭安排」）
+ok   - w360 详情家庭安排 li 逐条 = payload（实得 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]，期望 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]）
+ok   - w360 详情要求小节不含家庭安排句子
+ok   - w360 无横向溢出
+ok   - w360 无 pageerror
+ok   - w360 无写请求
+ok   - w1440 正文不出现「。；」
+ok   - w1440 正文不出现「；；」
+ok   - w1440 /api/day 里存在 plan_lines 非空的事项（共 1 条）
+ok   - w1440「班主任：填写《出游回执》」清单卡有 [data-grove-plan="1"] 标签
+ok   - w1440「班主任：填写《出游回执》」清单卡有 [data-grove-plan-lines] 块
+ok   - w1440「班主任：填写《出游回执》」家庭安排标签 = 「家庭安排」（实得「家庭安排」）
+ok   - w1440「班主任：填写《出游回执》」清单卡家庭安排逐行 = payload（实得 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]，期望 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]）
+ok   - w1440「班主任：填写《出游回执》」要求块不含家庭安排句子
+ok   - w1440 详情有 section[data-grove-plan-lines] 独立小节
+ok   - w1440 详情小节标题 = 「家庭安排」（实得「家庭安排」）
+ok   - w1440 详情家庭安排 li 逐条 = payload（实得 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]，期望 ["家长今晚先勾选参加意向，明早把回执交给班主任。"]）
+ok   - w1440 详情要求小节不含家庭安排句子
+ok   - w1440 无横向溢出
+ok   - w1440 无 pageerror
+ok   - w1440 无写请求
+{
+  "base": "http://127.0.0.1:8811",
+  "child": "child-1",
+  "today": "2026-11-04",
+  "planItems": 1,
+  "failures": []
+}
+ASSERTIONS PASSED
+
+### assertions.json
+{
+  "base": "http://127.0.0.1:8811",
+  "child": "child-1",
+  "today": "2026-11-04",
+  "planItems": 1,
+  "failures": []
+}

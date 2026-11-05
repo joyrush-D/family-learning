@@ -1,0 +1,11 @@
+重建完成: 2026-11-04T15:40:13Z
+REPO HEAD: 58973a6b030123a77a9b860daa8eb51d12926e51 (58973a6)
+构建号: 311
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+App 二进制 sha1: 77516eb45fee426c21718f945da3aaaf3da082f7
+fix.patch: 140508 字节（sha1 7cf2bd032079abdcbc953c8e9142bbbbda2b6c92）
+二进制含「家庭安排」: 1 处
+真模型播种自检: 0（证据 真模型播种输出-311.txt）
+--check: 通过（端口 8770）
+api-day: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-修复后-311.json（真模型: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/api-day-真模型-311.json）
+家庭安排块 DOM 断言: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/证据/家庭安排块DOM断言-311.txt（退出码 0）

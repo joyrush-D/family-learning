@@ -1,0 +1,1549 @@
+{
+ "base": "http://127.0.0.1:59821/?child_id=child-1",
+ "widths": [
+  {
+   "width": 1440,
+   "height": 860,
+   "mode": "desktop",
+   "docW": 1440,
+   "vw": 1440,
+   "docH": 860,
+   "noHScroll": true,
+   "aside": {
+    "x": 0,
+    "y": 0,
+    "w": 212,
+    "h": 860,
+    "bottom": 860
+   },
+   "main": {
+    "x": 212,
+    "y": 0,
+    "w": 1228,
+    "h": 854,
+    "bottom": 854
+   },
+   "board": {
+    "x": 228,
+    "y": 6,
+    "w": 756,
+    "h": 836,
+    "bottom": 842
+   },
+   "detail": {
+    "info": {
+     "visible": true,
+     "heading": "语文：背诵《风经过小巷》最后一段",
+     "liTexts": [
+      "背诵最后一段，请家长听一遍。"
+     ],
+     "pseudo": {
+      "content": "counter(g3)",
+      "position": "static",
+      "width": "17px"
+     },
+     "facts": [
+      {
+       "text": "截止 2026-11-04",
+       "bg": "rgba(0, 0, 0, 0)",
+       "border": "0px",
+       "radius": "0px"
+      }
+     ],
+     "hasPlanSection": false,
+     "hasMore": true,
+     "sections": [
+      "要做什么",
+      "资料 · 0 份",
+      "反馈与订正"
+     ]
+    }
+   },
+   "rail": {
+    "x": 12,
+    "y": 12,
+    "w": 188,
+    "h": 696,
+    "bottom": 708
+   },
+   "cols": [
+    {
+     "x": 253,
+     "y": 73,
+     "w": 262,
+     "h": 735,
+     "bottom": 807
+    },
+    {
+     "x": 525,
+     "y": 73,
+     "w": 225,
+     "h": 75,
+     "bottom": 147
+    },
+    {
+     "x": 759,
+     "y": 73,
+     "w": 200,
+     "h": 94,
+     "bottom": 166
+    }
+   ],
+   "rowCount": 5,
+   "fullRows": 5,
+   "firstRow": {
+    "x": 259,
+    "y": 119,
+    "w": 250,
+    "h": 66,
+    "bottom": 184
+   },
+   "bar": {
+    "x": 229,
+    "y": 7,
+    "w": 754,
+    "h": 47,
+    "bottom": 54
+   },
+   "kids": null,
+   "chipsRow": null,
+   "fixedNavs": [],
+   "tabs": {
+    "x": 12,
+    "y": 417,
+    "w": 186,
+    "h": 48,
+    "bottom": 465
+   },
+   "week": {
+    "x": 12,
+    "y": 471,
+    "w": 186,
+    "h": 158,
+    "bottom": 629
+   },
+   "courses": {
+    "x": 12,
+    "y": 635,
+    "w": 186,
+    "h": 73,
+    "bottom": 708
+   },
+   "tabsAboveWeek": true,
+   "heads": [
+    "今天要做 5",
+    "明后天 0",
+    "已完成 0",
+    "已取消1"
+   ],
+   "laterTitles": [],
+   "cancelledHidden": true,
+   "cancelledTitles": [],
+   "badges": [
+    [],
+    [
+     "明天交",
+     "不用录音",
+     "不用上传",
+     "读给家长"
+    ],
+    [
+     "不用抄写"
+    ],
+    [
+     "明天带",
+     "不用录音"
+    ],
+    [
+     "需签字",
+     "周五交"
+    ]
+   ],
+   "rowFacts": [
+    [],
+    [
+     "check:明天核对"
+    ],
+    [],
+    [
+     "complete:今天完成",
+     "due:明天交"
+    ],
+    [
+     "complete:今天完成",
+     "due:后天截止"
+    ]
+   ],
+   "rowTitles": [
+    [
+     "grove-row subj-chinese is-selected",
+     "背诵《风经过小巷》最后一段"
+    ],
+    [
+     "grove-row subj-chinese",
+     "朗读《风经过小巷》第2、3自然段"
+    ],
+    [
+     "grove-row subj-english",
+     "跟读Unit 7第3—10个单词"
+    ],
+    [
+     "grove-row subj-english",
+     "完成《每日练习》并明天带回"
+    ],
+    [
+     "grove-row subj-math",
+     "完成《每日练习》第26页第1—3题"
+    ]
+   ],
+   "planBlocks": 0,
+   "tapTargets": {
+    "childChips": [],
+    "pills": [
+     {
+      "text": "日历",
+      "w": 59,
+      "h": 44
+     },
+     {
+      "text": "错题本",
+      "w": 59,
+      "h": 44
+     },
+     {
+      "text": "学习进展",
+      "w": 59,
+      "h": 44
+     }
+    ],
+    "dayBtn": [],
+    "openBtns": [
+     {
+      "text": "语文 背诵《风经过小巷》最后一段 背",
+      "w": 213,
+      "h": 52
+     },
+     {
+      "text": "语文 · 语文林老师 · 15:45",
+      "w": 213,
+      "h": 135
+     },
+     {
+      "text": "英语 跟读Unit 7第3—10个单",
+      "w": 213,
+      "h": 73
+     },
+     {
+      "text": "英语 · 英语唐老师 · 16:05",
+      "w": 213,
+      "h": 146
+     },
+     {
+      "text": "数学 · 数学周老师 · 15:40",
+      "w": 213,
+      "h": 146
+     }
+    ],
+    "completeBtns": [
+     {
+      "text": "标记完成",
+      "w": 169,
+      "h": 41
+     }
+    ],
+    "backBtns": [],
+    "headerH": 47
+   },
+   "headerH": 47,
+   "errors": [],
+   "nonGet": []
+  },
+  {
+   "width": 1200,
+   "height": 860,
+   "mode": "desktop",
+   "docW": 1200,
+   "vw": 1200,
+   "docH": 860,
+   "noHScroll": true,
+   "aside": {
+    "x": 0,
+    "y": 0,
+    "w": 212,
+    "h": 860,
+    "bottom": 860
+   },
+   "main": {
+    "x": 212,
+    "y": 0,
+    "w": 988,
+    "h": 854,
+    "bottom": 854
+   },
+   "board": {
+    "x": 228,
+    "y": 6,
+    "w": 580,
+    "h": 836,
+    "bottom": 842
+   },
+   "detail": {
+    "info": {
+     "visible": true,
+     "heading": "语文：背诵《风经过小巷》最后一段",
+     "liTexts": [
+      "背诵最后一段，请家长听一遍。"
+     ],
+     "pseudo": {
+      "content": "counter(g3)",
+      "position": "static",
+      "width": "17px"
+     },
+     "facts": [
+      {
+       "text": "截止 2026-11-04",
+       "bg": "rgba(0, 0, 0, 0)",
+       "border": "0px",
+       "radius": "0px"
+      }
+     ],
+     "hasPlanSection": false,
+     "hasMore": true,
+     "sections": [
+      "要做什么",
+      "资料 · 0 份",
+      "反馈与订正"
+     ]
+    }
+   },
+   "rail": {
+    "x": 12,
+    "y": 12,
+    "w": 188,
+    "h": 696,
+    "bottom": 708
+   },
+   "cols": [
+    {
+     "x": 253,
+     "y": 73,
+     "w": 195,
+     "h": 896,
+     "bottom": 969
+    },
+    {
+     "x": 458,
+     "y": 73,
+     "w": 167,
+     "h": 94,
+     "bottom": 166
+    },
+    {
+     "x": 635,
+     "y": 73,
+     "w": 148,
+     "h": 94,
+     "bottom": 166
+    }
+   ],
+   "rowCount": 5,
+   "fullRows": 4,
+   "firstRow": {
+    "x": 259,
+    "y": 119,
+    "w": 183,
+    "h": 99,
+    "bottom": 217
+   },
+   "bar": {
+    "x": 229,
+    "y": 7,
+    "w": 578,
+    "h": 47,
+    "bottom": 54
+   },
+   "kids": null,
+   "chipsRow": null,
+   "fixedNavs": [],
+   "tabs": {
+    "x": 12,
+    "y": 417,
+    "w": 186,
+    "h": 48,
+    "bottom": 465
+   },
+   "week": {
+    "x": 12,
+    "y": 471,
+    "w": 186,
+    "h": 158,
+    "bottom": 629
+   },
+   "courses": {
+    "x": 12,
+    "y": 635,
+    "w": 186,
+    "h": 73,
+    "bottom": 708
+   },
+   "tabsAboveWeek": true,
+   "heads": [
+    "今天要做 5",
+    "明后天 0",
+    "已完成 0",
+    "已取消1"
+   ],
+   "laterTitles": [],
+   "cancelledHidden": true,
+   "cancelledTitles": [],
+   "badges": [
+    [],
+    [
+     "明天交",
+     "不用录音",
+     "不用上传",
+     "读给家长"
+    ],
+    [
+     "不用抄写"
+    ],
+    [
+     "明天带",
+     "不用录音"
+    ],
+    [
+     "需签字",
+     "周五交"
+    ]
+   ],
+   "rowFacts": [
+    [],
+    [
+     "check:明天核对"
+    ],
+    [],
+    [
+     "complete:今天完成",
+     "due:明天交"
+    ],
+    [
+     "complete:今天完成",
+     "due:后天截止"
+    ]
+   ],
+   "rowTitles": [
+    [
+     "grove-row subj-chinese is-selected",
+     "背诵《风经过小巷》最后一段"
+    ],
+    [
+     "grove-row subj-chinese",
+     "朗读《风经过小巷》第2、3自然段"
+    ],
+    [
+     "grove-row subj-english",
+     "跟读Unit 7第3—10个单词"
+    ],
+    [
+     "grove-row subj-english",
+     "完成《每日练习》并明天带回"
+    ],
+    [
+     "grove-row subj-math",
+     "完成《每日练习》第26页第1—3题"
+    ]
+   ],
+   "planBlocks": 0,
+   "tapTargets": {
+    "childChips": [],
+    "pills": [
+     {
+      "text": "日历",
+      "w": 59,
+      "h": 44
+     },
+     {
+      "text": "错题本",
+      "w": 59,
+      "h": 44
+     },
+     {
+      "text": "学习进展",
+      "w": 59,
+      "h": 44
+     }
+    ],
+    "dayBtn": [],
+    "openBtns": [
+     {
+      "text": "语文 背诵《风经过小巷》最后一段 背",
+      "w": 146,
+      "h": 85
+     },
+     {
+      "text": "语文 · 语文林老师 · 15:45",
+      "w": 146,
+      "h": 172
+     },
+     {
+      "text": "英语 跟读Unit 7第3—10个单",
+      "w": 146,
+      "h": 73
+     },
+     {
+      "text": "英语 · 英语唐老师 · 16:05",
+      "w": 146,
+      "h": 200
+     },
+     {
+      "text": "数学 · 数学周老师 · 15:40",
+      "w": 146,
+      "h": 184
+     }
+    ],
+    "completeBtns": [
+     {
+      "text": "标记完成",
+      "w": 137,
+      "h": 41
+     }
+    ],
+    "backBtns": [],
+    "headerH": 47
+   },
+   "headerH": 47,
+   "errors": [],
+   "nonGet": []
+  },
+  {
+   "width": 1024,
+   "height": 900,
+   "mode": "medium",
+   "docW": 1024,
+   "vw": 1024,
+   "docH": 1236,
+   "noHScroll": true,
+   "aside": {
+    "x": 0,
+    "y": 0,
+    "w": 188,
+    "h": 900,
+    "bottom": 900
+   },
+   "main": {
+    "x": 188,
+    "y": 0,
+    "w": 836,
+    "h": 1236,
+    "bottom": 1236
+   },
+   "board": {
+    "x": 211,
+    "y": 23,
+    "w": 790,
+    "h": 1190,
+    "bottom": 1213
+   },
+   "detail": {
+    "info": {
+     "rect": {
+      "y": 0,
+      "h": 900
+     },
+     "view": "detail",
+     "backVisible": true,
+     "heading": "语文：背诵《风经过小巷》最后一段",
+     "bodyScrollable": false
+    }
+   },
+   "rail": null,
+   "cols": [
+    {
+     "x": 224,
+     "y": 234,
+     "w": 422,
+     "h": 806,
+     "bottom": 1040
+    },
+    {
+     "x": 658,
+     "y": 234,
+     "w": 330,
+     "h": 84,
+     "bottom": 318
+    },
+    {
+     "x": 658,
+     "y": 643,
+     "w": 330,
+     "h": 84,
+     "bottom": 727
+    }
+   ],
+   "rowCount": 5,
+   "fullRows": 5,
+   "firstRow": {
+    "x": 232,
+    "y": 289,
+    "w": 406,
+    "h": 76,
+    "bottom": 366
+   },
+   "bar": {
+    "x": 212,
+    "y": 24,
+    "w": 788,
+    "h": 95,
+    "bottom": 119
+   },
+   "kids": {
+    "x": 224,
+    "y": 81,
+    "w": 125,
+    "h": 30,
+    "bottom": 111
+   },
+   "chipsRow": {
+    "x": 224,
+    "y": 135,
+    "w": 764,
+    "h": 40,
+    "bottom": 175
+   },
+   "fixedNavs": [],
+   "tabs": {
+    "x": 224,
+    "y": 177,
+    "w": 764,
+    "h": 51,
+    "bottom": 228
+   },
+   "week": {
+    "x": 224,
+    "y": 1059,
+    "w": 764,
+    "h": 131,
+    "bottom": 1190
+   },
+   "courses": {
+    "x": 0,
+    "y": 0,
+    "w": 0,
+    "h": 0,
+    "bottom": 0
+   },
+   "tabsAboveWeek": true,
+   "heads": [
+    "今天要做 5",
+    "明后天 0",
+    "已完成 0",
+    "已取消1"
+   ],
+   "laterTitles": [],
+   "cancelledHidden": true,
+   "cancelledTitles": [],
+   "badges": [
+    [],
+    [
+     "明天交",
+     "不用录音",
+     "不用上传",
+     "读给家长"
+    ],
+    [
+     "不用抄写"
+    ],
+    [
+     "明天带",
+     "不用录音"
+    ],
+    [
+     "需签字",
+     "周五交"
+    ]
+   ],
+   "rowFacts": [
+    [],
+    [
+     "check:明天核对"
+    ],
+    [],
+    [
+     "complete:今天完成",
+     "due:明天交"
+    ],
+    [
+     "complete:今天完成",
+     "due:后天截止"
+    ]
+   ],
+   "rowTitles": [
+    [
+     "grove-row subj-chinese",
+     "背诵《风经过小巷》最后一段"
+    ],
+    [
+     "grove-row subj-chinese",
+     "朗读《风经过小巷》第2、3自然段"
+    ],
+    [
+     "grove-row subj-english",
+     "跟读Unit 7第3—10个单词"
+    ],
+    [
+     "grove-row subj-english",
+     "完成《每日练习》并明天带回"
+    ],
+    [
+     "grove-row subj-math",
+     "完成《每日练习》第26页第1—3题"
+    ]
+   ],
+   "planBlocks": 0,
+   "tapTargets": {
+    "childChips": [
+     {
+      "text": "示例甲",
+      "w": 60,
+      "h": 30
+     },
+     {
+      "text": "示例乙",
+      "w": 60,
+      "h": 30
+     }
+    ],
+    "pills": [
+     {
+      "text": "日历",
+      "w": 251,
+      "h": 45
+     },
+     {
+      "text": "错题本",
+      "w": 251,
+      "h": 45
+     },
+     {
+      "text": "学习进展",
+      "w": 251,
+      "h": 45
+     }
+    ],
+    "dayBtn": [],
+    "openBtns": [
+     {
+      "text": "语文 背诵《风经过小巷》最后一段 背",
+      "w": 364,
+      "h": 58
+     },
+     {
+      "text": "语文 · 语文林老师 · 15:45",
+      "w": 364,
+      "h": 128
+     },
+     {
+      "text": "英语 跟读Unit 7第3—10个单",
+      "w": 364,
+      "h": 82
+     },
+     {
+      "text": "英语 · 英语唐老师 · 16:05",
+      "w": 364,
+      "h": 168
+     },
+     {
+      "text": "数学 · 数学周老师 · 15:40",
+      "w": 364,
+      "h": 148
+     }
+    ],
+    "completeBtns": [],
+    "backBtns": [],
+    "headerH": 95
+   },
+   "headerH": 95,
+   "errors": [],
+   "nonGet": []
+  },
+  {
+   "width": 768,
+   "height": 900,
+   "mode": "phone",
+   "docW": 768,
+   "vw": 768,
+   "docH": 1377,
+   "noHScroll": true,
+   "aside": {
+    "x": 0,
+    "y": 0,
+    "w": 768,
+    "h": 4,
+    "bottom": 4
+   },
+   "main": {
+    "x": 0,
+    "y": 4,
+    "w": 768,
+    "h": 1373,
+    "bottom": 1377
+   },
+   "board": {
+    "x": 12,
+    "y": 8,
+    "w": 744,
+    "h": 1273,
+    "bottom": 1281
+   },
+   "detail": {
+    "info": {
+     "rect": {
+      "y": 596,
+      "h": 240
+     },
+     "view": "detail",
+     "backVisible": true,
+     "heading": "语文：背诵《风经过小巷》最后一段",
+     "bodyScrollable": true
+    }
+   },
+   "rail": null,
+   "cols": [
+    {
+     "x": 12,
+     "y": 171,
+     "w": 744,
+     "h": 799,
+     "bottom": 970
+    },
+    {
+     "x": 12,
+     "y": 982,
+     "w": 744,
+     "h": 50,
+     "bottom": 1032
+    },
+    {
+     "x": 12,
+     "y": 1044,
+     "w": 744,
+     "h": 50,
+     "bottom": 1094
+    }
+   ],
+   "rowCount": 5,
+   "fullRows": 5,
+   "firstRow": {
+    "x": 16,
+    "y": 194,
+    "w": 736,
+    "h": 86,
+    "bottom": 280
+   },
+   "bar": {
+    "x": 12,
+    "y": 8,
+    "w": 744,
+    "h": 68,
+    "bottom": 76
+   },
+   "kids": {
+    "x": 12,
+    "y": 8,
+    "w": 744,
+    "h": 44,
+    "bottom": 52
+   },
+   "chipsRow": {
+    "x": 12,
+    "y": 82,
+    "w": 744,
+    "h": 44,
+    "bottom": 126
+   },
+   "fixedNavs": [
+    "主导航"
+   ],
+   "tabs": {
+    "x": 12,
+    "y": 126,
+    "w": 744,
+    "h": 44,
+    "bottom": 170
+   },
+   "week": {
+    "x": 12,
+    "y": 1142,
+    "w": 744,
+    "h": 129,
+    "bottom": 1271
+   },
+   "courses": {
+    "x": 0,
+    "y": 0,
+    "w": 0,
+    "h": 0,
+    "bottom": 0
+   },
+   "tabsAboveWeek": true,
+   "heads": [
+    "今天要做5",
+    "明后天0",
+    "已完成0",
+    "已取消1"
+   ],
+   "laterTitles": [],
+   "cancelledHidden": true,
+   "cancelledTitles": [],
+   "badges": [
+    [],
+    [
+     "明天交",
+     "不用录音",
+     "不用上传",
+     "读给家长"
+    ],
+    [
+     "不用抄写"
+    ],
+    [
+     "明天带",
+     "不用录音"
+    ],
+    [
+     "需签字",
+     "周五交"
+    ]
+   ],
+   "rowFacts": [
+    [],
+    [
+     "check:明天核对"
+    ],
+    [],
+    [
+     "complete:今天完成",
+     "due:明天交"
+    ],
+    [
+     "complete:今天完成",
+     "due:后天截止"
+    ]
+   ],
+   "rowTitles": [
+    [
+     "grove-row subj-chinese",
+     "背诵《风经过小巷》最后一段"
+    ],
+    [
+     "grove-row subj-chinese",
+     "朗读《风经过小巷》第2、3自然段"
+    ],
+    [
+     "grove-row subj-english",
+     "跟读Unit 7第3—10个单词"
+    ],
+    [
+     "grove-row subj-english",
+     "完成《每日练习》并明天带回"
+    ],
+    [
+     "grove-row subj-math",
+     "完成《每日练习》第26页第1—3题"
+    ]
+   ],
+   "planBlocks": 0,
+   "tapTargets": {
+    "childChips": [
+     {
+      "text": "示例甲",
+      "w": 55,
+      "h": 44
+     },
+     {
+      "text": "示例乙",
+      "w": 55,
+      "h": 44
+     }
+    ],
+    "pills": [
+     {
+      "text": "日历",
+      "w": 247,
+      "h": 44
+     },
+     {
+      "text": "错题本",
+      "w": 247,
+      "h": 44
+     },
+     {
+      "text": "学习进展",
+      "w": 247,
+      "h": 44
+     }
+    ],
+    "dayBtn": [
+     {
+      "text": "看明天 ›",
+      "w": 51,
+      "h": 44
+     }
+    ],
+    "openBtns": [
+     {
+      "text": "语文 背诵《风经过小巷》最后一段 背",
+      "w": 690,
+      "h": 64
+     },
+     {
+      "text": "语文 · 语文林老师 · 15:45",
+      "w": 690,
+      "h": 133
+     },
+     {
+      "text": "英语 跟读Unit 7第3—10个单",
+      "w": 690,
+      "h": 88
+     },
+     {
+      "text": "英语 · 英语唐老师 · 16:05",
+      "w": 690,
+      "h": 158
+     },
+     {
+      "text": "数学 · 数学周老师 · 15:40",
+      "w": 690,
+      "h": 158
+     }
+    ],
+    "completeBtns": [],
+    "backBtns": [],
+    "headerH": 68
+   },
+   "headerH": 68,
+   "errors": [],
+   "nonGet": []
+  },
+  {
+   "width": 390,
+   "height": 844,
+   "mode": "phone",
+   "docW": 390,
+   "vw": 390,
+   "docH": 1400,
+   "noHScroll": true,
+   "aside": {
+    "x": 0,
+    "y": 0,
+    "w": 390,
+    "h": 4,
+    "bottom": 4
+   },
+   "main": {
+    "x": 0,
+    "y": 4,
+    "w": 390,
+    "h": 1396,
+    "bottom": 1400
+   },
+   "board": {
+    "x": 12,
+    "y": 8,
+    "w": 366,
+    "h": 1296,
+    "bottom": 1304
+   },
+   "detail": {
+    "info": {
+     "rect": {
+      "y": 552,
+      "h": 228
+     },
+     "view": "detail",
+     "backVisible": true,
+     "heading": "语文：背诵《风经过小巷》最后一段",
+     "bodyScrollable": true
+    }
+   },
+   "rail": null,
+   "cols": [
+    {
+     "x": 12,
+     "y": 171,
+     "w": 366,
+     "h": 822,
+     "bottom": 993
+    },
+    {
+     "x": 12,
+     "y": 1005,
+     "w": 366,
+     "h": 50,
+     "bottom": 1055
+    },
+    {
+     "x": 12,
+     "y": 1067,
+     "w": 366,
+     "h": 50,
+     "bottom": 1117
+    }
+   ],
+   "rowCount": 5,
+   "fullRows": 5,
+   "firstRow": {
+    "x": 16,
+    "y": 194,
+    "w": 358,
+    "h": 86,
+    "bottom": 280
+   },
+   "bar": {
+    "x": 12,
+    "y": 8,
+    "w": 366,
+    "h": 68,
+    "bottom": 76
+   },
+   "kids": {
+    "x": 12,
+    "y": 8,
+    "w": 366,
+    "h": 44,
+    "bottom": 52
+   },
+   "chipsRow": {
+    "x": 12,
+    "y": 82,
+    "w": 366,
+    "h": 44,
+    "bottom": 126
+   },
+   "fixedNavs": [
+    "主导航"
+   ],
+   "tabs": {
+    "x": 12,
+    "y": 126,
+    "w": 366,
+    "h": 44,
+    "bottom": 170
+   },
+   "week": {
+    "x": 12,
+    "y": 1165,
+    "w": 366,
+    "h": 129,
+    "bottom": 1294
+   },
+   "courses": {
+    "x": 0,
+    "y": 0,
+    "w": 0,
+    "h": 0,
+    "bottom": 0
+   },
+   "tabsAboveWeek": true,
+   "heads": [
+    "今天要做5",
+    "明后天0",
+    "已完成0",
+    "已取消1"
+   ],
+   "laterTitles": [],
+   "cancelledHidden": true,
+   "cancelledTitles": [],
+   "badges": [
+    [],
+    [
+     "明天交",
+     "不用录音",
+     "不用上传",
+     "读给家长"
+    ],
+    [
+     "不用抄写"
+    ],
+    [
+     "明天带",
+     "不用录音"
+    ],
+    [
+     "需签字",
+     "周五交"
+    ]
+   ],
+   "rowFacts": [
+    [],
+    [
+     "check:明天核对"
+    ],
+    [],
+    [
+     "complete:今天完成",
+     "due:明天交"
+    ],
+    [
+     "complete:今天完成",
+     "due:后天截止"
+    ]
+   ],
+   "rowTitles": [
+    [
+     "grove-row subj-chinese",
+     "背诵《风经过小巷》最后一段"
+    ],
+    [
+     "grove-row subj-chinese",
+     "朗读《风经过小巷》第2、3自然段"
+    ],
+    [
+     "grove-row subj-english",
+     "跟读Unit 7第3—10个单词"
+    ],
+    [
+     "grove-row subj-english",
+     "完成《每日练习》并明天带回"
+    ],
+    [
+     "grove-row subj-math",
+     "完成《每日练习》第26页第1—3题"
+    ]
+   ],
+   "planBlocks": 0,
+   "tapTargets": {
+    "childChips": [
+     {
+      "text": "示例甲",
+      "w": 55,
+      "h": 44
+     },
+     {
+      "text": "示例乙",
+      "w": 55,
+      "h": 44
+     }
+    ],
+    "pills": [
+     {
+      "text": "日历",
+      "w": 121,
+      "h": 44
+     },
+     {
+      "text": "错题本",
+      "w": 121,
+      "h": 44
+     },
+     {
+      "text": "学习进展",
+      "w": 121,
+      "h": 44
+     }
+    ],
+    "dayBtn": [
+     {
+      "text": "看明天 ›",
+      "w": 51,
+      "h": 44
+     }
+    ],
+    "openBtns": [
+     {
+      "text": "语文 背诵《风经过小巷》最后一段 背",
+      "w": 312,
+      "h": 64
+     },
+     {
+      "text": "语文 · 语文林老师 · 15:45",
+      "w": 312,
+      "h": 133
+     },
+     {
+      "text": "英语 跟读Unit 7第3—10个单",
+      "w": 312,
+      "h": 88
+     },
+     {
+      "text": "英语 · 英语唐老师 · 16:05",
+      "w": 312,
+      "h": 181
+     },
+     {
+      "text": "数学 · 数学周老师 · 15:40",
+      "w": 312,
+      "h": 158
+     }
+    ],
+    "completeBtns": [],
+    "backBtns": [],
+    "headerH": 68
+   },
+   "headerH": 68,
+   "errors": [],
+   "nonGet": []
+  },
+  {
+   "width": 360,
+   "height": 780,
+   "mode": "phone",
+   "docW": 360,
+   "vw": 360,
+   "docH": 1446,
+   "noHScroll": true,
+   "aside": {
+    "x": 0,
+    "y": 0,
+    "w": 360,
+    "h": 4,
+    "bottom": 4
+   },
+   "main": {
+    "x": 0,
+    "y": 4,
+    "w": 360,
+    "h": 1442,
+    "bottom": 1446
+   },
+   "board": {
+    "x": 12,
+    "y": 8,
+    "w": 336,
+    "h": 1342,
+    "bottom": 1350
+   },
+   "detail": {
+    "info": {
+     "rect": {
+      "y": 505,
+      "h": 211
+     },
+     "view": "detail",
+     "backVisible": true,
+     "heading": "语文：背诵《风经过小巷》最后一段",
+     "bodyScrollable": true
+    }
+   },
+   "rail": null,
+   "cols": [
+    {
+     "x": 12,
+     "y": 171,
+     "w": 336,
+     "h": 868,
+     "bottom": 1039
+    },
+    {
+     "x": 12,
+     "y": 1051,
+     "w": 336,
+     "h": 50,
+     "bottom": 1101
+    },
+    {
+     "x": 12,
+     "y": 1113,
+     "w": 336,
+     "h": 50,
+     "bottom": 1163
+    }
+   ],
+   "rowCount": 5,
+   "fullRows": 5,
+   "firstRow": {
+    "x": 16,
+    "y": 194,
+    "w": 328,
+    "h": 86,
+    "bottom": 280
+   },
+   "bar": {
+    "x": 12,
+    "y": 8,
+    "w": 336,
+    "h": 68,
+    "bottom": 76
+   },
+   "kids": {
+    "x": 12,
+    "y": 8,
+    "w": 336,
+    "h": 44,
+    "bottom": 52
+   },
+   "chipsRow": {
+    "x": 12,
+    "y": 82,
+    "w": 336,
+    "h": 44,
+    "bottom": 126
+   },
+   "fixedNavs": [
+    "主导航"
+   ],
+   "tabs": {
+    "x": 12,
+    "y": 126,
+    "w": 336,
+    "h": 44,
+    "bottom": 170
+   },
+   "week": {
+    "x": 12,
+    "y": 1211,
+    "w": 336,
+    "h": 129,
+    "bottom": 1340
+   },
+   "courses": {
+    "x": 0,
+    "y": 0,
+    "w": 0,
+    "h": 0,
+    "bottom": 0
+   },
+   "tabsAboveWeek": true,
+   "heads": [
+    "今天要做5",
+    "明后天0",
+    "已完成0",
+    "已取消1"
+   ],
+   "laterTitles": [],
+   "cancelledHidden": true,
+   "cancelledTitles": [],
+   "badges": [
+    [],
+    [
+     "明天交",
+     "不用录音",
+     "不用上传",
+     "读给家长"
+    ],
+    [
+     "不用抄写"
+    ],
+    [
+     "明天带",
+     "不用录音"
+    ],
+    [
+     "需签字",
+     "周五交"
+    ]
+   ],
+   "rowFacts": [
+    [],
+    [
+     "check:明天核对"
+    ],
+    [],
+    [
+     "complete:今天完成",
+     "due:明天交"
+    ],
+    [
+     "complete:今天完成",
+     "due:后天截止"
+    ]
+   ],
+   "rowTitles": [
+    [
+     "grove-row subj-chinese",
+     "背诵《风经过小巷》最后一段"
+    ],
+    [
+     "grove-row subj-chinese",
+     "朗读《风经过小巷》第2、3自然段"
+    ],
+    [
+     "grove-row subj-english",
+     "跟读Unit 7第3—10个单词"
+    ],
+    [
+     "grove-row subj-english",
+     "完成《每日练习》并明天带回"
+    ],
+    [
+     "grove-row subj-math",
+     "完成《每日练习》第26页第1—3题"
+    ]
+   ],
+   "planBlocks": 0,
+   "tapTargets": {
+    "childChips": [
+     {
+      "text": "示例甲",
+      "w": 55,
+      "h": 44
+     },
+     {
+      "text": "示例乙",
+      "w": 55,
+      "h": 44
+     }
+    ],
+    "pills": [
+     {
+      "text": "日历",
+      "w": 111,
+      "h": 44
+     },
+     {
+      "text": "错题本",
+      "w": 111,
+      "h": 44
+     },
+     {
+      "text": "学习进展",
+      "w": 111,
+      "h": 44
+     }
+    ],
+    "dayBtn": [
+     {
+      "text": "看明天 ›",
+      "w": 51,
+      "h": 44
+     }
+    ],
+    "openBtns": [
+     {
+      "text": "语文 背诵《风经过小巷》最后一段 背",
+      "w": 282,
+      "h": 64
+     },
+     {
+      "text": "语文 · 语文林老师 · 15:45",
+      "w": 282,
+      "h": 156
+     },
+     {
+      "text": "英语 跟读Unit 7第3—10个单",
+      "w": 282,
+      "h": 88
+     },
+     {
+      "text": "英语 · 英语唐老师 · 16:05",
+      "w": 282,
+      "h": 181
+     },
+     {
+      "text": "数学 · 数学周老师 · 15:40",
+      "w": 282,
+      "h": 181
+     }
+    ],
+    "completeBtns": [],
+    "backBtns": [],
+    "headerH": 68
+   },
+   "headerH": 68,
+   "errors": [],
+   "nonGet": []
+  }
+ ],
+ "failures": [],
+ "__todo": []
+}
