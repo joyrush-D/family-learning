@@ -1,0 +1,8 @@
+ calendar.js                             |  284 +++--
+ packaging/macos/Sources/Workspace.swift | 2065 ++++++++++++++++++++++++++++++-
+ test_native_workspace.cjs               |   19 +-
+ workbench.css                           |  455 +++++++
+ 4 files changed, 2707 insertions(+), 116 deletions(-)
+# 被 .gitignore 忽略的新文件（不在 git status --porcelain 中，仍补入 fix.patch）
+ test_daily_list_expression.py | 408 ++
+ test_school_fold_visibility.py | 227 ++

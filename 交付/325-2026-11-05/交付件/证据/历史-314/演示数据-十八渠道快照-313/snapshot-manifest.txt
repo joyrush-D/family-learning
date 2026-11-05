@@ -1,0 +1,16 @@
+merge18 demo snapshot manifest
+generated_at: 2026-11-05T00:36:30+0800
+match_day: 2026-11-04
+product: family-learning public-integration-20260926
+product_family_agent.py_sha1: 517b7517f91d9bc0e08e0a0b6b806f50f54e5d77
+product_family_llm.py_sha1: bf2c974be34b6460d980d18b8e2ffc1498611be1 (git HEAD)
+run_archive: work/merge18/run-fix5-1.json 与 run-fix5-2.json（两次连续跑数字一致：7 task / 16 item / inbox 8 / 18 processed / 8 calls ok）
+verify_command: cd work/merge18 && ./verify-demo.sh
+
+sha1                                       size  path
+ec86b5989654be0360d8dd4604823e5e852b7eca      2678  README.txt
+5ab4a969f93529fe63a7f85c99322560d6ca4f77       842  data/agent.json
+4834d4f36a29c3282c8f6d5e546d79d5177d063b    258048  data/family.sqlite3
+e0ce23ea862e4c23ce6926dbea27262687bf9c3c       147  data/uploads/2156869597e2c9678f050103755beaae
+669e9208207dbe8a161958ffbd492c782711df53       337  data/uploads/245755138b74351ac3142d4c1c2fc1c3
+ae72795cd96bef7ee3ad06bbba01e744e6bb6dfb        97  家庭运行规则.md

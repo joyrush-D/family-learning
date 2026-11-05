@@ -1,0 +1,40 @@
+# Build 311 静态校验与原生 v2 证据
+记录时间: 2026-11-04T15:41:10Z
+
+## 1. 构建与签名
+构建号: 311（FAMILY_MAC_BUILD_NUMBER=311，构建脚本 重建.sh）
+App: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app
+二进制: 一起成长.app/Contents/MacOS/YiqiChengzhang
+二进制大小: 6275120 字节（310 为 6250096，增加 25024 字节，来自 Workspace.swift 原生 v2 列表卡/详情）
+二进制 sha1: 77516eb45fee426c21718f945da3aaaf3da082f7
+plutil:   "CFBundleIdentifier" => "local.yiqichengzhang.desktop"   "CFBundleShortVersionString" => "0.2.0"   "CFBundleVersion" => "311" 
+codesign --verify --deep --strict: valid on disk / satisfies its Designated Requirement（退出码 0）
+codesign -dv: Identifier=local.yiqichengzhang.desktop, Signature=adhoc, TeamIdentifier=not set
+
+## 2. 「311」在哪里
+CFBundleVersion 在 Contents/Info.plist 里（值 311，见上）；Mach-O 二进制不嵌入 CFBundleVersion。
+strings -a YiqiChengzhang | grep -c 311 => 0（0 属预期：版本号只写入 Info.plist）
+strings -a YiqiChengzhang | grep -c 家庭安排 => 0（0 属预期：BSD strings 只提取 ASCII 串，中文被丢弃）
+
+## 3. 原生 v2 字符串确实编译进二进制（UTF-8 字节计数）
+  家庭安排: 1
+  还有: 1
+  查看详情: 1
+  条 · 查看: 1
+  计划: 1
+  连接本机一起成长服务: 2
+  FAMILY_DESKTOP_SUPPORT_DIR: 1
+  http://127.0.0.1:8765: 8
+
+## 4. 源码依据（REPO/packaging/macos/Sources/Workspace.swift，只读）
+425:    /// 清单行最多两条步骤；第 3 条起折成一行「还有 N 条 · 查看详情」，完整要求在详情页。
+1009:                    if item.rowPoints.rest > 0 {
+1010:                        Text("还有 \(item.rowPoints.rest) 条 · 查看详情").font(Palette.small).foregroundStyle(Palette.ink2)
+1011:                            .probe("row-more-" + item.id, text: "还有 \(item.rowPoints.rest) 条 · 查看详情")
+diffstat:  1 file changed, 93 insertions(+), 7 deletions(-)
+
+## 5. 构建后工作区一致性（Swift/打包输入未再变化；App 二进制不受后续 Python 改动影响）
+- 构建快照（证据/源码版本-311.txt，构建时写入）：HEAD 58973a6，8 个 git 可见修改 + 被 .gitignore 忽略的 test_daily_list_expression.py；fix.patch-311 sha1 7cf2bd03，140508 字节。
+- family_agent.py = de6859a3454b0ee01bc21b5f7a38c7faf9552d98（merge18 已落盘；构建前 `python3 -c "import family_agent"` 通过）；family_llm.py 在构建快照之后又被改动（构建时未修改），属后台 Python 侧改动，App 只编译 Swift，二进制不受影响。
+- App 编译输入（packaging/macos/Sources/Workspace.swift=d62e27df、WorkspaceAPI.swift=2d43a511）与构建时一致，构建后未变；因此 311 的二进制（sha1 77516eb4…）与原生 v2 布局一一对应。
+- 后台网页资源由运行时从 REPO 读取，当前网页端 = 工作区最新（calendar.js 9aa10da9 / workbench.css 8dd06f3a / app.js 4c17738b）。

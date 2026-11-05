@@ -1,0 +1,47 @@
+REPO  : /tmp/rel-324
+后台  : http://127.0.0.1:8841（全虚构，临时目录，退出即清除）
+配置  : /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/.support/desktop.json（本次演示专用，不覆盖真实 App 配置）
+
+正在启动虚构演示后台…
+后台已就绪：虚构演示 http://127.0.0.1:8841 — 退出后清除演示记录
+
+正在通过公开 API 播种「真模型抽取产物」：/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/演示数据/real-model-run.json
+播种对象：示例星星（child-1），演示日期 2026-11-05
+数据来源：真模型抽取结果 /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/演示数据/real-model-run.json（模型 doubao-seed-evolving，7 条 proposals）
+已跳过模型标为非任务的参考条目：参考：自愿阅读《海边小记》
+播种说明：标题/截止/lines 均为模型产物，未手写改写。
+已标记完成演示自带事项 1 条：阅读后，听听孩子的发现
+
+=== 今天 2026-11-05 · 示例星星（child-1） ===
+  [今天] 英语：明天带《单词听写本》
+           明天英语课带《单词听写本》；
+           不用在家练习。
+           [家庭安排] 可提前把《单词听写本》放进书包。
+  [今天] 英语：Unit 7第3–10个单词听写（明天）
+           明天英语课听写Unit 7第3至10个单词。
+           [家庭安排] 可用今晚跟读的单词做熟悉，明天课堂参加听写。
+  [今天] 数学：完成练习册第12页第2–4题
+           今晚完成练习册第12页第2至4题，写出计算过程；
+           明天交回。
+           [家庭安排] 可先列式计算并自查计算过程，按时交回。
+  [今天] 语文：朗读《晚照》2遍并家长签字
+           今晚朗读《晚照》2遍；
+           请家长签字；
+           明天早读接受检查。
+           [家庭安排] 可分段朗读，家长在孩子读完后签字确认。
+
+  [以后安排] 家长：填写《出游回执》并签名交回
+           今晚请家长在《出游回执》勾选参加或不参加并签名；
+           下周一由孩子交回。
+           [家庭安排] 可今晚填写勾选并签名，放入书包以便下周一交回。
+
+/api/day 计数：today=4 later=1 open=6 closed=1 undated=1 upcoming=0
+数据来源：真模型抽取（doubao-seed-evolving）
+投影模式：plan_lines 独立字段（本次修复后）（plan_lines）
+堆叠要求样式：不适用（unsupported）
+upcoming 列表：（空）
+说明：标题/截止/lines 均为真模型（doubao-seed-evolving）从 6 条虚构老师消息抽取的产物，未手写改写；模型的绝对日期若已过去，界面会显示「已过期限」，属如实展示；本演示后台没有学校消息采集器，upcoming 无法离线产生。
+
+自检通过：今天 4 项（英语：明天带《单词听写本》、英语：Unit 7第3–10个单词听写（明天）、数学：完成练习册第12页第2–4题、语文：朗读《晚照》2遍并家长签字）；以后安排 1 项；日期未写明 0 项；每条 title/lines 非空。
+
+自检模式：未打开 App。正在停止演示后台，演示数据随之清除。

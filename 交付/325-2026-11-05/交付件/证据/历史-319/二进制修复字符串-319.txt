@@ -1,0 +1,23 @@
+# Build 319 二进制 UI 符号与字符串
+生成时间: 2026-11-05T14:11:18Z
+（Swift -O 会内联短字符串；中文字面量用 Python UTF-8 字节计数，nm 查类型/方法符号）
+
+DayFollowUp nm 命中: 296
+0000000100023a38 t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLO11stringValueAFSgSS_tcfCTf4nd_n
+000000010029b400 b _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFSQAAWL
+00000001000398ec t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFSQAAWl
+00000001002970a0 b _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs0F3KeyAAWL
+0000000100037718 t _$s14YiqiChengzhang11DayFollowUpV10CodingKeys33_D841F82F17D7E8C3E15017D6F2E72DEFLLOAFs0F3KeyAAWl
+
+跨天标尺相关符号 (span):
+134
+家庭安排 UTF-8 byte count: 1
+跨 UTF-8 byte count: 1
+天 UTF-8 byte count: 22
+还剩 UTF-8 byte count: 0
+明天截止 UTF-8 byte count: 0
+今天截止 UTF-8 byte count: 0
+已过期 UTF-8 byte count: 4
+时间线 UTF-8 byte count: 0
+布置 UTF-8 byte count: 3
+截止 UTF-8 byte count: 5

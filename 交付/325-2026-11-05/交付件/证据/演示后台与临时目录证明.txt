@@ -1,0 +1,29 @@
+=== 校验时间 2026-11-04T07:29:09Z ===
+
+### 1. demo.py 把数据放进自己的临时目录（源码行号）
+12:    with tempfile.TemporaryDirectory(prefix='family-demo-') as tmp:
+13:        app.DATA=Path(tmp);app.DB=app.DATA/'family.sqlite3'
+
+### 2. demo.py 打印的演示地址
+虚构演示 http://127.0.0.1:8772 — 退出后清除演示记录
+
+### 3. 演示后台进程（pid=��打开的路径（只列临时演示目录相关行）
+  PID COMMAND
+12645 python3 -B demo.py --port 8772
+python3.1 12645 joyrush    3u   REG               1,13   253952           140502826 /private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/family-demo-iu658khp/family.sqlite3
+python3.1 12645 joyrush    4u   REG               1,13   253952           140502826 /private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/family-demo-iu658khp/family.sqlite3
+python3.1 12645 joyrush    5u   REG               1,13   253952           140502826 /private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/family-demo-iu658khp/family.sqlite3
+python3.1 12645 joyrush    6u   REG               1,13   253952           140502826 /private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/family-demo-iu658khp/family.sqlite3
+python3.1 12645 joyrush    7u   REG               1,13   253952           140502826 /private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/family-demo-iu658khp/family.sqlite3
+python3.1 12645 joyrush   11u   REG               1,13   253952           140502826 /private/var/folders/tq/wlbzvzh55ds61s9m821rj0tc0000gn/T/family-demo-iu658khp/family.sqlite3
+
+### 4. 该进程打开的路径中是否出现真实家庭目录字符串
+没有出现：演示后台只打开自己的临时目录，未触碰真实家庭目录。
+也没有任何 /Users/joyrush/Documents/ChatGPT 下的路径。
+
+### 5. App 探测条件：GET / 返回 200 且 body 含 app.bundle.js
+HTTP 200
+body 中的探测标记：app.bundle.js
+
+### 6. 停止并确认端口释放
+演示后台已退出，临时目录随 TemporaryDirectory 一并删除

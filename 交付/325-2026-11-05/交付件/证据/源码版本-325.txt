@@ -1,0 +1,32 @@
+# Build 325 构建输入（2026-11-05T15:52:38Z）
+构建方式: git worktree add /tmp/rel-325 e737fa84；全部输入取自 commit，不读主工作区。
+HEAD: e737fa84edb02bc31629f3005dd75e8ca4f13ac8
+HEAD 提交: School intake: retry message batches that hit the model output cap, and show the read gap instead of dropping them silently
+
+## 输入 sha1（worktree 实测）
+packaging/macos/Sources/Workspace.swift              58c1ca852e4e2a8a86342de7ff6f7dfc927e05ad  5760 行
+packaging/macos/Sources/WorkspaceAPI.swift           6623929e1529d5226af4fbce06ac28dc2d76afe7  500 行
+calendar.js                                          e207d86f0cf33801ee8649bd05f68e9ce4e8a58b  1470 行
+workbench.css                                        5c45e6321e708b9bf32858f9e77c7f889a546748  1382 行
+app.js                                               4c17738bb0917e0eee4c098214502ddbc363b333  2564 行
+family_agent.py                                      131451efa5a446e75b1dc6a460022c394a33f04d  11051 行
+family_agenda.py                                     234a99794c4e2a22d631ed1520b44b7dd81f3d50  2445 行
+family_llm.py                                        bf2c974be34b6460d980d18b8e2ffc1498611be1  3371 行
+test_daily_list_expression.py                        58cc5a28683a207be3baa9f8202a25b0908a3704  690 行
+test_school_fold_visibility.py                       1ed4ade54f781de969ca0afe035be04c26617714  448 行
+test_school_read_gap.py                              ad61e3f96ad4b8d709bc053a4e82a5f879cbb988  173 行
+app.py                                               a4c81babad59a92aadc6a710af84b07fdabb7499  3189 行
+
+## 与 lead 冻结值
+family_agent 131451ef、app.py a4c81bab、calendar e207d86f、workbench 5c45e632、Workspace 58c1ca85、WorkspaceAPI 6623929e、family_agenda 234a9979、family_llm bf2c974b、read_gap ad61e3f9 → 全部一致。
+
+## 本地补丁
+无。输入即 commit，无 fix.patch；主工作区未参与构建。
+
+## 产物
+二进制: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang
+字节数: 8648960
+sha1: d64b19d14f6708ad073bd8378294dc74f43392ec
+CFBundleVersion: 325
+构建时间: 2026-11-05T15:52:39Z（日志 build-325.log）
+与 324 的关系: 代码段完全相同；二进制仅签名块 32 字节随 CFB 变化（见 324-325二进制差异-325.txt）。

@@ -1,0 +1,40 @@
+记录时间: 2026-11-05T15:52:17Z
+HEAD: e737fa84edb02bc31629f3005dd75e8ca4f13ac8
+family_agent.py: 131451efa5a446e75b1dc6a460022c394a33f04d
+app.py: a4c81babad59a92aadc6a710af84b07fdabb7499
+
+=== test_daily_list_expression ===
+Ran 79 tests in 0.019s
+
+OK
+
+=== test_daily_list_whole_day ===
+Ran 19 tests in 11.418s
+
+OK
+
+=== test_school_same_ready_notice ===
+Ran 30 tests in 0.082s
+
+OK
+
+=== test_agenda ===
+Ran 26 tests in 3.193s
+
+OK
+
+=== test_school_completion_today ===
+Ran 55 tests in 42.273s
+
+FAILED (failures=3)
+
+=== test_school_fold_visibility ===
+Ran 29 tests in 1.573s
+
+OK
+
+=== test_school_read_gap ===
+Ran 4 tests in 3.443s
+
+OK
+

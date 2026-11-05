@@ -1,0 +1,23 @@
+记录时间: 2026-11-05T05:20:20Z
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+HEAD: 14838c9c948e5580af2ac86ba10c24942809d6b0
+
+构建后逐文件复核（对照 证据/源码版本-314.txt）:
+  43f2ad7d3f53e402d741c5d9bc538b4853bb560d  2026-11-05T12:51:20Z  packaging/macos/Sources/Workspace.swift
+  85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0  2026-11-05T00:43:22Z  packaging/macos/Sources/WorkspaceAPI.swift
+  8bea4365889d533a60480bbdb418b64658f6b434  2026-11-05T13:11:12Z  calendar.js
+  291aeecc8ef51b0ae519c3b379a668b03c1c49f4  2026-11-05T13:08:48Z  workbench.css
+  4c17738bb0917e0eee4c098214502ddbc363b333  2026-11-04T15:40:22Z  app.js
+  43f18a4235a36b6267a110ccdbd3cb41979304c3  2026-11-05T12:50:24Z  test_native_workspace.cjs
+  517b7517f91d9bc0e08e0a0b6b806f50f54e5d77  2026-11-05T00:34:23Z  family_agent.py
+  932598a705857c718dd5852d4d19f24a98d40a3e  2026-11-05T00:44:14Z  family_agenda.py
+  bf2c974be34b6460d980d18b8e2ffc1498611be1  2026-11-04T23:47:10Z  family_llm.py
+  4da544b9821362fb12262d034b0b89fc983c1f28  2026-11-05T00:45:38Z  test_daily_list_expression.py
+  87bf3d6504ce0d1fa191f6038e608bb11e880486  2026-11-05T00:34:40Z  test_school_fold_visibility.py
+
+结论：全部与构建时（源码版本-314.txt）一致，构建后无漂移；原生二进制、后台投影与网页资源对应同一份冻结源码。
+未跟踪文件检查（应只有队友改动与源码根 家庭运行规则.md，后者由 lead 统一删除）:
+ M calendar.js
+ M packaging/macos/Sources/Workspace.swift
+ M test_native_workspace.cjs
+ M workbench.css

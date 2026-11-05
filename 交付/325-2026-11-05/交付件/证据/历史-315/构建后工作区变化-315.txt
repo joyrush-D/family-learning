@@ -1,0 +1,25 @@
+记录时间: 2026-11-05T05:53:30Z
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+HEAD: cbb78689b6d066d1991748ab273af0b43c8e9904
+
+构建后逐文件复核（对照 证据/源码版本-315.txt）:
+  a3cefe43cdd15cb5dc1b2579fb753167c96c2536  calendar.js
+  ff9c3f85696ee2a555bf77bc50b566aef881be1c  family_agenda.py
+  3d8807c865287b8fc46fc6ff7495df4b40fd1235  family_agent.py
+  60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+  90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
+  7be7d3a8f1c9ed31badce929481a95bae8d62e7e  workbench.css
+  43f2ad7d3f53e402d741c5d9bc538b4853bb560d  packaging/macos/Sources/Workspace.swift
+  85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0  packaging/macos/Sources/WorkspaceAPI.swift
+  4c17738bb0917e0eee4c098214502ddbc363b333  app.js
+  43f18a4235a36b6267a110ccdbd3cb41979304c3  test_native_workspace.cjs
+  bf2c974be34b6460d980d18b8e2ffc1498611be1  family_llm.py
+
+结论：与构建快照一致，构建后无漂移。
+git status:
+ M calendar.js
+ M family_agenda.py
+ M family_agent.py
+ M test_daily_list_expression.py
+ M test_school_fold_visibility.py
+ M workbench.css

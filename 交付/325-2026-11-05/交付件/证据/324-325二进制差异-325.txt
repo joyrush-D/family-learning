@@ -1,0 +1,26 @@
+# 324 → 325 二进制差异（记录 2026-11-05T15:52:51Z）
+
+## 结论
+325 与 324 的**编译代码完全相同**；二进制仅末尾 ad-hoc 签名块里的 32 字节不同，原因是 Info.plist 的 CFBundleVersion 324→325 改变，codesign 把 Info.plist 的 CodeDirectory 哈希写进 LC_CODE_SIGNATURE。
+
+## 两种构建的 sha1
+- 交付 324 二进制（从分支 delivery/324-2026-11-05 取出）: a62705f5782d9f59df33009eb0e7da49f6672d11 （8,648,960 B，CFB 324）
+- 交付 325 二进制（本包）: d64b19d14f6708ad073bd8378294dc74f43392ec （8,648,960 B，CFB 325）
+- 反证构建：**同一份 325 源码**、只把 FAMILY_MAC_BUILD_NUMBER 设为 324 → a62705f5782d9f59df33009eb0e7da49f6672d11 （CFB 324）
+  → 与交付 324 完全相同，证明代码段未变，差异只来自版本号进签名。
+
+## cmp 差异
+cmp -l 差异字节数: 32
+首个差异偏移（0-based）: 8632025
+范围: 8632025 – 8632056 （全部落在 LC_CODE_SIGNATURE 的 dataoff 之后）
+/tmp/bin324 /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang differ: char 8632026, line 12925
+
+## otool -l LC_CODE_SIGNATURE
+        cmd LC_CODE_SIGNATURE
+    cmdsize 16
+    dataoff 8631808
+   datasize 17152
+
+## 身份校验
+325: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app: satisfies its Designated Requirement
+325 CFBundleVersion: "CFBundleVersion"=>"325"

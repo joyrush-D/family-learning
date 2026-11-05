@@ -1,0 +1,41 @@
+记录时间: 2026-11-05T15:39:50Z
+HEAD: 34761550c27e34da7bd5ce63a6979ef48d36f10f
+calendar.js: e207d86f0cf33801ee8649bd05f68e9ce4e8a58b
+Workspace.swift: 58c1ca852e4e2a8a86342de7ff6f7dfc927e05ad
+
+=== test_daily_list_expression ===
+----------------------------------------------------------------------
+Ran 79 tests in 0.012s
+
+OK
+
+=== test_daily_list_whole_day ===
+----------------------------------------------------------------------
+Ran 19 tests in 5.170s
+
+OK
+
+=== test_school_same_ready_notice ===
+----------------------------------------------------------------------
+Ran 30 tests in 0.042s
+
+OK
+
+=== test_agenda ===
+----------------------------------------------------------------------
+Ran 26 tests in 1.528s
+
+OK
+
+=== test_school_completion_today ===
+----------------------------------------------------------------------
+Ran 55 tests in 17.857s
+
+FAILED (failures=3)
+
+=== test_school_fold_visibility ===
+----------------------------------------------------------------------
+Ran 29 tests in 0.738s
+
+OK
+

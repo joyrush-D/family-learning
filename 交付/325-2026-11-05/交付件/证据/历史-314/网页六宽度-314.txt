@@ -1,0 +1,15 @@
+六宽度证据（REPO 网页资源，隔离快照数据，不打开 App）
+运行时间: 2026-11-05T05:19:37Z
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+快照: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/演示数据/十八渠道快照（隔离副本，不改快照、不改 REPO）
+临时目录: /tmp/ui314.EMa59t  端口: 59533
+后台就绪 http://127.0.0.1:59533
+初始 today 项:2（child-1 / 示例甲）
+补入虚构任务: 英语：跟读Unit 7第3—10个单词
+补入虚构任务: 语文：背诵《风经过小巷》最后一段
+补入虚构任务: 数学：完成《每日练习》第27页第4—6题
+seed 后 today 项:5
+today 标题: 数学：完成《每日练习》第27页第4—6题 / 语文：背诵《风经过小巷》最后一段 / 朗读《风经过小巷》第2、3自然段 / 英语：跟读Unit 7第3—10个单词 / 英语：完成《每日练习》并明天带来
+播种退出码: 0
+量测退出码: 0
+failures: []

@@ -1,0 +1,5 @@
+构建后工作区核对（2026-11-05T15:42:02Z）
+构建源 /tmp/rel-324：git status 为空（clean），HEAD ��
+主仓库 ��仅 merge18 的 2 个未提交改动（app.py、family_agent.py），属下一轮工作，未参与构建。
+二进制 sha1 复测: a62705f5782d9f59df33009eb0e7da49f6672d11（与构建时一致）。
+结论：无漂移；本包输入全部来自 commit。

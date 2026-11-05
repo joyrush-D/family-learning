@@ -1,0 +1,9 @@
+ app.js                                     |   5 +-
+ calendar.js                                |  18 ++-
+ family_agenda.py                           | 215 ++++++++++++++++++++++++++---
+ packaging/macos/Sources/Workspace.swift    |  26 ++++
+ packaging/macos/Sources/WorkspaceAPI.swift |   2 +
+ test_school_completion_today.py            |  41 ++++--
+ 6 files changed, 271 insertions(+), 36 deletions(-)
+# 被 .gitignore 忽略的新文件（不在 git status --porcelain 中，仍补入 fix.patch）
+ test_daily_list_expression.py | 320 ++

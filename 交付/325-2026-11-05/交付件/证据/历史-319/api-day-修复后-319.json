@@ -1,0 +1,576 @@
+{
+  "_seed": {
+    "base_url": "http://127.0.0.1:8777",
+    "child": "示例星星",
+    "child_id": "child-1",
+    "daily_style": "unsupported",
+    "day": "2026-11-05",
+    "later": [
+      "家长：填写《出游回执》并签名交回"
+    ],
+    "marked_done": [
+      "阅读后，听听孩子的发现"
+    ],
+    "mode": "real_run",
+    "projection": "plan_lines",
+    "real_run": {
+      "model": "doubao-seed-evolving",
+      "path": "/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/演示数据/real-model-run.json",
+      "proposals": 7,
+      "skipped": [
+        "参考：自愿阅读《海边小记》"
+      ]
+    },
+    "seeded": [
+      {
+        "due": "2026-11-05",
+        "id": "MANUAL-90c34a8f953b161282d2",
+        "title": "语文：朗读《晚照》2遍并家长签字"
+      },
+      {
+        "due": "2026-11-05",
+        "id": "MANUAL-99016e960765b55317cd",
+        "title": "数学：完成练习册第12页第2–4题"
+      },
+      {
+        "due": "2026-11-04",
+        "id": "MANUAL-00ea58ccb1bcdc89d743",
+        "title": "英语：跟读Unit 7第3–10个单词3遍"
+      },
+      {
+        "due": "2026-11-05",
+        "id": "MANUAL-32463b726246406a861e",
+        "title": "英语：Unit 7第3–10个单词听写（明天）"
+      },
+      {
+        "due": "2026-11-05",
+        "id": "MANUAL-627260d5bd7b294e6362",
+        "title": "英语：明天带《单词听写本》"
+      },
+      {
+        "due": "2026-11-09",
+        "id": "MANUAL-a358c7f4ae7964c977f1",
+        "title": "家长：填写《出游回执》并签名交回"
+      }
+    ],
+    "today": [
+      "数学：完成练习册第12页第2–4题",
+      "英语：Unit 7第3–10个单词听写（明天）",
+      "英语：明天带《单词听写本》",
+      "语文：朗读《晚照》2遍并家长签字"
+    ],
+    "undated": []
+  },
+  "child_id": "child-1",
+  "child_name": "示例星星",
+  "children": [
+    {
+      "id": "child-1",
+      "name": "示例星星"
+    },
+    {
+      "id": "child-2",
+      "name": "示例小宇"
+    }
+  ],
+  "closed": [
+    {
+      "items": [
+        {
+          "category": "todo",
+          "closed": true,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "",
+              "value": "2026-11-05"
+            }
+          ],
+          "follow_ups": [],
+          "id": "T01",
+          "kind": "task",
+          "lines": [
+            "问问孩子愿意分享哪一段。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "已完成",
+          "subject": "科目待定",
+          "task_id": "T01",
+          "title": "阅读后，听听孩子的发现",
+          "today": true,
+          "when": "today",
+          "work": {
+            "evidence": "log",
+            "kind": "reading",
+            "label": "阅读",
+            "need_photo": false
+          },
+          "wrong": []
+        }
+      ],
+      "subject": "科目待定"
+    }
+  ],
+  "counts": {
+    "closed": 1,
+    "earlier": 0,
+    "later": 1,
+    "material": 0,
+    "open": 6,
+    "overdue": 1,
+    "passed": 0,
+    "today": 4,
+    "undated": 1,
+    "unknown": 0,
+    "upcoming": 0
+  },
+  "day": "2026-11-05",
+  "groups": [
+    {
+      "items": [
+        {
+          "category": "todo",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "",
+              "value": "2026-11-05"
+            }
+          ],
+          "follow_ups": [],
+          "id": "MANUAL-627260d5bd7b294e6362",
+          "kind": "task",
+          "lines": [
+            "明天英语课带《单词听写本》；",
+            "不用在家练习。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [
+            "可提前把《单词听写本》放进书包。"
+          ],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "英语",
+          "task_id": "MANUAL-627260d5bd7b294e6362",
+          "title": "英语：明天带《单词听写本》",
+          "today": true,
+          "when": "today",
+          "work": {
+            "evidence": "photo",
+            "kind": "dictation",
+            "label": "听写",
+            "need_photo": true
+          },
+          "wrong": []
+        },
+        {
+          "category": "homework",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "",
+              "value": "2026-11-05"
+            }
+          ],
+          "follow_ups": [],
+          "id": "MANUAL-32463b726246406a861e",
+          "kind": "task",
+          "lines": [
+            "明天英语课听写Unit 7第3至10个单词。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [
+            "可用今晚跟读的单词做熟悉，明天课堂参加听写。"
+          ],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "英语",
+          "task_id": "MANUAL-32463b726246406a861e",
+          "title": "英语：Unit 7第3–10个单词听写（明天）",
+          "today": true,
+          "when": "today",
+          "work": {
+            "evidence": "photo",
+            "kind": "dictation",
+            "label": "听写",
+            "need_photo": true
+          },
+          "wrong": []
+        },
+        {
+          "category": "homework",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "overdue",
+              "value": "2026-11-04"
+            }
+          ],
+          "follow_ups": [],
+          "id": "MANUAL-00ea58ccb1bcdc89d743",
+          "kind": "task",
+          "lines": [
+            "今晚听音频跟读Unit 7第3至10个单词，每词3遍，不用抄写。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [
+            "可先听一遍音频，再逐词跟读3遍，注意发音。"
+          ],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "英语",
+          "task_id": "MANUAL-00ea58ccb1bcdc89d743",
+          "title": "英语：跟读Unit 7第3–10个单词3遍",
+          "today": false,
+          "when": "overdue",
+          "work": {
+            "evidence": "confirm",
+            "kind": "read_aloud",
+            "label": "朗读",
+            "need_photo": false
+          },
+          "wrong": []
+        }
+      ],
+      "subject": "英语",
+      "undated": 0
+    },
+    {
+      "items": [
+        {
+          "category": "homework",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "",
+              "value": "2026-11-05"
+            }
+          ],
+          "follow_ups": [],
+          "id": "MANUAL-99016e960765b55317cd",
+          "kind": "task",
+          "lines": [
+            "今晚完成练习册第12页第2至4题，写出计算过程；",
+            "明天交回。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [
+            "可先列式计算并自查计算过程，按时交回。"
+          ],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "数学",
+          "task_id": "MANUAL-99016e960765b55317cd",
+          "title": "数学：完成练习册第12页第2–4题",
+          "today": true,
+          "when": "today",
+          "work": {
+            "evidence": "confirm",
+            "kind": "errand",
+            "label": "事务",
+            "need_photo": false
+          },
+          "wrong": []
+        }
+      ],
+      "subject": "数学",
+      "undated": 0
+    },
+    {
+      "items": [
+        {
+          "category": "homework",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "",
+              "value": "2026-11-05"
+            }
+          ],
+          "follow_ups": [],
+          "id": "MANUAL-90c34a8f953b161282d2",
+          "kind": "task",
+          "lines": [
+            "今晚朗读《晚照》2遍；",
+            "请家长签字；",
+            "明天早读接受检查。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [
+            "可分段朗读，家长在孩子读完后签字确认。"
+          ],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "语文",
+          "task_id": "MANUAL-90c34a8f953b161282d2",
+          "title": "语文：朗读《晚照》2遍并家长签字",
+          "today": true,
+          "when": "today",
+          "work": {
+            "evidence": "confirm",
+            "kind": "read_aloud",
+            "label": "朗读",
+            "need_photo": false
+          },
+          "wrong": []
+        }
+      ],
+      "subject": "语文",
+      "undated": 0
+    },
+    {
+      "items": [
+        {
+          "category": "todo",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "kind": "deadline",
+              "known": true,
+              "label": "截止",
+              "role": "due",
+              "state": "",
+              "value": "2026-11-09"
+            }
+          ],
+          "follow_ups": [],
+          "id": "MANUAL-a358c7f4ae7964c977f1",
+          "kind": "task",
+          "lines": [
+            "今晚请家长在《出游回执》勾选参加或不参加并签名；",
+            "下周一由孩子交回。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [
+            "可今晚填写勾选并签名，放入书包以便下周一交回。"
+          ],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "综合事务",
+          "task_id": "MANUAL-a358c7f4ae7964c977f1",
+          "title": "家长：填写《出游回执》并签名交回",
+          "today": false,
+          "when": "later",
+          "work": {
+            "evidence": "photo",
+            "kind": "errand",
+            "label": "事务",
+            "need_photo": true
+          },
+          "wrong": []
+        }
+      ],
+      "subject": "综合事务",
+      "undated": 0
+    }
+  ],
+  "learning": {
+    "pack": {
+      "installed": false,
+      "message": "知识包未安装或与固定版本不一致；原错题与引导照常可用"
+    },
+    "subjects": []
+  },
+  "materials": [],
+  "schedule": {
+    "cancelled": 0,
+    "completed": 0,
+    "lessons": [],
+    "plans": []
+  },
+  "schedule_error": "",
+  "school_pending": 0,
+  "school_read_gaps": [],
+  "source_error": "",
+  "today": "2026-11-05",
+  "token": "Q-dH8E-m7mWHVWDN156yISmnL3vYgxojFycR9Bg2QgU",
+  "undated": [
+    {
+      "items": [
+        {
+          "category": "todo",
+          "closed": false,
+          "complete_words": "",
+          "facts": [
+            {
+              "known": false,
+              "label": "交回",
+              "role": "due",
+              "value": "日期未写明，不猜"
+            }
+          ],
+          "follow_ups": [],
+          "id": "T03",
+          "kind": "task",
+          "lines": [
+            "带上笔记本，画下感兴趣的植物。"
+          ],
+          "origin": "family",
+          "origin_label": "家长录入",
+          "pending_review": false,
+          "plan_lines": [],
+          "progress": null,
+          "publications": [],
+          "published_at": "",
+          "publisher": "",
+          "records": [],
+          "status": "待跟进",
+          "subject": "科目待定",
+          "task_id": "T03",
+          "title": "准备周末的自然观察",
+          "today": false,
+          "when": "unknown",
+          "work": {
+            "evidence": "confirm",
+            "kind": "errand",
+            "label": "事务",
+            "need_photo": false
+          },
+          "wrong": []
+        }
+      ],
+      "subject": "科目待定"
+    }
+  ],
+  "upcoming": [],
+  "week": [
+    {
+      "closed": 0,
+      "day": "2026-11-02",
+      "open": 6,
+      "overdue": 0,
+      "schedule": 0,
+      "today": 0,
+      "upcoming": 0
+    },
+    {
+      "closed": 0,
+      "day": "2026-11-03",
+      "open": 6,
+      "overdue": 0,
+      "schedule": 0,
+      "today": 0,
+      "upcoming": 0
+    },
+    {
+      "closed": 0,
+      "day": "2026-11-04",
+      "open": 6,
+      "overdue": 0,
+      "schedule": 0,
+      "today": 1,
+      "upcoming": 0
+    },
+    {
+      "closed": 1,
+      "day": "2026-11-05",
+      "open": 6,
+      "overdue": 1,
+      "schedule": 0,
+      "today": 4,
+      "upcoming": 0
+    },
+    {
+      "closed": 0,
+      "day": "2026-11-06",
+      "open": 6,
+      "overdue": 5,
+      "schedule": 0,
+      "today": 0,
+      "upcoming": 0
+    },
+    {
+      "closed": 0,
+      "day": "2026-11-07",
+      "open": 6,
+      "overdue": 5,
+      "schedule": 0,
+      "today": 0,
+      "upcoming": 0
+    },
+    {
+      "closed": 0,
+      "day": "2026-11-08",
+      "open": 6,
+      "overdue": 5,
+      "schedule": 0,
+      "today": 0,
+      "upcoming": 0
+    }
+  ],
+  "wrong": []
+}
