@@ -1,0 +1,67 @@
+演示数据核对：/api/day 实际显示内容
+孩子: 示例星星（child-1）  演示日期: 2026-11-05  计数: closed=1, earlier=0, later=2, material=0, open=7, overdue=0, passed=0, today=5, undated=1, unknown=0, upcoming=0
+投影模式: plan_lines  堆叠要求样式: clean  已标记完成: 阅读后，听听孩子的发现
+
+=== 今天（when=today） ===
+[英语] 英语：完成《每日练习》
+   when=today  subject=英语
+   fact: 截止=2026-11-05 (kind=deadline, state=, known=True)
+   lines(3):
+     - 完成《每日练习》第3页。
+     - 完成后把照片上传到班级相册。
+     - 家长在最后一页签字确认。
+
+[英语] 英语：跟读Unit 7第3—10个单词
+   when=today  subject=英语
+   fact: 截止=2026-11-05 (kind=deadline, state=, known=True)
+   lines(3):
+     - 跟读Unit 7第3—10个单词，每词3遍，不用抄写。
+     - 今天完成；
+     - 明天英语课听写这些单词（另见「英语：明天英语课听写Unit 7第3—10个单词」）。
+
+[数学] 数学：练习册第12页第2至4题
+   when=today  subject=数学
+   fact: 截止=2026-11-05 (kind=deadline, state=, known=True)
+   lines(2):
+     - 练习册第12页第2至4题，每题写出计算过程。
+     - 今天完成，明天（2026-11-06）交回。
+
+[语文] 语文：朗读《晚照》
+   when=today  subject=语文
+   fact: 截止=2026-11-05 (kind=deadline, state=, known=True)
+   lines(2):
+     - 朗读《晚照》2遍，请家长听完在当页签字。
+     - 今天完成，明早检查签字。
+
+[综合事务] 班主任：填写《出游回执》
+   when=today  subject=综合事务
+   fact: 截止=2026-11-05 (kind=deadline, state=, known=True)
+   lines(2):
+     - 在《出游回执》上勾选参加意向并签名。
+     - 今天完成，下周一（2026-11-09）交回。
+   plan_lines(1):
+     * 家长今晚先勾选参加意向，明早把回执交给班主任。
+
+=== 以后安排（when=later） ===
+[英语] 英语：明天带《单词听写本》
+   when=later  subject=英语
+   fact: 截止=2026-11-06 (kind=deadline, state=next_morning, known=True)
+   lines(1):
+     - 不用在家练习，带到学校交给英语老师。
+
+[英语] 英语：明天英语课听写Unit 7第3—10个单词
+   when=later  subject=英语
+   fact: 截止=2026-11-06 (kind=deadline, state=next_morning, known=True)
+   lines(1):
+     - 今天照跟读练3遍即可，不用抄写。
+
+=== 其他未写日期（when=unknown/其他） ===
+=== 播种的 7 条事项是否都在 /api/day 里 ===
+  OK   语文：朗读《晚照》
+  OK   数学：练习册第12页第2至4题
+  OK   英语：跟读Unit 7第3—10个单词
+  OK   班主任：填写《出游回执》
+  OK   英语：完成《每日练习》
+  OK   英语：明天英语课听写Unit 7第3—10个单词
+  OK   英语：明天带《单词听写本》
+结论: 全部可见

@@ -1,0 +1,44 @@
+# Build 319 源码版本（从 commit 5e3c579 的 worktree /tmp/rel-319 构建）
+
+生成时间: 2026-11-05T14:11:17Z
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+worktree: /tmp/rel-319
+HEAD: 5e3c57941670690a5fcae83da83ab9ad50ed0800 (Daily list: show how many days a task spans (bar + remaining days) in cards and the detail timeline)
+worktree 状态: 0 个改动（未提交）
+构建号: 319
+
+## 冻结输入 sha1
+f011cd44e579c6504edd0238ea27b30c4d23d28a  calendar.js
+aec3839fa9b1cb679f34f0396b6ee662b1e62262  workbench.css
+23e9bb733f9bc22a39f3c884d3c36c06d5b518a8  packaging/macos/Sources/Workspace.swift
+85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0  packaging/macos/Sources/WorkspaceAPI.swift
+4c17738bb0917e0eee4c098214502ddbc363b333  app.js
+3d8807c865287b8fc46fc6ff7495df4b40fd1235  family_agent.py
+ff9c3f85696ee2a555bf77bc50b566aef881be1c  family_agenda.py
+bf2c974be34b6460d980d18b8e2ffc1498611be1  family_llm.py
+60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
+
+## 行数
+    1157 calendar.js
+    1281 workbench.css
+    5435 packaging/macos/Sources/Workspace.swift
+     472 packaging/macos/Sources/WorkspaceAPI.swift
+    8345 total
+
+## 主仓库状态（只读核对）
+ M family_agenda.py
+ M packaging/macos/Sources/Workspace.swift
+ M packaging/macos/Sources/WorkspaceAPI.swift
+ M test_daily_list_expression.py
+主仓库 HEAD: 5e3c57941670690a5fcae83da83ab9ad50ed0800
+
+## 主仓库 vs worktree 输入文件对照（10 项全同）
+OK   calendar.js
+OK   workbench.css
+DIFF packaging/macos/Sources/Workspace.swift (52c706730f1c43bc355b53114a9d2ebb3db8cdc4 vs 23e9bb733f9bc22a39f3c884d3c36c06d5b518a8)
+DIFF packaging/macos/Sources/WorkspaceAPI.swift (f5e42d752de1f1d4845e4d780ddae8f6084784b3 vs 85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0)
+OK   app.js
+OK   family_agent.py
+DIFF family_agenda.py (631460ad4a982bd221e62a621602604be53e7be2 vs ff9c3f85696ee2a555bf77bc50b566aef881be1c)
+OK   family_llm.py

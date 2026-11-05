@@ -1,0 +1,30 @@
+测试基线（Build 315）
+运行时间: 2026-11-05T05:52:05Z
+REPO HEAD: cbb78689b6d066d1991748ab273af0b43c8e9904
+family_agent.py: 3d8807c865287b8fc46fc6ff7495df4b40fd1235
+family_agenda.py: ff9c3f85696ee2a555bf77bc50b566aef881be1c
+
+=== test_daily_list_expression
+Ran 45 tests in 0.008s
+
+OK
+=== test_daily_list_whole_day
+Ran 19 tests in 3.031s
+
+OK
+=== test_school_same_ready_notice
+Ran 30 tests in 0.042s
+
+OK
+=== test_agenda
+Ran 26 tests in 1.320s
+
+OK
+=== test_school_completion_today
+Ran 55 tests in 8.304s
+
+FAILED (failures=3)
+=== test_school_fold_visibility
+Ran 22 tests in 0.030s
+
+OK

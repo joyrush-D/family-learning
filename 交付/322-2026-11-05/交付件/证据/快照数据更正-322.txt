@@ -1,0 +1,23 @@
+十八渠道快照数据更正（Build 322 出包时）
+时间: 2026-11-05T23:05–23:07Z
+
+现象
+  work/merge18/demo-snapshot/data/family.sqlite3（以及交付目录里的副本）在 2026-11-05 18:26–18:27
+  被本机一次演示写入两条家长录入事项：
+    MANUAL-78101ae37dd7e5251c01  示例甲  语文：完成《识字小卡》练习（due 2026-11-05）
+    MANUAL-a14510403e58d5b3debf  示例甲  综合事务：交回《出游回执》（due 2026-11-05）
+  连带写入 task_focus / task_focus_history 各 2 行。结果 day=2026-11-04 的清单从 8 行变成 10 行，
+  十八渠道 --check（断言 8 行 / 今日 5 / 明天 2 / 取消 1）失败。
+
+处理
+  1) 污染副本原样保留：证据/十八渠道快照-污染副本-20261105T1827.sqlite3
+     sha1 = 0e7616e5a595b319539276870511520c9d640c7a，344064 字节。
+  2) 交付用快照删除上述两条 manual_tasks 及其 task_focus/task_focus_history 记录，其他数据不动：
+     data/family.sqlite3 sha1 = 8ba525d066511904a225c5231bf276b2f75731c0，344064 字节
+     （逻辑内容恢复为 7 task / 16 item / 18 processed / 8 行清单；因 SQLite 删行后文件布局变化，
+      sha1 与原 1cb49ea3…/258048 字节不同）。
+  3) 重跑 一起成长·十八渠道演示.command --check：通过（8 行 / 今日 5 / 明天带物 2 / 取消 1 /
+     8 组各 1 行 / 18/18 落点 / 启动 1.25s），输出见 证据/十八渠道自检-输出-322.txt。
+  4) 快照 README.txt 与 snapshot-manifest.txt 已加更正说明并重算文件 sha（snapshot-manifest.txt 不列入自身）。
+  5) 深链接证据不再使用 MANUAL-78101（已被清理），改用同一快照真实存在的做题卡
+     AGENT-5d27ac7f28c9ee5d2ed99634，见 证据/网页322截图-量数-322.txt。

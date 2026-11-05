@@ -1,0 +1,245 @@
+{
+  "failures": [],
+  "widths": {
+    "360": {
+      "base": {
+        "rect": {
+          "x": 12,
+          "y": 179,
+          "w": 336,
+          "h": 759
+        },
+        "scrollTop": 0,
+        "docH": 1211,
+        "rows": 3,
+        "title": "今天 3 件事",
+        "hscroll": 0,
+        "ready": "true"
+      },
+      "deep": {
+        "rect": {
+          "x": 12,
+          "y": 179,
+          "w": 336,
+          "h": 759
+        },
+        "scrollTop": 0,
+        "docH": 1211,
+        "rows": 3,
+        "step": "photos",
+        "text": "核对这份作业\n\n数学 · 数学：完成《每日练习》第26页第1—3题\n\n✕\n选作业照片\n\n最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。\n\n选择照片\n开始核对\n先不核对",
+        "notice": "",
+        "url": "?child_id=child-1&day=2026-11-04",
+        "detailVisible": false,
+        "photos": true,
+        "pick": true,
+        "startDisabled": true,
+        "hscroll": 0,
+        "outline": "none",
+        "title": "核对这份作业"
+      },
+      "nonGet": [],
+      "errors": []
+    },
+    "390": {
+      "base": {
+        "rect": {
+          "x": 12,
+          "y": 179,
+          "w": 366,
+          "h": 735
+        },
+        "scrollTop": 0,
+        "docH": 1187,
+        "rows": 3,
+        "title": "今天 3 件事",
+        "hscroll": 0,
+        "ready": "true"
+      },
+      "deep": {
+        "rect": {
+          "x": 12,
+          "y": 179,
+          "w": 366,
+          "h": 735
+        },
+        "scrollTop": 0,
+        "docH": 1187,
+        "rows": 3,
+        "step": "photos",
+        "text": "核对这份作业\n\n数学 · 数学：完成《每日练习》第26页第1—3题\n\n✕\n选作业照片\n\n最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。\n\n选择照片\n开始核对\n先不核对",
+        "notice": "",
+        "url": "?child_id=child-1&day=2026-11-04",
+        "detailVisible": false,
+        "photos": true,
+        "pick": true,
+        "startDisabled": true,
+        "hscroll": 0,
+        "outline": "none",
+        "title": "核对这份作业"
+      },
+      "nonGet": [],
+      "errors": []
+    },
+    "768": {
+      "base": {
+        "rect": {
+          "x": 12,
+          "y": 179,
+          "w": 744,
+          "h": 712
+        },
+        "scrollTop": 0,
+        "docH": 1164,
+        "rows": 3,
+        "title": "今天 3 件事",
+        "hscroll": 0,
+        "ready": "true"
+      },
+      "deep": {
+        "rect": {
+          "x": 12,
+          "y": 179,
+          "w": 744,
+          "h": 712
+        },
+        "scrollTop": 0,
+        "docH": 1164,
+        "rows": 3,
+        "step": "photos",
+        "text": "核对这份作业\n\n数学 · 数学：完成《每日练习》第26页第1—3题\n\n✕\n选作业照片\n\n最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。\n\n选择照片\n开始核对\n先不核对",
+        "notice": "",
+        "url": "?child_id=child-1&day=2026-11-04",
+        "detailVisible": false,
+        "photos": true,
+        "pick": true,
+        "startDisabled": true,
+        "hscroll": 0,
+        "outline": "none",
+        "title": "核对这份作业"
+      },
+      "nonGet": [],
+      "errors": []
+    },
+    "1024": {
+      "base": {
+        "rect": {
+          "x": 214,
+          "y": 330,
+          "w": 784,
+          "h": 700
+        },
+        "scrollTop": 0,
+        "docH": 1214,
+        "rows": 3,
+        "title": "今天 3 件事",
+        "hscroll": 0,
+        "ready": "true"
+      },
+      "deep": {
+        "rect": {
+          "x": 214,
+          "y": 330,
+          "w": 784,
+          "h": 700
+        },
+        "scrollTop": 0,
+        "docH": 1214,
+        "rows": 3,
+        "step": "photos",
+        "text": "核对这份作业\n\n数学 · 数学：完成《每日练习》第26页第1—3题\n\n✕\n选作业照片\n\n最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。\n\n选择照片\n开始核对\n先不核对",
+        "notice": "",
+        "url": "?child_id=child-1&day=2026-11-04",
+        "detailVisible": false,
+        "photos": true,
+        "pick": true,
+        "startDisabled": true,
+        "hscroll": 0,
+        "outline": "none",
+        "title": "核对这份作业"
+      },
+      "nonGet": [],
+      "errors": []
+    },
+    "1200": {
+      "base": {
+        "rect": {
+          "x": 238,
+          "y": 164,
+          "w": 936,
+          "h": 628
+        },
+        "scrollTop": 0,
+        "docH": 860,
+        "rows": 3,
+        "title": "今天 3 件事",
+        "hscroll": 0,
+        "ready": "true"
+      },
+      "deep": {
+        "rect": {
+          "x": 238,
+          "y": 164,
+          "w": 936,
+          "h": 628
+        },
+        "scrollTop": 0,
+        "docH": 860,
+        "rows": 3,
+        "step": "photos",
+        "text": "核对这份作业\n\n数学 · 数学：完成《每日练习》第26页第1—3题\n\n✕\n选作业照片\n\n最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。\n\n选择照片\n开始核对\n先不核对",
+        "notice": "",
+        "url": "?child_id=child-1&day=2026-11-04",
+        "detailVisible": true,
+        "photos": true,
+        "pick": true,
+        "startDisabled": true,
+        "hscroll": 0,
+        "outline": "none",
+        "title": "核对这份作业"
+      },
+      "nonGet": [],
+      "errors": []
+    },
+    "1440": {
+      "base": {
+        "rect": {
+          "x": 358,
+          "y": 164,
+          "w": 936,
+          "h": 628
+        },
+        "scrollTop": 0,
+        "docH": 860,
+        "rows": 3,
+        "title": "今天 3 件事",
+        "hscroll": 0,
+        "ready": "true"
+      },
+      "deep": {
+        "rect": {
+          "x": 358,
+          "y": 164,
+          "w": 936,
+          "h": 628
+        },
+        "scrollTop": 0,
+        "docH": 860,
+        "rows": 3,
+        "step": "photos",
+        "text": "核对这份作业\n\n数学 · 数学：完成《每日练习》第26页第1—3题\n\n✕\n选作业照片\n\n最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。\n\n选择照片\n开始核对\n先不核对",
+        "notice": "",
+        "url": "?child_id=child-1&day=2026-11-04",
+        "detailVisible": true,
+        "photos": true,
+        "pick": true,
+        "startDisabled": true,
+        "hscroll": 0,
+        "outline": "none",
+        "title": "核对这份作业"
+      },
+      "nonGet": [],
+      "errors": []
+    }
+  }
+}

@@ -1,0 +1,7 @@
+ M calendar.js
+ M packaging/macos/Sources/Workspace.swift
+ M workbench.css
+
+# 被 .gitignore 忽略的新文件（不在上面 porcelain 输出里，仍已写入 fix.patch）
+  60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+  90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
