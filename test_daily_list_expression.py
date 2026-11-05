@@ -515,7 +515,7 @@ class WorkKindTests(unittest.TestCase):
 
     def test_a_chat_with_a_parent_is_not_learnable_work(self):
         self.assertEqual(self._work('和妈妈聊今天的事'),
-                         {'kind': 'other', 'label': '其他', 'evidence': 'none', 'need_photo': False})
+                         {'kind': 'other', 'label': '其他', 'evidence': 'confirm', 'need_photo': False})
 
     def test_checking_answers_comes_before_practice(self):
         out = self._work('数学：完成第3页后对照答案批改', ['每题写出算式。'])
@@ -586,6 +586,81 @@ class WorkKindTests(unittest.TestCase):
         row = self._real_row(self.REAL_CHINESE_TITLE, self.REAL_CHINESE_LINES)
         self.assertIn('work', row)
         self.assertEqual(row['work']['kind'], 'read_aloud')
+
+
+class ReviewerCheckupTests(unittest.TestCase):
+    """reviewer-A: the 34-row adversarial table from work/reviewer-evidence/checkup-audit/report.md.
+
+    The table is copied verbatim (title/lines -> expected kind/evidence) so a regression in any row fails here."""
+
+    # (title, lines, kind, evidence)
+    TABLE = [
+        ('数学：完成练习册第12页第1—3题', ['每题写出算式。家长签字。'], 'practice', 'photo'),
+        ('语文：朗读课文三遍，读给家长听', [], 'read_aloud', 'confirm'),
+        ('英语：背诵Unit 4单词', [], 'read_aloud', 'confirm'),
+        ('明天带跳绳', [], 'errand', 'confirm'),
+        ('交回回执', [], 'errand', 'photo'),
+        ('家长签字', [], 'errand', 'photo'),
+        ('听写本要带', [], 'errand', 'confirm'),
+        ('手抄报交回', [], 'craft', 'photo'),
+        ('网上问卷', [], 'errand', 'confirm'),
+        ('背诵课文', [], 'read_aloud', 'confirm'),
+        ('数学：完成口算第8页', [], 'practice', 'photo'),
+        ('英语：跟读Unit 2三遍', [], 'read_aloud', 'confirm'),
+        ('科学：准备实验材料', [], 'errand', 'confirm'),
+        ('数学：订正试卷', [], 'practice', 'photo'),
+        ('数学：完成第3页第2题', [], 'practice', 'photo'),
+        ('明天交回《成长手册》', [], 'errand', 'photo'),
+        ('数学：不用朗读，只要抄写两遍', [], 'practice', 'photo'),
+        ('今天作业：听写第3课词语，家长签字', [], 'dictation', 'photo'),
+        ('带一张一寸证件照交回', [], 'errand', 'photo'),
+        ('数学：核对答案，把错题订正', [], 'check', 'photo'),
+        ('英语：完成《每日练习》看图选词第1—3题', [], 'practice', 'photo'),
+        ('数学：计算小卡第4页1—6题，直接写得数', [], 'practice', 'photo'),
+        ('语文：读给家长听，家长签字', [], 'read_aloud', 'confirm'),
+        ('美术：明天带一盒彩笔', [], 'errand', 'confirm'),
+        ('美术：带两片落叶', [], 'errand', 'confirm'),
+        ('美术：收集两片落叶带到学校', [], 'errand', 'confirm'),
+        ('音乐：练习竖笛15分钟', [], 'other', 'confirm'),
+        ('体育：练习跳绳100个', [], 'other', 'confirm'),
+        ('数学', ['完成练习册第12页第1—3题。家长签字。'], 'practice', 'photo'),
+        ('数学作业', ['完成第12页1—3题。家长签字。'], 'practice', 'photo'),
+        ('明天把作品带来', [], 'craft', 'photo'),
+        ('明天交作品', [], 'craft', 'photo'),  # Lead ruling: a craft object handed in is craft, not errand.
+        ('语文：读《小王子》第1—2章', [], 'reading', 'log'),
+        ('观看视频并打卡', [], 'errand', 'confirm'),
+    ]
+
+    def test_the_checkup_audit_table_matches_row_by_row(self):
+        self.assertEqual(len(self.TABLE), 34)
+        for index, (title, lines, kind, evidence) in enumerate(self.TABLE, 1):
+            with self.subTest(row=index, title=title):
+                work = family_agenda.work_kind(title, list(lines))
+                self.assertEqual((work['kind'], work['evidence']), (kind, evidence))
+                self.assertEqual(work['need_photo'], evidence == 'photo')
+
+    def test_must_fix_sentences_from_the_audit(self):
+        # The four blockers called out by name: 美术/带物, 练习跳绳/竖笛, silent-title practice, 作品/书名号.
+        self.assertEqual(family_agenda.work_kind('美术：明天带一盒彩笔', [])['kind'], 'errand')
+        self.assertEqual(family_agenda.work_kind('美术：带两片落叶', [])['evidence'], 'confirm')
+        self.assertEqual(family_agenda.work_kind('体育：练习跳绳100个', []),
+                         {'kind': 'other', 'label': '其他', 'evidence': 'confirm', 'need_photo': False})
+        self.assertEqual(family_agenda.work_kind('数学', ['完成练习册第12页第1—3题。家长签字。'])['kind'], 'practice')
+        self.assertEqual(family_agenda.work_kind('明天交作品', [])['kind'], 'craft')
+        self.assertEqual(family_agenda.work_kind('语文：读《小王子》第1—2章', [])['kind'], 'reading')
+
+    def test_the_five_snapshot_cards_are_unchanged(self):
+        cards = [
+            ('英语：完成《每日练习》并明天带回', ['一、看图选词第1—3题', '二、标星单词 under、near 各抄写一遍。'], 'practice', 'photo'),
+            ('数学：完成《每日练习》第26页第1—3题', ['第4题不做。', '每题写出算式并验算。'], 'practice', 'photo'),
+            ('朗读《风经过小巷》第2、3自然段', ['各读两遍，读给家长听。'], 'read_aloud', 'confirm'),
+            ('语文：完成《识字小卡》练习', ['完成识字小卡。'], 'practice', 'photo'),
+            ('综合事务：交回《出游回执》', ['明天交回回执。'], 'errand', 'photo'),
+        ]
+        for title, lines, kind, evidence in cards:
+            with self.subTest(title=title):
+                work = family_agenda.work_kind(title, lines)
+                self.assertEqual((work['kind'], work['evidence']), (kind, evidence))
 
 
 if __name__ == '__main__':

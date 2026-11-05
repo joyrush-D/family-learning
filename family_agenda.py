@@ -1027,31 +1027,38 @@ def _follow_up(line):
     return dict(label=label,time=time,text=text) if text else None
 
 
-# What kind of work a card asks for, so the app can request the right evidence. 作品征集/阅读通知 are errands (paperwork
-# and instructions), not craft/reading tasks, so errand reads before craft and reading; a title that itself names the
-# work (手工/制作/画, 朗读, 阅读《小王子》) still keeps its own kind over a hand-in word in the lines.
+# What kind of work a card asks for, so the app can request the right evidence. Display only.
+# A subject name is not evidence of a task: 美术：带一盒彩笔 is an errand, 体育：练习跳绳 is not 做题. Craft means the
+# child must produce an object; 作品/手工/手抄报 with a hand-in verb stays craft, but 作品征集报名 is an errand. 做题 is
+# narrower than the word 练习 (练习跳绳 is not a workbook page), and 签字/签名 is a sub-step of homework, not an errand
+# type: it only decides evidence when no real work type matched at all.
 _WORK_KINDS = (
     ('check', '核对', r'核对|对照答案|对答案|批改|检查作业'),
     ('dictation', '听写', r'听写(?!本)|默写'),
     ('read_aloud', '朗读', r'朗读|背诵|跟读|读给家长|读两遍|读一遍|抽听|复述|口语|读熟'),
-    ('errand', '事务', r'回执|签字|签名|交回|上交|交给|带到|带去|带来|带物|带(?!回)|缴费|交费|报名|征集|填写|填报|问卷|选课|准备'),
-    ('craft', '手工', r'手工|手抄报|美术|制作|做.{0,3}(?:手工|作品|模型|贴画|贺卡)|画|折纸|剪纸|拼|捏|涂色'),
-    ('reading', '阅读', r'阅读打卡|读书|读.{0,2}(?:书|绘本|故事|文章|课文|短文|报纸)|看.{0,2}(?:书|绘本)|'
-                          r'阅读(?!通知|须知|说明|安排|通|《[^》]*(?:通知|须知|说明|安排|通告))'),
-    ('practice', '做题', r'练习册|口算|计算|第\s*\d+\s*题|试卷|抄写|练习|页'),
+    ('errand', '事务', r'报名|征集|问卷|填报|选课|缴费|交费|回执|填表|表格|交回|上交|交给|带到|带去|带回|带来'),
+    ('craft', '手工', r'作品|手工|手抄报|绘画作品|模型|贴画|贺卡|制作|画|折纸|剪纸|拼|捏|涂色'),
+    ('reading', '阅读', r'读书|读.{0,2}(?:书|绘本|故事|文章|课文|短文|报纸)|看.{0,2}(?:书|绘本)|'
+                          r'读.{0,3}《[^》]{1,20}》|阅读打卡|课外阅读|读课文'),
+    ('practice', '做题', r'练习册|练习题|练习卷|练习本|每日练习|小卡|口算|计算|第\s*\d+\s*题|试卷|抄写|页'),
+    ('errand_weak', '事务', r'签字|签名|准备|带(?!回)|打卡'),
 )
-_WORK_TITLE_ORDER = ('check', 'dictation', 'read_aloud', 'craft', 'reading', 'practice', 'errand')
-_WORK_ORDER = ('check', 'dictation', 'read_aloud', 'errand', 'craft', 'reading', 'practice')
 _WORK_PATTERN = {kind: pattern for kind, _, pattern in _WORK_KINDS}
+# 作品/手工/手抄报 are objects, so 明天交作品 is craft; but 作品征集报名/问卷 still names an errand form, not a craft.
+_WORK_OBJECT = re.compile(r'作品|手工|手抄报|绘画作品|模型|贴画|贺卡')
+_WORK_OBJECT_FORM = re.compile(r'报名|征集|问卷|填报|选课|缴费|回执|填表|表格')
+_ERRAND_STRONG = re.compile(r'报名|征集|问卷|填报|选课|缴费|交费|回执|填表|表格|交回|上交|交给|带到|带去|带回|带来')
+_WORK_TITLE_ORDER = ('check', 'dictation', 'read_aloud', 'object_craft', 'craft', 'reading', 'practice',
+                     'errand', 'errand_weak')
+_WORK_ORDER = ('check', 'dictation', 'read_aloud', 'object_craft', 'errand', 'craft', 'reading', 'practice',
+               'errand_weak')
 _WORK_EVIDENCE = {'practice': ('photo', True), 'dictation': ('photo', True), 'craft': ('photo', True),
                   'check': ('photo', True), 'read_aloud': ('confirm', False), 'reading': ('log', False),
-                  'errand': ('confirm', False), 'other': ('none', False)}
-# An errand can be evidenced by a photo (something to hand over/sign), a parent confirmation (a form filled or a
-# booking made), or just a log line; 作品/手工 only need a photo when no confirm-style errand word outranks them.
+                  'errand': ('confirm', False), 'other': ('confirm', False)}
+# An errand needs a photo only for a physical thing to hand back or sign; a form filled or a booking made is a spoken
+# confirmation, and 了解/咨询 is only a log line.
 _ERRAND_PHOTO = (r'交回', r'上交', r'交给', r'回执', r'签字', r'签名')
 _ERRAND_PHOTO_OBJECT = ('作品', '手工', '手抄报')
-_ERRAND_CONFIRM = ('报名', '征集', '填写', '填报', '问卷', '选课', '缴费', '交费', '准备', '阅读通知', '确认', '勾选',
-                    '带到', '带去', '带回', '带来')
 _ERRAND_LOG = ('了解', '咨询', '报名须知')
 # A negated keyword is not a request: 「不用朗读，只要抄写两遍」 asks for copying, not reading. Only the words the
 # negation governs are blanked, so a second, positive 朗读 in the same card still counts.
@@ -1059,28 +1066,39 @@ _WORK_NEGATED = re.compile(r'(?:不用|不需要|不必|不要|无需)\s*(?:'
                            + '|'.join('(?:%s)' % pattern for _, _, pattern in _WORK_KINDS) + ')')
 
 
+def _work_phase(text, order):
+    for phase in order:
+        if phase == 'object_craft':
+            if _WORK_OBJECT.search(text) and not _WORK_OBJECT_FORM.search(text): return 'craft'
+        elif phase == 'craft':
+            if re.search(_WORK_PATTERN['craft'], text) and not _WORK_OBJECT_FORM.search(text): return 'craft'
+        elif phase == 'errand':
+            if _ERRAND_STRONG.search(text): return 'errand'
+        elif re.search(_WORK_PATTERN[phase], text):
+            return phase
+    return 'other'
+
+
 def work_kind(title, lines, subject=''):
     """What kind of work this is, so the card can ask for the right evidence. Display only.
 
-    The title names the work; lines only decide when the title is silent (a page's 带来/签字 is a hand-in step, not a
-    different kind of work, so it must not turn every practice card into an errand)."""
+    A title that names the work wins over a hand-in step in the lines (英语…明天带回 stays practice); otherwise the
+    whole text is read once, in the product's order, and an unclassifiable card falls back to other/confirm rather
+    than guessing a photo requirement."""
     if isinstance(lines, str): parts = [lines]
     else: parts = [str(line) for line in (lines or [])]
     heading = _WORK_NEGATED.sub('', str(title or ''))
     whole = _WORK_NEGATED.sub('', '\n'.join([str(title or '')] + parts))
-    def category(text, order):
-        for kind in order:
-            if re.search(_WORK_PATTERN[kind], text): return kind
-        return 'other'
-    kind = category(heading, _WORK_TITLE_ORDER)
-    if kind == 'other': kind = category(whole, _WORK_ORDER)
+    kind = _work_phase(heading, _WORK_TITLE_ORDER)
+    if kind == 'other': kind = _work_phase(whole, _WORK_ORDER)
+    if kind == 'errand_weak': kind = 'errand'
     label = next(label for kind_, label, _ in _WORK_KINDS if kind_ == kind) if kind != 'other' else '其他'
     evidence, need_photo = _WORK_EVIDENCE[kind]
     if kind == 'errand':
         if any(re.search(word, whole) for word in _ERRAND_PHOTO): evidence, need_photo = 'photo', True
         elif any(word in whole for word in _ERRAND_LOG): evidence, need_photo = 'log', False
-        elif any(word in whole for word in _ERRAND_CONFIRM): evidence, need_photo = 'confirm', False
-        elif any(word in whole for word in _ERRAND_PHOTO_OBJECT): evidence, need_photo = 'photo', True
+        elif (any(word in whole for word in _ERRAND_PHOTO_OBJECT)
+              and not _WORK_OBJECT_FORM.search(whole)): evidence, need_photo = 'photo', True
     return dict(kind=kind, label=label, evidence=evidence, need_photo=need_photo)
 
 
