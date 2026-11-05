@@ -439,10 +439,10 @@ function grovePlanBadgeHTML(r){
  return {label,html:`<span class="grove-badge is-plan">${esc(label)}</span>`};
 }
 function groveCollections(view){
- const c=view?.counts||{},subs=[];
- for(const g of view?.groups||[]){const n=(g.items||[]).filter(x=>!x.closed).length;if(n)subs.push([g.subject,n])}
+ const c=view?.counts||{},subs=[];let itemCount=0;
+ for(const g of view?.groups||[]){const n=(g.items||[]).length;itemCount+=n;if(n)subs.push([g.subject,n])}
  const undated=(view?.undated||[]).flatMap(g=>g.items||[]),cancel=undated.filter(groveIsCancelled);
- return {today:c.today||0,done:c.closed||0,subs,cancelled:cancel.length,later:(view?.upcoming||[]).length+(undated.length-cancel.length)};
+ return {today:itemCount,done:(view?.groups||[]).reduce((n,g)=>n+(g.items||[]).filter(x=>x.closed).length,0)||c.closed||0,subs,cancelled:cancel.length,later:(view?.upcoming||[]).length+(undated.length-cancel.length)};
 }
 // 集合计数：桌面左栏纵列；手机变一行可横滑的胶囊。只做定位/状态提示，不改变清单里显示什么。
 function groveSetListHTML(view,compact){
@@ -483,6 +483,92 @@ function groveColumnHTML(kind,label,count,body,empty){
  return `<section class="grove-col is-${kind}" data-grove-col="${kind}" aria-label="${esc(label)}"><h2 class="grove-col-head">${esc(label)}<em>${count}</em></h2><div class="grove-col-body">${body||`<div class="grove-empty">${esc(empty)}</div>`}</div></section>`;
 }
 
+
+// Build 319：跨天标尺（纯前端，从 facts 读日期；start=最早 published，end=due/check 最晚，否则 complete；不编时分/日期）。
+function groveDatePart(v){const m=String(v||'').match(/(\d{4}-\d{2}-\d{2})/);return m?m[1]:''}
+function groveTimePart(v){const m=String(v||'').match(/[ T](\d{2}:\d{2})/);return m?m[1]:''}
+function groveWeekWord(d){return '周'+'日一二三四五六'[new Date(String(d)+'T12:00:00').getDay()]}
+function groveDayPlus(d,n){const x=new Date(String(d)+'T12:00:00');x.setDate(x.getDate()+n);return x.toISOString().slice(0,10)}
+function groveSpanInfo(r){
+ if(!r||groveIsCancelled(r))return null;
+ const facts=(r.facts||[]).filter(f=>f&&f.known!==false);
+ const start=facts.filter(f=>f.role==='published').map(f=>({d:groveDatePart(f.value),t:groveTimePart(f.value)})).filter(x=>x.d).sort((a,b)=>a.d<b.d?-1:1)[0]||null;
+ const ends=facts.filter(f=>['due','check'].includes(f.role)).map(f=>({d:groveDatePart(f.value),t:groveTimePart(f.value),label:f.label,role:f.role})).filter(x=>x.d).sort((a,b)=>a.d<b.d?1:-1);
+ const complete=facts.filter(f=>f.role==='complete').map(f=>groveDatePart(f.value)).filter(Boolean).sort().pop()||'';
+ let end=ends[0]||null;
+ if(!end&&complete)end={d:complete,t:'',label:'完成',role:'complete'};
+ if(!start&&!end)return null;
+ const today=data.today;
+ const span=start&&end?groveDayDiff(end.d,start.d)+1:null;
+ const remaining=end?groveDayDiff(end.d,today):null;
+ const usedDays=r.closed&&start&&complete?groveDayDiff(complete,start.d)+1:null;
+ return {start,end,span,remaining,complete,usedDays};
+}
+function groveSpanRemainWords(info,closed){
+ if(closed){const used=info.usedDays;return info.span?`跨 ${info.span} 天${used?` · ${used} 天做完`:''}`:''}
+ if(info.remaining===null)return '未写截止';
+ if(info.remaining>1)return `还剩 ${info.remaining} 天`;
+ if(info.remaining===1)return '明天截止';
+ if(info.remaining===0)return '今天截止';
+ return `已过期 ${-info.remaining} 天`;
+}
+function groveSpanDotsHTML(info){
+ const span=info.span;if(!span||span<2)return '';
+ const n=Math.min(span,10),dots=[];
+ for(let i=0;i<n;i++){
+  const dayNum=Math.round(i*(span-1)/Math.max(n-1,1));
+  const day=info.start?groveDayPlus(info.start.d,dayNum):'';
+  const diff=day?groveDayDiff(day,data.today):null;
+  const cls=['grove-span-dot'];
+  if(diff!==null&&diff<=0)cls.push('is-on');
+  if(day&&day===data.today)cls.push('is-today');
+  if(i===n-1)cls.push('is-end');
+  dots.push(`<i class="${cls.join(' ')}"></i>`);
+ }
+ return `<span class="grove-span-bar" data-span-bar aria-hidden="true">${dots.join('')}</span>`;
+}
+function groveSpanHTML(r){
+ const info=groveSpanInfo(r);if(!info)return '';
+ if(!info.end)return '';
+ const late=info.remaining!==null&&info.remaining<0;
+ const remain=groveSpanRemainWords(info,!!r.closed);
+ if(!info.start){
+  // 起点未知：只显示剩余/过期（不画标尺、不写「跨 N 天」）。
+  return `<div class="grove-span is-remain${late?' is-late':''}" data-span-only><span class="grove-span-tail">${esc(remain)}</span></div>`;
+ }
+ const span=info.span||1;
+ if(span<2)return '';
+ const closedTxt=r.closed?`<span class="grove-span-lead">跨 <b>${span}</b> 天${info.usedDays?` · <b>${info.usedDays}</b> 天做完`:''}</span>`:`<span class="grove-span-lead">跨 <b>${span}</b> 天</span>`;
+ return `<div class="grove-span${late?' is-late':''}" data-span="${span}" data-span-days="${span}">`
+  +closedTxt+groveSpanDotsHTML(info)+`<span class="grove-span-tail">${esc(r.closed?'':remain)}</span>`
+  +`<span class="grove-sr">起点 ${esc(info.start.d)}，终点 ${esc(info.end.d)}，共 ${span} 天</span></div>`;
+}
+function groveSpanSummary(r){
+ const info=groveSpanInfo(r);if(!info)return '';
+ const words=[];if(info.span)words.push(`跨 ${info.span} 天`);
+ if(!info.end)words.push('未写截止');
+ else if(r.closed){if(info.complete)words.push(`完成于 ${groveShort(info.complete)}`)}
+ else{const rem=groveSpanRemainWords(info,false);if(rem)words.push(rem)}
+ return words.join(' · ');
+}
+function groveTimelineHTML(r){
+ const info=groveSpanInfo(r);if(!info||groveIsCancelled(r))return '';
+ const fmt=(d,t)=>d?groveShort(d)+' '+groveWeekWord(d)+(t?' '+t:''):'';
+ const nodes=[];
+ if(info.start)nodes.push(`<div class="grove-tl-node is-done"><b>布置</b><span>${esc(fmt(info.start.d,info.start.t))}</span></div>`);
+ nodes.push(`<div class="grove-tl-node is-today"><b>今天</b><span>${esc(groveShort(data.today)+' '+groveWeekWord(data.today))}</span></div>`);
+ const endLabel=info.end?(info.end.role==='check'?'检查':info.end.role==='complete'?'完成':(info.end.label||'截止')):'截止';
+ nodes.push(`<div class="grove-tl-node${info.end&&info.remaining<0?' is-late':''}"><b>${esc(endLabel)}</b><span>${esc(info.end?fmt(info.end.d,info.end.t):'未写截止')}</span></div>`);
+ let note='';
+ if(r.closed&&info.complete)note=`完成于 ${groveShort(info.complete)}`;
+ else if(!info.start)note='没有记录布置日期';
+ else if(!info.end)note='未写截止';
+ else if(info.remaining>0)note=`中间还有 ${Math.max(0,info.remaining-1)} 天`;
+ else if(info.remaining===0)note='今天截止';
+ else note=`已过期 ${-info.remaining} 天`;
+ return `<section class="grove-card grove-timeline" data-timeline data-timeline-span="${info.span||''}" data-timeline-days="${info.span||''}"><h3>时间线</h3><div class="grove-tl">${nodes.join('')}</div><p class="grove-tl-note">${esc(note)}</p></section>`;
+}
+
 function groveRowHTML(r){
  const on=r.id===groveSelected,planBadge=grovePlanBadgeHTML(r),pts=grovePoints(r),badges=groveBadges(r),today=groveDay||data.today;
  const task=r.task_id?` data-today-task="${esc(r.task_id)}" data-query-target="task:${esc(r.task_id)}"`:'';
@@ -501,7 +587,8 @@ function groveRowHTML(r){
  const more=pts.rest?`<span class="grove-point-more">还有 ${pts.rest} 条 · 查看详情 ›</span>`:'';
  const state=r.closed?'done':groveIsCancelled(r)?'cancelled':(r.when==='overdue'||(r.facts||[]).some(f=>f.role==='due'&&f.state==='overdue'))?'overdue':'open';
  const stateWords={open:'未完成',done:'已完成',overdue:'已过期',cancelled:'已取消'}[state];
- return `<article class="grove-row subj-${groveSubjectClass(r)} is-state-${state}${on?' is-selected':''}${r.closed?' is-done':''}${groveIsCancelled(r)?' is-cancelled':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}">`
+ const spanInfo=groveSpanInfo(r),spanAttrs=spanInfo&&spanInfo.span>=2?` data-span="${spanInfo.span}" data-span-days="${spanInfo.span}"`:'';
+ return `<article class="grove-row subj-${groveSubjectClass(r)} is-state-${state}${on?' is-selected':''}${r.closed?' is-done':''}${groveIsCancelled(r)?' is-cancelled':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}"${spanAttrs}>`
   +`<span class="grove-sr">${stateWords}</span>`
   +`${groveTitleText(r)!==String(r.title||'').trim()?`<span class="grove-sr" data-grove-full-title>${esc(r.title)}</span>`:''}`
   +groveCheckHTML(r,state)
@@ -511,6 +598,7 @@ function groveRowHTML(r){
   +(pts.points.length?`<span class="grove-points">${pts.points.map((p,i)=>`<span class="grove-point">${pts.points.length>1?['①','②'][i]+' ':''}${esc(p)}</span>`).join('')}${more}</span>`:'')
   +(capped.length?`<span class="grove-badges">${capped.map(b=>b.html).join('')}${hiddenBadges?`<span class="grove-badge is-more">+${hiddenBadges}</span>`:''}</span>`:'')
   +(factChips?`<span class="grove-chips is-facts grove-sr">${factChips}</span>`:'')
+  +groveSpanHTML(r)
   +((times||r.pending_review)?`<span class="grove-chips is-times">${times}${r.pending_review?'<span class="grove-chip is-coral">待核对</span>':''}</span>`:'')
   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:'')
   +groveVersionLine(r.version)
@@ -602,9 +690,10 @@ function groveDetailHTML(r){
  return back+closeBtn
   +`<header class="grove-detail-hd"><p class="grove-crumb">${esc([dateLabel,r.subject].filter(Boolean).join(' · '))}</p>`
   +`<h2 class="grove-h grove-detail-title" data-detail-title="${esc(r.id)}" aria-label="${esc(r.title)}">${(()=>{const full=String(r.title||'').trim(),pre=full.endsWith(titleText)?full.slice(0,full.length-titleText.length):'';return pre?`<span class="grove-hide">${esc(pre)}</span>`:''})()}${esc(titleText)}</h2>`
-  +((groveSource(r)||r.origin_label)?`<p class="grove-detail-source">${esc([groveSource(r)&&groveSource(r)+' 发布',r.origin_label].filter(Boolean).join(' · '))}</p>`:'')
+  +((groveSource(r)||r.origin_label)?`<p class="grove-detail-source">${esc([groveSource(r)&&groveSource(r)+' 发布',r.origin_label,groveSpanSummary(r)].filter(Boolean).join(' · '))}</p>`:'')
   +(facts||sourceRefs?`<div class="grove-detail-meta">${facts?`<div class="grove-facts grove-detail-badges">${facts}</div>`:''}${sourceRefs}</div>`:'')
   +'</header><div class="grove-detail-body">'
+  +groveTimelineHTML(r)
   +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
   +`<section class="grove-card grove-steps"><h3>要做什么</h3>${standards}</section>`
   +negHTML

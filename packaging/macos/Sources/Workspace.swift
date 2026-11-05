@@ -956,6 +956,248 @@ func dayRelativeWord(_ f: DayFact, day: String) -> String? {
     return weekday
 }
 
+// MARK: 跨天（Build 319）
+// 只从 item.facts 里已知的日期算跨度：start = published 最早；end = due/check 最晚（没有就退回 complete）。
+// 原文没写时分就不补时分，日期解析不了就不显示——不用别处数据凑。
+
+struct DaySpanInfo {
+    var start: String?      // yyyy-MM-dd
+    var end: String?        // yyyy-MM-dd
+    var startLabel: String  // 11-04 / 11-04 15:40
+    var endLabel: String    // 11-06 / 11-06 17:00
+    var endWord: String     // 交回 / 检查 / 截止
+    var span: Int?          // end - start + 1 天
+    var remaining: Int?     // end - today（负数 = 已过期）
+    var finish: String?     // 完成日 yyyy-MM-dd（有 complete 事实才有）
+}
+
+func daySpanDate(_ raw: String) -> Date? {
+    let clean = String(raw.prefix(10))
+    guard clean.count == 10 else { return nil }
+    let f = DateFormatter()
+    f.calendar = Calendar(identifier: .gregorian)
+    f.locale = Locale(identifier: "en_US_POSIX")
+    f.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
+    f.dateFormat = "yyyy-MM-dd"
+    return f.date(from: clean)
+}
+
+/// 只有原文真写了几点几分才返回，绝不补造。
+func daySpanTime(_ raw: String) -> String? {
+    guard let sep = raw.firstIndex(where: { $0 == " " || $0 == "T" }) else { return nil }
+    let rest = raw[raw.index(after: sep)...]
+    let hhmm = rest.prefix(5)
+    guard hhmm.count == 5, hhmm[hhmm.index(hhmm.startIndex, offsetBy: 2)] == ":" else { return nil }
+    return String(hhmm)
+}
+
+func daySpanKey(_ raw: String) -> String { String(raw.prefix(10)) }
+
+func daySpanMMDD(_ key: String) -> String {
+    key.count >= 10 ? String(key.dropFirst(5).prefix(5)) : key
+}
+
+func daySpanWeekday(_ key: String) -> String {
+    guard let date = daySpanDate(key) else { return "" }
+    let names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+    let w = Calendar(identifier: .gregorian).component(.weekday, from: date)
+    return names[max(0, min(6, w - 1))]
+}
+
+func daySpanFactLabel(_ raw: String) -> String {
+    let key = daySpanKey(raw)
+    guard let time = daySpanTime(raw) else { return daySpanMMDD(key) }
+    return daySpanMMDD(key) + " " + time
+}
+
+func daySpanInfo(_ item: DayItem, today: String) -> DaySpanInfo? {
+    var startFact: DayFact?
+    var endFact: DayFact?
+    var completeFact: DayFact?
+    for fact in item.facts {
+        guard fact.known, let date = daySpanDate(fact.value) else { continue }
+        if fact.role == "published" {
+            if let current = startFact, let d = daySpanDate(current.value), d <= date { continue }
+            startFact = fact
+        } else if fact.role == "due" || fact.role == "check" {
+            if let current = endFact, let d = daySpanDate(current.value), d >= date { continue }
+            endFact = fact
+        } else if fact.role == "complete" {
+            if let current = completeFact, let d = daySpanDate(current.value), d >= date { continue }
+            completeFact = fact
+        }
+    }
+    if endFact == nil { endFact = completeFact }
+    let start = startFact.map { daySpanKey($0.value) }
+    let end = endFact.map { daySpanKey($0.value) }
+    guard start != nil || end != nil else { return nil }
+    let cal = Calendar(identifier: .gregorian)
+    var span: Int?
+    if let s = start, let e = end, let sd = daySpanDate(s), let ed = daySpanDate(e) {
+        span = (cal.dateComponents([.day], from: sd, to: ed).day ?? 0) + 1
+    }
+    var remaining: Int?
+    if let e = end, let ed = daySpanDate(e), let td = daySpanDate(today) {
+        remaining = cal.dateComponents([.day], from: td, to: ed).day
+    }
+    return DaySpanInfo(
+        start: start,
+        end: end,
+        startLabel: startFact.map { daySpanFactLabel($0.value) } ?? "",
+        endLabel: endFact.map { daySpanFactLabel($0.value) } ?? "",
+        endWord: {
+            let label = endFact?.label.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return label.isEmpty ? "截止" : label
+        }(),
+        span: span,
+        remaining: remaining,
+        finish: completeFact.map { daySpanKey($0.value) }
+    )
+}
+
+/// 卡片是否显示跨天行：取消项不显示；没有可算日期也不显示（不编日期）。
+/// 与网页端 calendar.js 的 groveIsCancelled 同口径：未完成，且标题/正文里写了「已取消」或「取消该项」。
+func dayIsCancelled(_ item: DayItem) -> Bool {
+    guard !item.closed else { return false }
+    let words = ([item.title] + item.lines).joined(separator: "\n")
+    return words.contains("已取消") || words.contains("取消该项")
+}
+
+func dayCardShowsSpan(_ item: DayItem, today: String, cancelled: Bool) -> Bool {
+    cancelled ? false : daySpanInfo(item, today: today) != nil
+}
+
+/// 卡片跨天行的文字：跨 N 天 / 还剩 N 天（或明天截止、今天截止、已过期 N 天）/ 布置·截止日期。
+struct DaySpanTexts {
+    var head = ""
+    var remain = ""
+    var range = ""
+    var late = false
+    var probe = ""
+}
+
+func daySpanUsedDays(_ info: DaySpanInfo) -> Int? {
+    guard let start = info.start, let finish = info.finish,
+          let sd = daySpanDate(start), let fd = daySpanDate(finish) else { return nil }
+    let days = (Calendar(identifier: .gregorian).dateComponents([.day], from: sd, to: fd).day ?? 0) + 1
+    return days >= 1 ? days : nil
+}
+
+func daySpanTexts(_ info: DaySpanInfo, done: Bool) -> DaySpanTexts {
+    var texts = DaySpanTexts()
+    texts.late = !done && (info.remaining ?? 0) < 0
+    if let span = info.span, span >= 2 {
+        if done, let used = daySpanUsedDays(info) {
+            texts.head = "跨 \(span) 天 · 用了 \(used) 天做完"
+        } else if done {
+            texts.head = "跨 \(span) 天 · 已完成"
+        } else if let remain = info.remaining, remain < 0 {
+            texts.head = "跨 \(span) 天 · 已过期 \(-remain) 天"
+        } else {
+            texts.head = "跨 \(span) 天"
+        }
+    } else if info.start != nil && info.end == nil {
+        texts.head = "未写截止"
+    }
+    if !done, let remain = info.remaining {
+        if remain > 1 {
+            texts.remain = "还剩 \(remain) 天"
+        } else if remain == 1 {
+            texts.remain = "明天截止"
+        } else if remain == 0 {
+            texts.remain = "今天截止"
+        } else if (info.span ?? 1) < 2 {
+            texts.remain = "已过期 \(-remain) 天"
+        }
+    }
+    if !info.startLabel.isEmpty && !info.endLabel.isEmpty {
+        texts.range = "\(info.startLabel) 布置 · \(info.endLabel) \(info.endWord)"
+    }
+    texts.probe = [texts.head, texts.remain, texts.range].filter { !$0.isEmpty }.joined(separator: " · ")
+    return texts
+}
+
+/// 标尺每格状态：0 已经过、1 今天、2 截止、3 还没到。最多 10 格，截断时最后一格代表截止。
+func daySpanRulerStates(_ info: DaySpanInfo, span: Int, today: String, done: Bool) -> [Int] {
+    let cells = min(max(span, 2), 10)
+    let startDate = info.start.flatMap { daySpanDate($0) }
+    let todayDate = daySpanDate(today)
+    let cal = Calendar(identifier: .gregorian)
+    var states: [Int] = []
+    for index in 0..<cells {
+        if index == cells - 1 { states.append(2); continue }
+        guard let start = startDate, let now = todayDate,
+              let day = cal.date(byAdding: .day, value: index, to: start) else {
+            states.append(3)
+            continue
+        }
+        if cal.isDate(day, inSameDayAs: now) {
+            states.append(1)
+        } else if day < now {
+            states.append(0)
+        } else {
+            states.append(3)
+        }
+    }
+    return states
+}
+
+/// 时间线一节用的三节点视图：布置 → 今天 → 截止（或完成）。圆点 + 连接线，纯展示。
+struct DayTimelineView: View {
+    struct Node {
+        var title: String
+        var detail: String
+        var tone: Int  // 0 已经过、1 今天、2 还没到
+    }
+
+    var nodes: [Node]
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(nodes.enumerated()), id: \.offset) { index, node in
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 0) {
+                        Circle()
+                            .fill(dotColor(node.tone))
+                            .frame(width: 9, height: 9)
+                            .overlay {
+                                if node.tone == 1 {
+                                    Circle()
+                                        .strokeBorder(Palette.leaf.opacity(0.18), lineWidth: 3)
+                                        .frame(width: 15, height: 15)
+                                }
+                            }
+                        Rectangle()
+                            .fill(Palette.line)
+                            .frame(height: 2)
+                            .opacity(index == nodes.count - 1 ? 0 : 1)
+                    }
+                    .frame(height: 10)
+                    Text(node.title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                    Text(node.detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, index == nodes.count - 1 ? 0 : 6)
+            }
+        }
+    }
+
+    private func dotColor(_ tone: Int) -> Color {
+        switch tone {
+        case 0: return Palette.leafInk
+        case 1: return Palette.leaf
+        default: return Color(hex: 0xDED6C4)
+        }
+    }
+}
+
 struct SubjectList: View {
     @ObservedObject var store: WorkspaceStore
     /// 宽窗里所选项的详情在右侧时清单变窄：行高要按新宽度重算。
@@ -2146,9 +2388,7 @@ extension WorkspaceStore {
     /// 任务本身没有 cancelled 这个状态（学校取消会以原题 + 取消说明落库），所以不能在 closed/status 上判断；
     /// 只看标题与要求原文（后续通知不参与，网页端也不看它），保证两端选中同一批事项。
     func isCancelledItem(_ item: DayItem) -> Bool {
-        guard !item.closed else { return false }
-        let words = ([item.title] + item.lines).joined(separator: "\n")
-        return words.contains("已取消") || words.contains("取消该项")
+        dayIsCancelled(item)
     }
 
     var dayCancelledItems: [DayItem] {
@@ -2195,6 +2435,12 @@ extension WorkspaceStore {
     /// 而清单还会渲染 today:false 的补做/过期项；标题、列头、进度分母一律以这里为准，
     /// 保证「今天 N 件 / 已完成 M / 总数」和屏幕上的卡片数对得上（Build 318）。
     var dayTodayCards: [DayItem] { dayOpenItems }
+
+    /// 跨天「今天」：以服务端 today 为准；首屏还没回来时退回当前清单日。
+    var dayTodayKey: String {
+        let today = view?.today ?? ""
+        return today.isEmpty ? day : today
+    }
 
     var dayProgress: (total: Int, done: Int) {
         (dayTodayCards.count + dayClosedItems.count, dayCompletedItems.count)
@@ -2898,6 +3144,9 @@ struct DayCard: View {
                         }
                         .padding(.top, 4)
                     }
+                    if let info = spanInfo {
+                        spanRow(info)
+                    }
                 }
 
                 Image(systemName: "chevron.right")
@@ -2919,6 +3168,81 @@ struct DayCard: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .probe("row-" + item.id, text: item.title)
+    }
+
+    /// 跨天（Build 319）：只从 facts 里已知的日期算；开始/截止缺哪边就只说哪边，不编日期、不补时分。
+    private var spanInfo: DaySpanInfo? {
+        guard dayCardShowsSpan(item, today: store.dayTodayKey, cancelled: isCancelled),
+              let info = daySpanInfo(item, today: store.dayTodayKey),
+              !daySpanTexts(info, done: done).probe.isEmpty else { return nil }
+        return info
+    }
+
+    /// 一行：跨 N 天 · 标尺 · 还剩 N 天 · 布置/截止日期。span < 2 时只留剩余时间。
+    private func spanRow(_ info: DaySpanInfo) -> some View {
+        let texts = daySpanTexts(info, done: done)
+        return HStack(spacing: 8) {
+            if !texts.head.isEmpty {
+                Text(texts.head)
+                    .font(.system(size: 12))
+                    .foregroundStyle(texts.late ? Palette.coralInk : Palette.ink2)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if let span = info.span, span >= 2 {
+                spanRuler(info, span: span)
+            }
+            if !texts.remain.isEmpty {
+                Text(texts.remain)
+                    .font(.system(size: 12))
+                    .foregroundStyle(texts.late ? Palette.coralInk : Palette.ink)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            if !texts.range.isEmpty {
+                Text(texts.range)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 6)
+        .probe("span-" + item.id, text: texts.probe)
+    }
+
+    /// 最多 10 格；今天加重、截止格用橙色（已完成用绿色），跨度截断时最后一格代表截止。
+    private func spanRuler(_ info: DaySpanInfo, span: Int) -> some View {
+        let states = daySpanRulerStates(info, span: span, today: store.dayTodayKey, done: done)
+        return HStack(spacing: 3) {
+            ForEach(Array(states.enumerated()), id: \.offset) { _, state in
+                rulerDot(state)
+            }
+        }
+        .fixedSize()
+    }
+
+    @ViewBuilder
+    private func rulerDot(_ state: Int) -> some View {
+        if state == 2 {
+            Circle()
+                .fill(done ? Palette.leafInk : Color(hex: 0xC98A3C))
+                .frame(width: 6, height: 6)
+        } else if state == 1 {
+            Circle()
+                .fill(Palette.leaf)
+                .frame(width: 6, height: 6)
+                .overlay {
+                    Circle()
+                        .strokeBorder(Palette.leaf.opacity(0.22), lineWidth: 3)
+                        .frame(width: 12, height: 12)
+                }
+        } else if state == 0 {
+            Circle().fill(Palette.leafInk).frame(width: 6, height: 6)
+        } else {
+            Circle().fill(Color(hex: 0xDED6C4)).frame(width: 6, height: 6)
+        }
     }
 
     /// 徽章：签字类给提醒色（会让人跑一趟），其余用浅绿；都是原文短词，不改写。
@@ -2952,6 +3276,9 @@ struct DayDetail: View {
         item.lines.enumerated().filter { isNegativeLine($0.element) }.map { ($0.offset, $0.element) }
     }
     private var isCancelled: Bool { store.isCancelledItem(item) }
+
+    /// 跨天/时间线只认「真的做完了」，已取消不算完成。
+    private var spanDone: Bool { item.closed && !isCancelled }
 
     /// 原生只对真正的事项发「已完成」；学校通知（kind == school）、已取消与已完成项都不显示这个动作。
     private var canComplete: Bool {
@@ -3019,6 +3346,7 @@ struct DayDetail: View {
             Rectangle().fill(Palette.line).frame(height: 1)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
+                    timelineSection
                     stepsSection
                     negativeSection
                     planSection
@@ -3186,6 +3514,110 @@ struct DayDetail: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 11)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.line.opacity(0.7)).frame(height: 1) }
+    }
+
+    // MARK: 时间线（Build 319）
+    /// 详情里的「布置 → 今天 → 截止」：仍然只用 item.facts 已知的日期，缺一边就写缺。
+    private var timelineInfo: DaySpanInfo? {
+        guard !isCancelled else { return nil }
+        return daySpanInfo(item, today: store.dayTodayKey)
+    }
+
+    @ViewBuilder
+    private var timelineSection: some View {
+        if let info = timelineInfo {
+            block("时间线") {
+                VStack(alignment: .leading, spacing: 7) {
+                    DayTimelineView(nodes: timelineNodes(info))
+                    Text(timelineNote(info))
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .probe("detail-timeline", text: timelineProbe(info))
+        }
+    }
+
+    private func timelineNodes(_ info: DaySpanInfo) -> [DayTimelineView.Node] {
+        let today = store.dayTodayKey
+        var nodes: [DayTimelineView.Node] = []
+        if let start = info.start {
+            nodes.append(.init(title: "布置",
+                               detail: timelineDayDetail(start, label: info.startLabel),
+                               tone: 0))
+        } else {
+            nodes.append(.init(title: "布置", detail: "未写布置日期", tone: 2))
+        }
+        nodes.append(.init(title: "今天",
+                           detail: timelineDayDetail(today, label: daySpanMMDD(today)),
+                           tone: 1))
+        if spanDone, let finish = info.finish {
+            nodes.append(.init(title: "完成",
+                               detail: timelineDayDetail(finish, label: daySpanMMDD(finish)),
+                               tone: 0))
+        } else if let end = info.end {
+            let late = (info.remaining ?? 0) < 0
+            nodes.append(.init(title: info.endWord,
+                               detail: timelineDayDetail(end, label: info.endLabel),
+                               tone: late ? 0 : 2))
+        } else {
+            nodes.append(.init(title: "截止", detail: "未写截止时间", tone: 2))
+        }
+        return nodes
+    }
+
+    private func timelineDayDetail(_ key: String, label: String) -> String {
+        var text = daySpanMMDD(key) + " " + daySpanWeekday(key)
+        if label.count > 5, let time = label.split(separator: " ").last {
+            text += " " + time
+        }
+        return text
+    }
+
+    private func timelineNote(_ info: DaySpanInfo) -> String {
+        if spanDone {
+            if let finish = info.finish {
+                return "完成于 " + daySpanMMDD(finish) + " " + daySpanWeekday(finish) + "。"
+            }
+            return "这一项已完成。"
+        }
+        if info.end == nil { return "没有写截止时间，先按清单做。" }
+        if info.start == nil { return "没有写布置日期，只有截止日期。" }
+        guard let span = info.span else { return "" }
+        if span <= 2 { return "布置到截止连着 \(span) 天。" }
+        let between = span - 2
+        var text = "中间还有 \(between) 天"
+        if between <= 3, let start = info.start, let end = info.end,
+           let sd = daySpanDate(start), let ed = daySpanDate(end) {
+            let cal = Calendar(identifier: .gregorian)
+            var days: [String] = []
+            for offset in 1...between {
+                if let day = cal.date(byAdding: .day, value: offset, to: sd), day < ed {
+                    let key = timelineKey(day)
+                    if key != store.dayTodayKey {
+                        days.append(daySpanMMDD(key) + " " + daySpanWeekday(key))
+                    }
+                }
+            }
+            if !days.isEmpty { text += "：" + days.joined(separator: "、") }
+        }
+        return text + "。"
+    }
+
+    private func timelineKey(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(secondsFromGMT: 8 * 3600)
+        f.dateFormat = "yyyy-MM-dd"
+        return f.string(from: date)
+    }
+
+    private func timelineProbe(_ info: DaySpanInfo) -> String {
+        let nodes = timelineNodes(info).map { $0.title + " " + $0.detail }.joined(separator: " · ")
+        let note = timelineNote(info)
+        return note.isEmpty ? nodes : nodes + " · " + note
     }
 
     private var stepsSection: some View {
