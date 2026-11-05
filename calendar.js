@@ -723,7 +723,8 @@ function groveDetailHTML(r){
  // 来源消息：只列发送人/来源/发布时刻，原文点“看原消息”在既有弹窗里读，不在这里重写。
  const pubs=(r.publications||[]).filter(p=>p&&p.ref&&p.pending!==true);
  const sourcesSection=pubs.length?`<section class="grove-card grove-sources"><h3>来源消息</h3><ul class="grove-src-list">${pubs.map(p=>`<li><span class="grove-src-who">${esc(String(p.sender||'').trim()||'发言人未记录')}</span><span class="grove-src-meta">${esc([String(p.source_name||'').trim(),String(r.published_at||'').slice(0,16).replace('T',' ')].filter(Boolean).join(' · '))}</span><button type="button" data-grove-src-ref="${esc(p.ref)}" data-grove-src-child="${esc(childID||'')}" data-source-open="${esc(p.ref)}">看原消息</button></li>`).join('')}</ul></section>`:'';
- const itemActions=`<div class="grove-detail-bar">${primary}${open?`<button type="button" data-grove-complete="${esc(t.id)}" data-mark-complete="${esc(t.id)}">标记完成</button>`:''}</div>`;
+ const checkupBtn=open&&checkupEligible(r)?`<button type="button" class="grove-checkup-start" data-checkup-start="${esc(r.id)}">核对这份作业</button>`:'';
+ const itemActions=`<div class="grove-detail-bar">${primary}${checkupBtn}${open?`<button type="button" data-grove-complete="${esc(t.id)}" data-mark-complete="${esc(t.id)}">标记完成</button>`:''}</div>`;
  const closeBtn='<button type="button" class="grove-detail-close" data-grove-detail-close aria-label="关闭详情">✕</button>';
  return back+closeBtn
   +`<header class="grove-detail-hd"><p class="grove-crumb">${esc([dateLabel,r.subject].filter(Boolean).join(' · '))}</p>`
@@ -880,6 +881,8 @@ function todayTasksHTML(){
   +`<section class="grove-board" aria-labelledby="groveListTitle">${otherBar}<div class="grove-board-scroll">${body}</div></section>`
   +`<section class="grove-detail" id="groveDetail" tabindex="-1" aria-label="所选事项">${groveDetailHTML(selected)}</section>`
   +`<div class="grove-detail-backdrop" data-grove-detail-close hidden></div>`
+  +`<section class="grove-checkup" id="groveCheckup" tabindex="-1" aria-label="核对这份作业" data-step="photos" hidden></section>`
+  +`<div class="grove-checkup-backdrop" data-checkup-close hidden></div>`
   +phoneBar+'</div>';
 }
 
@@ -1169,6 +1172,15 @@ const groveRenderBase=render;
 render=function(){try{groveNavToAside()}catch(err){console.error('grove nav',err)}const out=groveRenderBase.apply(this,arguments);try{groveAfterRender()}catch(err){console.error('grove rail',err)}return out};
 // 集合胶囊/左栏计数：只做定位（滚到对应分组），不隐藏其他内容；滚动后把当前项标记出来。
 document.addEventListener('click',e=>{
+ // Build 321：核对这份作业浮层
+ const cStart=e.target.closest('[data-checkup-start]');if(cStart){e.preventDefault();e.stopPropagation();checkupOpen(cStart.dataset.checkupStart);return}
+ if(e.target.closest('[data-checkup-close]')){e.preventDefault();checkupClose();return}
+ if(e.target.closest('[data-checkup-run]')){e.preventDefault();checkupRun();return}
+ if(e.target.closest('[data-checkup-save]')){e.preventDefault();checkupSave(0);return}
+ if(e.target.closest('[data-checkup-again]')){e.preventDefault();checkupReset();return}
+ if(e.target.closest('[data-checkup-feedback]')){e.preventDefault();checkupClose();const fb=document.querySelector('#groveDetail [data-feedback-new]');if(fb)fb.click();return}
+ if(e.target.closest('[data-checkup-goto-wrong]')){e.preventDefault();checkupGotoWrong();return}
+ const cRemove=e.target.closest('[data-checkup-remove]');if(cRemove&&checkup){e.preventDefault();checkup.photos=checkup.photos.filter(p=>p.id!==cRemove.dataset.checkupRemove);checkupPaint();return}
  const groveRoot=document.querySelector('.grove3');
  if(groveRoot?.classList.contains('is-detail')&&e.target.closest('.grove-board')&&!e.target.closest('#groveDetail')&&!e.target.closest('[data-grove-open]')&&!e.target.closest('[data-grove-detail-close]')){groveCloseDetail();if(history.state?.grove)history.back()}
  const src=e.target.closest('[data-grove-src-ref]');if(src){if(typeof openSchoolOriginal==='function')openSchoolOriginal(src.dataset.groveSrcRef,src.dataset.groveSrcChild||'','');return}
@@ -1198,3 +1210,194 @@ document.addEventListener('click',e=>{
 let groveResizeTimer=0;
 let groveResizeWidth=window.innerWidth;
 window.addEventListener('resize',()=>{if(page!=='home')return;const w=window.innerWidth;if(w===groveResizeWidth)return;groveResizeWidth=w;clearTimeout(groveResizeTimer);groveResizeTimer=setTimeout(()=>{render()},160)});
+
+
+// ===== Build 321：核对这份作业 → 错题本（日清单内浮层；不改事项完成状态，不碰反馈字段） =====
+const CHECKUP_KINDS=['practice','dictation','check','craft'];
+let checkup=null;
+function checkupEligible(r){
+ return !!(r&&r.kind==='task'&&r.task_id&&!r.closed&&!groveIsCancelled(r)&&CHECKUP_KINDS.includes(String((groveWork(r)||{}).kind||'')));
+}
+function checkupItemByID(id){try{return groveRows(groveView()).find(x=>x.id===id)||null}catch(err){return null}}
+function checkupHex32(){
+ const a=new Uint8Array(16);(window.crypto||window.msCrypto).getRandomValues(a);
+ return [...a].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function checkupFlatten(){
+ const pages=(checkup&&checkup.draft&&Array.isArray(checkup.draft.pages))?checkup.draft.pages:[];
+ const out=[];
+ pages.forEach((p,pi)=>{
+  const regs=(p&&Array.isArray(p.regions)?p.regions:[]).filter(x=>x&&x.kind==='wrong_item'&&!x.skipped);
+  regs.forEach(rg=>out.push({page:pi+1,att:p.attachment||null,rg}));
+ });
+ return out;
+}
+function checkupOpen(id){
+ const r=checkupItemByID(id);
+ if(!r||!checkupEligible(r)){if(typeof toast==='function')toast('这件不适合逐题核对');return}
+ checkup={id:r.id,row:r,step:'photos',photos:[],uploading:'',error:'',errorKind:'',draft:null,items:{},saving:false,savedCount:0,notSaved:false,requestKey:''};
+ checkupPaint();checkupShow(true);const d=document.getElementById('groveCheckup');if(d)d.focus({preventScroll:true});
+}
+function checkupShow(on){
+ const root=document.querySelector('.grove3'),panel=document.getElementById('groveCheckup'),back=document.querySelector('.grove-checkup-backdrop');
+ if(!panel)return;
+ if(on){root&&root.classList.add('is-checkup');panel.hidden=false;if(back)back.hidden=false;}
+ else{root&&root.classList.remove('is-checkup');panel.hidden=true;if(back)back.hidden=true;}
+}
+function checkupClose(){checkupShow(false)}
+function checkupReset(){
+ if(!checkup)return;
+ checkup.photos=[];checkup.uploading='';checkup.error='';checkup.errorKind='';checkup.draft=null;checkup.items={};checkup.saving=false;checkup.savedCount=0;checkup.notSaved=false;checkup.requestKey='';checkup.step='photos';
+ checkupPaint();
+}
+function checkupPhotoThumb(p){return `<li class="grove-checkup-thumb"><img src="${esc(p.url||'')}" alt="${esc(p.name||'作业照片')}"><button type="button" data-checkup-remove="${esc(p.id)}" aria-label="移除这张照片">✕</button></li>`}
+function checkupStepPhotos(){
+ const c=checkup,full=c.photos.length>=3,busy=!!c.uploading;
+ const err=c.error?`<p class="grove-checkup-error" data-checkup-error>${esc(c.error)}</p>${c.errorKind==='llm'?`<div class="grove-checkup-actions"><button type="button" data-checkup-feedback>改成写反馈</button></div>`:''}`:'';
+ return `<section class="grove-checkup-step" data-checkup-photos>
+  <h3>选作业照片</h3>
+  <p class="small muted">最多 3 张，选完自动保存；模型只看照片，不改变这件作业的完成状态。</p>
+  <ul class="grove-checkup-thumbs">${c.photos.map(checkupPhotoThumb).join('')}</ul>
+  <label class="grove-checkup-pick">${full?'已经 3 张，够了':'选择照片'}<input type="file" data-checkup-photo-input accept="image/jpeg,image/png,image/webp" multiple ${busy||full?'disabled':''}></label>
+  ${busy?`<p class="small muted" data-checkup-uploading>正在保存第 ${c.uploading} 张…</p>`:''}
+  ${err}
+  <div class="grove-checkup-actions"><button type="button" class="primary" data-checkup-run ${(!c.photos.length||busy)?'disabled':''}>开始核对</button><button type="button" data-checkup-close>先不核对</button></div>
+ </section>`;
+}
+function checkupStepBusy(){
+ return `<section class="grove-checkup-step" data-checkup-busy aria-live="polite"><h3>模型正在看照片</h3><p>大约 20–40 秒。可以先关掉这个窗口，结果会保留；清单里其它事项不受影响。</p><p class="grove-checkup-spinner" aria-hidden="true"></p><div class="grove-checkup-actions"><button type="button" data-checkup-close>先关掉，等结果</button></div></section>`;
+}
+function checkupStepReview(){
+ const flat=checkupFlatten();
+ if(!flat.length){
+  return `<section class="grove-checkup-step" data-checkup-review><h3>没找到错题</h3><p>这一页没找到错题。可以先关掉，或者改成写反馈。</p><div class="grove-checkup-actions"><button type="button" data-checkup-feedback>改成写反馈</button><button type="button" data-checkup-close>关闭</button></div></section>`;
+ }
+ const warn=(checkup.draft&&Array.isArray(checkup.draft.uncertainties)&&checkup.draft.uncertainties.length)?`<p class="grove-checkup-warn" data-checkup-warn>有些页/地方看不清，已经跳过；下面标「不确定」的也可以不保存。</p>`:'';
+ let lastPage=0,rows='';
+ flat.forEach((x,i)=>{
+  if(x.page!==lastPage){
+   lastPage=x.page;
+   const img=(x.att&&x.att.url)?`<img src="${esc(x.att.url)}" alt="">`:'';
+   rows+=`<p class="grove-checkup-page-head">${img}<span>第 ${x.page} 页</span></p>`;
+  }
+  const rg=x.rg,checked=checkup.items[i]!==false;
+  const text=String(rg.text||'').trim(),ans=String(rg.answer||'').trim(),cor=String(rg.correction||'').trim();
+  const hints=[rg.topic_hint,rg.error_hint].map(s=>String(s||'').trim()).filter(Boolean);
+  rows+=`<li class="grove-checkup-item" data-checkup-row="${i}">
+   <label class="grove-checkup-check"><input type="checkbox" data-checkup-item="${i}" ${checked?'checked':''}><span class="grove-checkup-label">${esc(rg.label||('第 '+(i+1)+' 处'))}</span>${rg.uncertain?'<span class="grove-checkup-tag">不确定</span>':''}</label>
+   ${text?`<p class="grove-checkup-text">${esc(text)}</p>`:''}
+   ${ans?`<p class="grove-checkup-meta">学生原答：${esc(ans)}</p>`:''}
+   ${cor?`<p class="grove-checkup-meta">可见订正：${esc(cor)}</p>`:''}
+   ${hints.length?`<p class="grove-checkup-hint">模型提示，待家长核对：${esc(hints.join(' · '))}</p>`:''}
+  </li>`;
+ });
+ const sel=flat.filter((x,i)=>checkup.items[i]!==false).length;
+ return `<section class="grove-checkup-step" data-checkup-review>
+  <h3>逐题核对</h3>${warn}<ul class="grove-checkup-list">${rows}</ul>
+  <p class="grove-checkup-count small muted" data-checkup-count>已选 ${sel} 条</p>
+  ${checkup.error?`<p class="grove-checkup-error" data-checkup-error>${esc(checkup.error)}</p>`:''}
+  <div class="grove-checkup-actions"><button type="button" class="primary" data-checkup-save ${(!sel||checkup.saving)?'disabled':''}>${checkup.saving?'正在保存…':'存入错题本'}</button><button type="button" data-checkup-close>取消</button></div>
+ </section>`;
+}
+function checkupStepSaved(){
+ return `<section class="grove-checkup-step" data-checkup-saved><h3>已存入错题本 ${checkup.savedCount} 条</h3><p>这些会出现在错题本和学习进展里；这件作业的完成状态没有改变。</p><div class="grove-checkup-actions"><button type="button" class="primary" data-checkup-goto-wrong>看错题本</button><button type="button" data-checkup-again>继续核对这件</button><button type="button" data-checkup-close>关闭</button></div></section>`;
+}
+function checkupPaint(){
+ const panel=document.getElementById('groveCheckup');
+ if(!panel||!checkup)return;
+ panel.dataset.step=checkup.step;
+ const step=checkup.step==='busy'?checkupStepBusy():checkup.step==='review'?checkupStepReview():checkup.step==='saved'?checkupStepSaved():checkupStepPhotos();
+ const sub=[checkup.row&&checkup.row.subject,String(checkup.row&&checkup.row.title||'').trim().slice(0,42)].filter(Boolean).join(' · ');
+ panel.innerHTML=`<header class="grove-checkup-head"><div><h2>核对这份作业</h2><p class="small muted">${esc(sub)}</p></div><button type="button" class="grove-checkup-close" data-checkup-close aria-label="关闭核对">✕</button></header><div class="grove-checkup-body">${step}</div>`;
+}
+async function checkupUploadFiles(files){
+ if(!checkup)return;
+ const room=3-checkup.photos.length;
+ const list=[...files].slice(0,room);
+ for(const f of list){
+  if(!/^image\/(jpeg|png|webp)$/.test(f.type)){checkup.error='只支持 JPG/PNG/WebP 照片';checkupPaint();continue}
+  if(f.size>20*1024*1024){checkup.error='单张照片不能超过 20MB';checkupPaint();continue}
+  checkup.uploading=checkup.photos.length+1;checkup.error='';checkup.errorKind='';checkupPaint();
+  try{
+   const r=await apiFetch('/api/upload',{method:'POST',signal:AbortSignal.timeout(120000),headers:{'X-Family-Token':data.token,'X-File-Name':encodeURIComponent(f.name),'Content-Type':'application/octet-stream'},body:f});
+   const j=await r.json().catch(()=>({}));
+   if(!r.ok||!j.attachment)throw Error(j.error||('照片保存失败（'+r.status+'）'));
+   if(checkup.photos.length<3)checkup.photos.push(j.attachment);
+  }catch(err){checkup.error=(err.message||'照片保存失败')+'（已保存的照片还在，可以重试）'}
+  checkup.uploading='';checkupPaint();
+ }
+ checkup.uploading='';checkupPaint();
+}
+async function checkupRun(){
+ if(!checkup||checkup.step!=='photos'||!checkup.photos.length)return;
+ checkup.step='busy';checkup.error='';checkup.errorKind='';checkupPaint();
+ const req={attachments:checkup.photos.map(p=>p.id),subject_hint:String(checkup.row&&checkup.row.subject||''),child};
+ try{
+  const r=await apiFetch('/api/wrong/annotate',{method:'POST',signal:AbortSignal.timeout(180000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(req)});
+  const j=await r.json().catch(()=>({}));
+  if(!checkup)return;
+  if(!r.ok){
+   const llm=r.status===503||j.code==='llm_unavailable'||/模型|LLM|连不上|不可用/i.test(String(j.error||''));
+   checkup.step='photos';checkup.errorKind=llm?'llm':'error';
+   checkup.error=llm?'现在没连上模型，稍后再核对；照片已保存，可先写反馈。':(j.error||j.message||('核对失败（'+r.status+'）'));
+   checkupPaint();return;
+  }
+  checkup.draft=j;checkup.items={};checkupFlatten().forEach((x,i)=>{checkup.items[i]=true});checkup.step='review';checkupPaint();
+ }catch(err){
+  if(!checkup)return;
+  checkup.step='photos';checkup.errorKind='error';
+  checkup.error=(err&&err.name==='TimeoutError')?'核对等了太久没有结果，照片还在；可以稍后再试，或先写反馈。':('核对失败：'+((err&&err.message)||'网络错误')+'（照片已保存）');
+  checkupPaint();
+ }
+}
+async function checkupSave(attempt){
+ if(!checkup||checkup.step!=='review')return;
+ const flat=checkupFlatten();
+ const items=flat.map((x,i)=>({x:x,i:i})).filter(o=>checkup.items[o.i]!==false).map(o=>{
+  const rg=o.x.rg||{};
+  return {attachment:(o.x.att&&o.x.att.id)||'',label:String(rg.label||''),text:String(rg.text||''),answer:String(rg.answer||''),correction:String(rg.correction||''),topic_hint:String(rg.topic_hint||''),error_hint:String(rg.error_hint||'')};
+ });
+ if(!items.length)return;
+ if(attempt===undefined)attempt=0;
+ if(!checkup.requestKey)checkup.requestKey=checkupHex32();
+ checkup.saving=true;checkup.error='';checkupPaint();
+ const payload={child:child,day:groveDay||data.today,subject:String(checkup.row&&checkup.row.subject||''),request_key:checkup.requestKey,items:items};
+ if(attempt===0&&checkup.row&&checkup.row.task_id)payload.task_id=checkup.row.task_id;
+ try{
+  const r=await apiFetch('/api/wrong/save',{method:'POST',signal:AbortSignal.timeout(60000),headers:{'Content-Type':'application/json','X-Family-Token':data.token},body:JSON.stringify(payload)});
+  const j=await r.json().catch(()=>({}));
+  if(!checkup)return;
+  if(r.status===409&&j.code==='wrong_task_changed'&&attempt===0){checkup.saving=false;return checkupSave(1)}
+  if(!r.ok){
+   checkup.saving=false;checkup.notSaved=!!j.not_saved;
+   checkup.error=(j.error||('保存失败（'+r.status+'）'))+(j.not_saved?'（未保存）':'');
+   checkupPaint();return;
+  }
+  checkup.saving=false;checkup.notSaved=false;
+  checkup.savedCount=Number(j.count||items.length);
+  checkup.step='saved';checkupPaint();
+  try{await load(false)}catch(err){}
+ }catch(err){
+  if(!checkup)return;
+  checkup.saving=false;checkup.notSaved=true;
+  checkup.error=(err&&err.name==='TimeoutError')?'保存等了太久，结果未确认；可以重试（同一份不会重复写）。':('保存失败：'+((err&&err.message)||'网络错误')+'（未保存）');
+  checkupPaint();
+ }
+}
+async function checkupGotoWrong(){
+ checkupClose();
+ groveScope='open';groveTab='wrong';
+ try{groveCloseDetail()}catch(err){}
+ try{await load(false)}catch(err){}
+ render();
+ const panel=document.querySelector('.grove-board-scroll');if(panel)panel.scrollTop=0;
+}
+document.addEventListener('change',e=>{
+ const f=e.target.closest('[data-checkup-photo-input]');
+ if(f){const files=[...(f.files||[])];f.value='';checkupUploadFiles(files);return}
+ const it=e.target.closest('[data-checkup-item]');
+ if(it&&checkup){checkup.items[Number(it.dataset.checkupItem)]=!!it.checked;checkupPaint()}
+});
+window.addEventListener('keydown',e=>{
+ if(e.key==='Escape'&&document.querySelector('.grove3.is-checkup')){e.stopPropagation();e.preventDefault();checkupClose();}
+},true);

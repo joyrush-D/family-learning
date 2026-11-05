@@ -1302,3 +1302,55 @@ body.grove-wide[data-page="home"] aside nav.grove-rail-sets button{min-height:0!
 .grove-scope-bar button:hover{background:var(--g-accent-weak);border-color:var(--g-accent)}
 .grove-span-dates{margin-left:auto;font-size:10px;line-height:1.4;color:var(--g-muted);white-space:nowrap;letter-spacing:.02em;font-variant-numeric:tabular-nums}
 @media (max-width:899px){.grove-span-dates{margin-left:0;font-size:10px}.grove-scope-bar{margin:4px 2px 8px;padding:7px 10px}}
+
+
+/* Build 321：hidden 属性要压过 `#task-groups{display:block!important}` 等强规则；今天 scope 外列表隐藏、upcoming 只留明后天。 */
+#task-groups[hidden], .grove3 [data-grove-scope-list][hidden]{display:none!important}
+
+/* Build 321：核对这份作业浮层 */
+.grove3 .grove-checkup-start{min-height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--g-line2);background:var(--g-surface2);color:var(--g-ink2);font-size:12.5px;white-space:nowrap}
+.grove3 .grove-checkup-backdrop{position:fixed;inset:0;background:rgba(20,16,8,.22);z-index:54}
+.grove3 .grove-checkup-backdrop[hidden]{display:none!important}
+.grove3 .grove-checkup{position:fixed;top:14px;right:14px;bottom:14px;width:430px;max-width:calc(100vw - 28px);z-index:56;display:flex;flex-direction:column;background:var(--g-surface);border:1px solid var(--g-line2);border-radius:16px;box-shadow:0 18px 60px rgba(40,32,16,.28);overflow:hidden}
+.grove3 .grove-checkup[hidden]{display:none!important}
+.grove3 .grove-checkup-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:13px 15px 10px;border-bottom:1px solid var(--g-line);background:var(--g-surface2)}
+.grove3 .grove-checkup-head h2{margin:0;font-size:16px;line-height:1.35;color:var(--g-ink)}
+.grove3 .grove-checkup-head p{margin:2px 0 0;font-size:11.5px;color:var(--g-muted)}
+.grove3 .grove-checkup-close{flex:0 0 auto;width:32px;height:32px;min-height:32px;padding:0;border-radius:50%;border:1px solid var(--g-line2);background:var(--g-surface);color:var(--g-ink2);font-size:14px}
+.grove3 .grove-checkup-body{flex:1;min-height:0;overflow-y:auto;padding:12px 15px 16px;overscroll-behavior:contain}
+.grove3 .grove-checkup-step h3{margin:2px 0 8px;font-size:15px;color:var(--g-ink)}
+.grove3 .grove-checkup-step p{margin:0 0 8px;font-size:13px;line-height:1.6;color:var(--g-ink2)}
+.grove3 .grove-checkup-thumbs{list-style:none;margin:0 0 10px;padding:0;display:flex;gap:8px;flex-wrap:wrap}
+.grove3 .grove-checkup-thumb{position:relative;width:84px;margin:0}
+.grove3 .grove-checkup-thumb img{display:block;width:84px;height:106px;object-fit:cover;border-radius:8px;border:1px solid var(--g-line);background:var(--g-surface2)}
+.grove3 .grove-checkup-thumb button{position:absolute;top:-7px;right:-7px;width:26px;height:26px;min-height:26px;padding:0;border-radius:50%;border:1px solid var(--g-line2);background:var(--g-surface);color:var(--g-ink2);font-size:12px}
+.grove3 .grove-checkup-pick{position:relative;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:1px dashed var(--g-line2);border-radius:10px;background:var(--g-surface2);font-size:13px;color:var(--g-ink2);cursor:pointer}
+.grove3 .grove-checkup-pick input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer}
+.grove3 .grove-checkup-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.grove3 .grove-checkup-actions button{flex:1 1 auto;min-height:44px;padding:0 14px;border-radius:10px;border:1px solid var(--g-line2);background:var(--g-surface);color:var(--g-ink);font-size:13px}
+.grove3 .grove-checkup-actions button.primary{background:var(--g-accent);border-color:var(--g-accent);color:#fff}
+.grove3 .grove-checkup-actions button[disabled]{opacity:.5}
+.grove3 .grove-checkup-error{margin:8px 0 0;padding:8px 10px;border-radius:8px;background:var(--g-danger-bg);border:1px solid #eccfc6;color:var(--g-danger);font-size:12.5px;line-height:1.55}
+.grove3 .grove-checkup-warn{margin:0 0 10px;padding:8px 10px;border-radius:8px;background:var(--g-warn-bg);border:1px solid var(--g-warn-line);color:var(--g-warn);font-size:12.5px;line-height:1.55}
+.grove3 .grove-checkup-page-head{display:flex;align-items:center;gap:8px;margin:10px 0 6px;font-size:12px;color:var(--g-muted)}
+.grove3 .grove-checkup-page-head img{width:38px;height:48px;object-fit:cover;border-radius:6px;border:1px solid var(--g-line)}
+.grove3 .grove-checkup-list{list-style:none;margin:0;padding:0}
+.grove3 .grove-checkup-item{margin:0 0 8px;padding:8px 10px;border:1px solid var(--g-line);border-radius:10px;background:var(--g-surface2)}
+.grove3 .grove-checkup-check{display:flex;align-items:center;gap:8px;min-height:40px}
+.grove3 .grove-checkup-check input{width:22px;height:22px;accent-color:var(--g-accent)}
+.grove3 .grove-checkup-label{font-size:13.5px;font-weight:600;color:var(--g-ink)}
+.grove3 .grove-checkup-tag{margin-left:4px;font-size:10.5px;line-height:1;padding:3px 6px;border-radius:5px;background:var(--g-warn-bg);border:1px solid var(--g-warn-line);color:var(--g-warn);white-space:nowrap}
+.grove3 .grove-checkup-text{margin:4px 0 2px;font-size:12.8px;line-height:1.6;color:var(--g-ink2);display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.grove3 .grove-checkup-meta{margin:2px 0;font-size:12.3px;line-height:1.55;color:var(--g-ink2)}
+.grove3 .grove-checkup-hint{margin:3px 0 0;font-size:11.8px;line-height:1.5;color:var(--g-muted)}
+.grove3 .grove-checkup-count{margin:6px 0 0;font-size:12.5px;color:var(--g-ink2)}
+.grove3 .grove-checkup-spinner{width:26px;height:26px;margin:8px 0;border:3px solid var(--g-line);border-top-color:var(--g-accent);border-radius:50%;animation:groveCheckupSpin 1s linear infinite}
+@keyframes groveCheckupSpin{to{transform:rotate(360deg)}}
+@media (max-width:899px){
+ .grove3 .grove-checkup{left:0;right:0;top:auto;bottom:calc(64px + env(safe-area-inset-bottom));width:auto;max-width:none;max-height:min(78vh,640px);border-radius:16px 16px 0 0}
+ .grove3 .grove-checkup-actions button{min-height:46px;font-size:13.5px}
+ .grove3 .grove-checkup-start{min-height:44px;font-size:12.5px}
+}
+
+/* Build 321 修正：详情栏按钮的统一 min-height:36 会压过核对入口，单独提到 44（点击区要求）。 */
+.grove3 .grove-detail-bar .grove-checkup-start{min-height:44px!important;height:auto!important;padding:0 14px!important}
