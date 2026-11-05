@@ -1,0 +1,37 @@
+记录时间: 2026-11-04T08:07:26Z
+二进制: /Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/一起成长.app/Contents/MacOS/YiqiChengzhang
+二进制 sha1: 1befa315bc4103bf37d3dbcb65e4a6d498d35867
+
+### 先说明：BSD strings 只输出可打印 ASCII，会把 UTF-8 中文丢掉，所以它统计中文必然为 0；
+### 中文按 UTF-8 字节在二进制里直接统计（Python，与 strings 等价但保留非 ASCII）。
+
+### strings -a | grep -c 家庭安排（BSD strings 不保留中文，预期 0）
+0
+
+### Python UTF-8 字节计数（真实证据）
+家庭安排                         1
+家庭安排：                        0
+row-plan-                    0
+plan_lines                   2
+连接本机一起成长服务                   2
+FAMILY_DESKTOP_SUPPORT_DIR   1
+一起成长                         11
+
+### 源码里的行号
+412:    /// 家庭安排（服务端 plan_lines）：家长自己的计划，不是老师的要求；单独一段，不并进要求正文。旧后台没有这个键时为空。
+414:    /// 家庭安排各句照原文接起来，与 standardWords 同一规则：句末已有标点的不再补“；”，不出现“。；”。
+416:    /// 家庭安排小标签：能拿到计划日（facts 里 role=scheduled）就带上日期，拿不到只写“家庭安排”。
+418:        if let f = facts.first(where: { $0.role == "scheduled" }), !f.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "家庭安排（计划 \(f.value)）" }
+419:        return "家庭安排"
+963:                    // 家庭安排是家长自己的计划，不是老师要求：单独一行带小标签，不并进上面的要求段落。
+1618:                    // 家庭安排单独成节，放在老师的要求之后：家长自己的计划，不当作一条要求。
+
+### WorkspaceAPI 里的 plan_lines 解码角色
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/WorkspaceAPI.swift:71:    /// 家庭安排（服务端 plan_lines，从老师要求里拆出来的家长自己的计划）。较早后台不带这个键时为 nil，不当作解码失败。
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/WorkspaceAPI.swift:72:    let plan_lines: [String]?
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift:412:    /// 家庭安排（服务端 plan_lines）：家长自己的计划，不是老师的要求；单独一段，不并进要求正文。旧后台没有这个键时为空。
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift:413:    var planLines: [String] { plan_lines ?? [] }
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift:415:    var planWords: String { planLines.reduce("") { s, l in s.isEmpty ? l : s + ("。；！？!?;".contains(s.last!) ? "" : "；") + l } }
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift:962:                if !item.planLines.isEmpty {
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift:1617:                if !item.planLines.isEmpty {
+/Users/joyrush/.local/share/family-learning/public-integration-20260926/packaging/macos/Sources/Workspace.swift:1620:                        ForEach(Array(item.planLines.enumerated()), id: \.offset) { index, line in

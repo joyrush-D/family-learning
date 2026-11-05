@@ -1,0 +1,8 @@
+命令: PRODUCT=/tmp/repo-verify-313 SNAP=/Users/joyrush/Documents/deepseek-harness/default-workspace/work/deliverable/演示数据/十八渠道快照 PORT=57119 ./verify-demo.sh
+运行时间: 2026-11-04T17:07:14Z
+说明: PRODUCT 用 REPO 的临时副本（避免向 REPO 写任何文件）；脚本自会清理临时副本里的 家庭运行规则.md
+备注: 首次尝试 PORT=8796 时该端口被其他进程占用（OSError 48），本次改用动态空闲端口
+--- stdout ---
+OK rows=8 today=5 future=2 cancelled=1 matters=8/8
+today: 英语：完成《每日练习》并明天带来 / 数学：完成《每日练习》第26页第1—3题 / 朗读《风经过小巷》第2、3自然段 / 语文：完成《识字小卡》练习 / 数学：完成《计算小卡》第4页1—6题
+rc=0

@@ -1,0 +1,2 @@
+# Build 323 无本地补丁：构建输入即 commit 5c980dd（worktree /tmp/rel-323 干净）。
+# 重建脚本生成的 fix.patch-323 仅重复收录了 commit 内本已跟踪的两个测试文件（.gitignore 根通配导致误判），已删除；不随交付件提交。

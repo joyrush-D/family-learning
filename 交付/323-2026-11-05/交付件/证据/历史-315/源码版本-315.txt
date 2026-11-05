@@ -1,0 +1,23 @@
+记录时间: 2026-11-05T05:51:23Z
+REPO: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+HEAD: cbb78689b6d066d1991748ab273af0b43c8e9904
+构建号: 315
+工作区改动文件（git status --porcelain）:
+   M calendar.js
+   M family_agenda.py
+   M family_agent.py
+   M test_daily_list_expression.py
+   M test_school_fold_visibility.py
+   M workbench.css
+改动文件 sha1:
+  a3cefe43cdd15cb5dc1b2579fb753167c96c2536  calendar.js
+  ff9c3f85696ee2a555bf77bc50b566aef881be1c  family_agenda.py
+  3d8807c865287b8fc46fc6ff7495df4b40fd1235  family_agent.py
+  60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+  90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
+  7be7d3a8f1c9ed31badce929481a95bae8d62e7e  workbench.css
+被 .gitignore 忽略的新文件 sha1:
+  60c34a20810fda75fbf56840a8bee47e9c6def08  test_daily_list_expression.py
+  90e84511c610506ad54d1beceddeb89ee47e7401  test_school_fold_visibility.py
+fix.patch sha1: 88b8f7b62e9fd69e205a8560d5793c61a4383402
+fix.patch 字节数: 84228

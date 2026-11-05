@@ -1,0 +1,418 @@
+{
+  "today": "2026-11-05",
+  "day": "2026-11-05",
+  "child_id": "child-1",
+  "child_name": "示例甲",
+  "children": [
+    {
+      "id": "child-1",
+      "name": "示例甲"
+    },
+    {
+      "id": "child-2",
+      "name": "示例乙"
+    }
+  ],
+  "token": "BJfOKrm18_S-mQV_05VmwCqSdHzVPh_EmpPsqrs_wxo",
+  "source_error": "",
+  "groups": [
+    {
+      "subject": "英语",
+      "items": [
+        {
+          "id": "AGENT-e9f38c84c51730cf04a9bc35",
+          "kind": "task",
+          "task_id": "AGENT-e9f38c84c51730cf04a9bc35",
+          "title": "英语：完成《每日练习》并明天带来",
+          "subject": "英语",
+          "category": "homework",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "school",
+          "origin_label": "学校消息",
+          "lines": [
+            "英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。",
+            "一、看图选词第1—3题。",
+            "二、标星单词 under、near 各抄写一遍。",
+            "不需要录音。",
+            "补充今天英语《每日练习》：完成后放英语夹里明早带来，不用在群里发照片。"
+          ],
+          "plan_lines": [],
+          "follow_ups": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "published",
+              "label": "发布",
+              "value": "2026-11-04 16:05",
+              "known": true
+            },
+            {
+              "role": "complete",
+              "label": "完成",
+              "value": "2026-11-04",
+              "known": true,
+              "today": false
+            },
+            {
+              "role": "due",
+              "kind": "deadline",
+              "label": "截止",
+              "value": "2026-11-05",
+              "known": true,
+              "state": ""
+            }
+          ],
+          "today": true,
+          "when": "today",
+          "publications": [
+            {
+              "ref": "message:qa-qq-a4:h18-m05",
+              "source_name": "虚构四年级A班",
+              "sender": "英语唐老师"
+            },
+            {
+              "ref": "message:qa-qq-a4:h18-m13",
+              "source_name": "虚构四年级A班",
+              "sender": "英语唐老师"
+            }
+          ],
+          "published_at": "2026-11-04T16:05:00+08:00",
+          "publisher": "英语唐老师",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    },
+    {
+      "subject": "语文",
+      "items": [
+        {
+          "id": "AGENT-160c6c9c820698a880291826",
+          "kind": "task",
+          "task_id": "AGENT-160c6c9c820698a880291826",
+          "title": "朗读《风经过小巷》第2、3自然段",
+          "subject": "语文",
+          "category": "homework",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "school",
+          "origin_label": "学校消息",
+          "lines": [
+            "今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；",
+            "不用录音，也不用上传，明早我抽听",
+            "不用背诵。",
+            "明早老师抽听。",
+            "朗读仍是《风经过小巷》第2、3自然段各两遍，明早抽听。",
+            "今天18:30由家长听读。",
+            "林老师布置的那项朗读，今天18:30我来听，仍按老师说的两遍。"
+          ],
+          "plan_lines": [],
+          "follow_ups": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "published",
+              "label": "发布",
+              "value": "2026-11-04 15:45",
+              "known": true
+            },
+            {
+              "role": "check",
+              "label": "检查",
+              "value": "2026-11-05",
+              "known": true,
+              "today": true,
+              "words": "明早我抽听"
+            },
+            {
+              "role": "due",
+              "kind": "deadline",
+              "label": "截止",
+              "value": "2026-11-04",
+              "known": true,
+              "state": "overdue"
+            }
+          ],
+          "today": true,
+          "when": "today",
+          "publications": [
+            {
+              "ref": "message:qa-qq-a4:h18-m02",
+              "source_name": "虚构四年级A班",
+              "sender": "语文林老师"
+            },
+            {
+              "ref": "message:qa-qq-a4:h18-m18",
+              "source_name": "虚构四年级A班",
+              "sender": "语文林老师"
+            },
+            {
+              "ref": "message:qa-manual-a:h18-m10",
+              "source_name": "虚构家庭手动补录（甲）",
+              "sender": "虚构家长"
+            }
+          ],
+          "published_at": "2026-11-04T15:45:00+08:00",
+          "publisher": "语文林老师",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    },
+    {
+      "subject": "数学",
+      "items": [
+        {
+          "id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+          "kind": "task",
+          "task_id": "AGENT-5d27ac7f28c9ee5d2ed99634",
+          "title": "数学：完成《每日练习》第26页第1—3题",
+          "subject": "数学",
+          "category": "homework",
+          "status": "待跟进",
+          "closed": false,
+          "pending_review": false,
+          "origin": "school",
+          "origin_label": "学校消息",
+          "lines": [
+            "第4题不做。",
+            "每题写出算式并验算。",
+            "请家长签字。",
+            "周五交给数学周老师。",
+            "家长签字后，周五交给数学周老师。"
+          ],
+          "plan_lines": [],
+          "follow_ups": [
+            {
+              "label": "更正",
+              "time": "2026-11-04 16:00",
+              "text": "再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。"
+            }
+          ],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "published",
+              "label": "发布",
+              "value": "2026-11-04 15:40",
+              "known": true
+            },
+            {
+              "role": "complete",
+              "label": "完成",
+              "value": "2026-11-04",
+              "known": true,
+              "today": false
+            },
+            {
+              "role": "due",
+              "kind": "handback",
+              "label": "交回",
+              "value": "2026-11-06",
+              "known": true,
+              "state": "next_morning"
+            }
+          ],
+          "today": false,
+          "when": "later",
+          "publications": [
+            {
+              "ref": "message:qa-qq-a4:h18-m01",
+              "source_name": "虚构四年级A班",
+              "sender": "数学周老师"
+            },
+            {
+              "ref": "message:qa-qq-a4:h18-m09",
+              "source_name": "虚构四年级A班",
+              "sender": "数学周老师"
+            }
+          ],
+          "published_at": "2026-11-04T15:40:00+08:00",
+          "publisher": "数学周老师",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ],
+      "undated": 0
+    }
+  ],
+  "closed": [],
+  "wrong": [],
+  "upcoming": [],
+  "undated": [
+    {
+      "subject": "美术",
+      "items": [
+        {
+          "id": "agent-0049f82473af2b6a7ea940d7503d5835",
+          "kind": "school",
+          "task_id": "",
+          "title": "美术：带落叶事项已取消",
+          "subject": "美术",
+          "category": "todo",
+          "status": "待核对",
+          "closed": false,
+          "pending_review": true,
+          "origin": "school",
+          "origin_label": "学校消息",
+          "lines": [
+            "原要求明天美术课每人带两片落叶，夹在一本旧书里带来。",
+            "后续通知取消该项：不用带叶子和夹叶子的旧书，明天美术改用教室里的材料。"
+          ],
+          "plan_lines": [],
+          "follow_ups": [],
+          "complete_words": "",
+          "facts": [
+            {
+              "role": "published",
+              "label": "发布",
+              "value": "2026-11-04 16:15",
+              "known": true
+            },
+            {
+              "role": "due",
+              "label": "截止",
+              "value": "日期未写明，不猜",
+              "known": false
+            }
+          ],
+          "today": false,
+          "when": "unknown",
+          "publications": [
+            {
+              "ref": "message:qa-qq-a4:h18-m07",
+              "source_name": "虚构四年级A班",
+              "sender": "美术许老师"
+            },
+            {
+              "ref": "message:qa-qq-a4:h18-m12",
+              "source_name": "虚构四年级A班",
+              "sender": "美术许老师"
+            }
+          ],
+          "published_at": "2026-11-04T16:15:00+08:00",
+          "publisher": "美术许老师",
+          "progress": null,
+          "records": [],
+          "wrong": []
+        }
+      ]
+    }
+  ],
+  "materials": [],
+  "counts": {
+    "open": 3,
+    "closed": 0,
+    "upcoming": 0,
+    "material": 0,
+    "undated": 1,
+    "today": 2,
+    "overdue": 0,
+    "later": 1,
+    "earlier": 0,
+    "unknown": 0,
+    "passed": 0
+  },
+  "schedule": {
+    "lessons": [],
+    "plans": [],
+    "cancelled": 0,
+    "completed": 0
+  },
+  "schedule_error": "",
+  "week": [
+    {
+      "day": "2026-11-02",
+      "open": 0,
+      "today": 0,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-03",
+      "open": 0,
+      "today": 0,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-04",
+      "open": 3,
+      "today": 3,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-05",
+      "open": 3,
+      "today": 2,
+      "overdue": 0,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-06",
+      "open": 3,
+      "today": 1,
+      "overdue": 2,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-07",
+      "open": 3,
+      "today": 0,
+      "overdue": 3,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    },
+    {
+      "day": "2026-11-08",
+      "open": 3,
+      "today": 0,
+      "overdue": 3,
+      "closed": 0,
+      "upcoming": 0,
+      "schedule": 0
+    }
+  ],
+  "learning": {
+    "subjects": [],
+    "pack": {
+      "installed": false,
+      "message": "知识包未安装或与固定版本不一致；原错题与引导照常可用"
+    }
+  },
+  "school_pending": 0,
+  "school_read_gaps": [
+    {
+      "name": "虚构四年级A班",
+      "status": "读取待核对"
+    },
+    {
+      "name": "虚构四年级A班提醒群",
+      "status": "读取待核对"
+    },
+    {
+      "name": "虚构家庭手动补录（甲）",
+      "status": "读取待核对"
+    }
+  ]
+}

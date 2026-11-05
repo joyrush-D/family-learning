@@ -1,0 +1,7 @@
+{
+  "base": "http://127.0.0.1:8811",
+  "child": "child-1",
+  "today": "2026-11-04",
+  "planItems": 1,
+  "failures": []
+}

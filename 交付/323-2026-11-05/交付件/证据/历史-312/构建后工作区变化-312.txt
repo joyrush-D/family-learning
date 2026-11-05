@@ -1,0 +1,42 @@
+构建后工作区变化（Build 312）
+记录时间：2026-11-05T00:45:33
+
+本文件如实记录：312 构建（2026-11-04T16:40:49Z，输入快照见 源码版本-312.txt）之后，REPO 工作区又被队友继续编辑。
+312 的 App 二进制与证据对应的是构建时快照，不是当前工作区。
+
+文件 | 构建时 sha1（记录） | 当前 sha1 | 当前 mtime
+app.js | 4c17738b… | 4c17738bb0917e0eee4c098214502ddbc363b333 （未变） | 2026-11-04 15:40:22
+calendar.js | 9aa10da9… | c0b23f9fd86aace0ae101833b63c2b42eb3e676e （已变化） | 2026-11-05 00:43:01
+family_agenda.py | 8348a716… | 932598a705857c718dd5852d4d19f24a98d40a3e （已变化） | 2026-11-05 00:44:14
+family_agent.py | 517b7517… | 517b7517f91d9bc0e08e0a0b6b806f50f54e5d77 （未变） | 2026-11-05 00:34:23
+packaging/macos/Sources/Workspace.swift | d62e27df… | 8fa16b8b57f564d952e4abd900ab8c2659572f26 （已变化） | 2026-11-05 00:43:48
+packaging/macos/Sources/WorkspaceAPI.swift | 2d43a511… | 85e6f86eb91671ecc38ff1ea6bc1ed41aa6aa2f0 （已变化） | 2026-11-05 00:43:22
+workbench.css | 8dd06f3a… | 40a7981021280305f31239c52c1d0efd7b0d1622 （已变化） | 2026-11-05 00:43:11
+test_school_completion_today.py | 504afb22… | 504afb2283139bb51d882b9445db25da0d46bbe8 （未变） | 2026-11-04 15:50:49
+
+git status --porcelain（当前）：
+ M app.js
+ M calendar.js
+ M family_agenda.py
+ M family_agent.py
+ M packaging/macos/Sources/Workspace.swift
+ M packaging/macos/Sources/WorkspaceAPI.swift
+ M test_school_completion_today.py
+ M workbench.css
+
+git diff --stat（当前）：
+ app.js                                     |   5 +-
+ calendar.js                                | 217 ++++++++++--
+ family_agenda.py                           | 242 ++++++++++++--
+ family_agent.py                            | 516 +++++++++++++++++++++++++++--
+ packaging/macos/Sources/Workspace.swift    | 146 +++++++-
+ packaging/macos/Sources/WorkspaceAPI.swift |   6 +
+ test_school_completion_today.py            |  41 ++-
+ workbench.css                              | 231 +++++++++++++
+ 8 files changed, 1320 insertions(+), 84 deletions(-)
+
+影响判断：
+- App 二进制：312 用 00:40 的 Swift 源码编译；之后 Workspace.swift / WorkspaceAPI.swift 又改，因此原生界面是 00:40 版，不是当前最新。
+- 网页 UI：由后台运行时从 REPO 读取，当前工作区变化会直接反映到网页端（与 312 证据里的截图可能不一致）。
+- 后台 Python：family_agenda.py 在构建后又改，312 的十八渠道/默认演示证据也基于 00:40 版投影。
+- 结论：若需逐字冻结当前工作区，应重新构建（建议 313）；312 作为「可体验版」交付不受影响，但文档与证据须按本文件如实标注。

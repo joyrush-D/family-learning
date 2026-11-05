@@ -1,0 +1,35 @@
+Build 322 网页深链接六宽度证据（虚构快照，day=2026-11-04，child-1；无头 Chrome）
+
+运行：工具/深链接六宽度.sh（隔离 REPO 副本 + 快照数据 + 临时 app.py 固定 FAMILY_TODAY=2026-11-04，不打开 App，不改 REPO/快照）
+深链接：/ ?child_id=child-1&day=2026-11-04&task=AGENT-5d27ac7f28c9ee5d2ed99634&checkup=1#checkup
+说明：lead 给的示例 task=MANUAL-78101… 是在被误写的快照里手动录入的「识字小卡」；该误写已清理（见快照数据更正-322.txt），
+      改用同一份快照里真实存在的做题卡 AGENT-5d27…（数学：完成《每日练习》第26页第1—3题），深链接机制完全相同。
+
+| 宽度 | 今天清单行数 | 首卡 rect | scrollTop | docH | 深链接 step | 面板 title | 选照片 | 开始核对 disabled | 详情浮层同时可见 | outline | 非 GET | pageerror |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 360 | 3 | x12 y179 336×759 | 0 | 1211 | photos | 核对这份作业 | True/True | True | False | none | 0 | 0 |
+| 390 | 3 | x12 y179 366×735 | 0 | 1187 | photos | 核对这份作业 | True/True | True | False | none | 0 | 0 |
+| 768 | 3 | x12 y179 744×712 | 0 | 1164 | photos | 核对这份作业 | True/True | True | False | none | 0 | 0 |
+| 1024 | 3 | x214 y330 784×700 | 0 | 1214 | photos | 核对这份作业 | True/True | True | False | none | 0 | 0 |
+| 1200 | 3 | x238 y164 936×628 | 0 | 860 | photos | 核对这份作业 | True/True | True | True | none | 0 | 0 |
+| 1440 | 3 | x358 y164 936×628 | 0 | 860 | photos | 核对这份作业 | True/True | True | True | none | 0 | 0 |
+
+结论：六个宽度 `failures: []`；打开核对面板前后列表容器 rect / scrollTop / docH **完全不变**（`listMoved=false`）；
+URL 里的 `task/checkup` 与 `#checkup` 均已被 strip；核对面板在 photos 步、选照片入口可见、开始核对按钮初始 disabled；
+手机（360/390/768）只显示核对面板（详情浮层不可见），1024 起详情与面板可同时存在；无横向滚动、无 pageerror、无程序化 focus 蓝框。
+
+截图：`证据/screens-322/深链接/w<宽度>-list.png`（今天页）、`w<宽度>-checkup.png`（深链接核对面板）；量数原文见同目录 metrics.json。
+
+截图 sha1：
+  5737266d5ca348e7c47ec227ac0689f130eef469  w1024-checkup.png
+  e0cc5080198197b893cec8563c37e5058b6b4ec5  w1024-list.png
+  8284598f8d83a0850a6c1e00ae10bfbe230e5012  w1200-checkup.png
+  f3b16b5547d237545abcc4feeaff4d512fae11a4  w1200-list.png
+  9e4ceb5b26cd66035b072220b5cdbf9b340e5ec5  w1440-checkup.png
+  912d86c6fd0be98b62ad386ff71da030e25e3598  w1440-list.png
+  745d75c055fb3961a067175b4d642843c3320178  w360-checkup.png
+  7dec0df1b40a369c0140740526f948dd75210964  w360-list.png
+  439f8e2f9b2102f4499d3137952d0b3d9ac497d0  w390-checkup.png
+  212b25e35e8fef665f20445fb824043c26a3c05b  w390-list.png
+  1d904fc6edbac6ccf52ad8b7d1918b9118a841fe  w768-checkup.png
+  6815264c8fe925939f9c22279375a57faa2ee233  w768-list.png

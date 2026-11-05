@@ -1,0 +1,12 @@
+记录时间: 2026-11-05T15:07:00Z
+构建输入: commit worktree /tmp/rel-322 @ 9a5d4d731035b93a136dba680d5915271f121b00
+
+构建后 worktree 状态:
+（空，无改动）
+worktree HEAD: 9a5d4d731035b93a136dba680d5915271f121b00
+
+构建期间主仓库状态（只读；其未提交文件属 323 草稿，不进入本包）:
+M family_agent.py
+ M test_school_fold_visibility.py
+
+结论: 构建源（worktree）在构建前后无改动；主仓库未参与构建，本包与其未提交改动无关。

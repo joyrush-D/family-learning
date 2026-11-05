@@ -1,0 +1,11 @@
+ app.js                                     |   5 +-
+ calendar.js                                | 183 ++++++++++++++++++++----
+ family_agenda.py                           | 215 ++++++++++++++++++++++++++---
+ family_agent.py                            | 158 ++++++++++++++++++---
+ packaging/macos/Sources/Workspace.swift    | 100 +++++++++++++-
+ packaging/macos/Sources/WorkspaceAPI.swift |   2 +
+ test_school_completion_today.py            |  41 ++++--
+ workbench.css                              | 215 +++++++++++++++++++++++++++++
+ 8 files changed, 838 insertions(+), 81 deletions(-)
+# 被 .gitignore 忽略的新文件（不在 git status --porcelain 中，仍补入 fix.patch）
+ test_daily_list_expression.py | 320 ++

@@ -1,0 +1,40 @@
+Build 323 源码版本记录
+记录时间: 2026-11-05T15:22:42Z
+REPO（构建源）: /tmp/rel-323 (git worktree add /tmp/rel-323 5c980dd)
+REPO（证据 diff 源）: /Users/joyrush/.local/share/family-learning/public-integration-20260926
+HEAD: 5c980dd6d1b34e25417cb0224d8ad39d48c8413c
+lead 冻结 HEAD: 5c980dd6d1b34e25417cb0224d8ad39d48c8413c（一致）
+构建号: 323
+
+构建输入（全部取自 commit 5c980dd，无本地补丁）:
+  3ccac719db31aade28f5afd2691ce20a8801c0b1  packaging/macos/Sources/Workspace.swift
+  6623929e1529d5226af4fbce06ac28dc2d76afe7  packaging/macos/Sources/WorkspaceAPI.swift
+  89606c23d0ccbda14ef462f18b7d9ff474d4ae48  calendar.js
+  6ecf5ad184f1cbecef4704f1c6c86457f0a3932d  workbench.css
+  4c17738bb0917e0eee4c098214502ddbc363b333  app.js
+  577ee658a184c5a1c79fd60971dcac1d64e76069  family_agent.py
+  234a99794c4e2a22d631ed1520b44b7dd81f3d50  family_agenda.py
+  bf2c974be34b6460d980d18b8e2ffc1498611be1  family_llm.py
+  58cc5a28683a207be3baa9f8202a25b0908a3704  test_daily_list_expression.py
+  1ed4ade54f781de969ca0afe035be04c26617714  test_school_fold_visibility.py
+  43f18a4235a36b6267a110ccdbd3cb41979304c3  test_native_workspace.cjs
+
+工作区状态: /tmp/rel-323 干净（git status --porcelain 空）；主仓库 HEAD 同 commit、构建期间保持只读。
+说明: 本轮从 commit 取构建，没有本地补丁；重建脚本默认把 .gitignore 的两个测试文件补进 fix.patch，但它们已在 commit 内，产生的 fix.patch-323 属重复内容，已删除，不随包提交。
+
+App 二进制: 8,476,960 字节
+sha1: 2b78dc75ce509d6361b11f01cb3bca449151d967
+CFBundleVersion: 323
+
+行数:
+    5611  packaging/macos/Sources/Workspace.swift
+     500  packaging/macos/Sources/WorkspaceAPI.swift
+    1433  calendar.js
+    1362  workbench.css
+    2564  app.js
+   10976  family_agent.py
+    2445  family_agenda.py
+    3371  family_llm.py
+     690  test_daily_list_expression.py
+     448  test_school_fold_visibility.py
+     202  test_native_workspace.cjs
