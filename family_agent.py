@@ -3228,7 +3228,7 @@ def _school_oral_entry(entry):
     return bool(_SCHOOL_ORAL_PERSON.search(sender) or _SCHOOL_ORAL_ACCOUNT.search(account))
 
 
-_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：','same':'后到提醒原文：','earlier':'先前提醒：'}
+_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：','same':'后到提醒原文：','earlier':'先前提醒：','document':'附件要求：'}
 
 
 def _school_folded_originals(plan):
@@ -8780,6 +8780,8 @@ def _check_school_page(store, c, row, *, accepting=False):
         except (AgentError,ValueError,KeyError,TypeError): seen=''
         if not seen or seen!=recorded.get('fingerprint'):
             raise AgentError('原件整理已失效，请重新读取后再处理；原事项未更改',409,'material_evidence_stale')
+    if accepting and json.loads(row['plan'] or '{}').get('school_document_wait'):
+        raise AgentError('附件原件尚未读取，完整要求仍在整理；请稍候再核对',409,'school_document_unread')
 
 
 def _school_active(store, c, row):
@@ -9882,6 +9884,53 @@ def _save_school_originals(store,c,row,items,key,fp,now):
 
 
 
+_SCHOOL_DOCUMENT_WAIT_TICKS=2
+_SCHOOL_DOCUMENT_MIMES=frozenset({'application/pdf','application/msword','application/vnd.ms-powerpoint',
+    'application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'})
+_SCHOOL_DOCUMENT_NAME=re.compile(r'\.(?:pdf|docx?|pptx?|xlsx?)$',re.IGNORECASE)
+
+
+def _school_document_files(c,row):
+    """Document attachments of this candidate's own messages, database rows only (no file, render or model)."""
+    found=[]
+    for quote in json.loads(row['evidence'] or '[]'):
+        if not str(quote.get('ref') or '').startswith('message:'): continue
+        source_id,message_id=quote['ref'][8:].rsplit(':',1)
+        rows=c.execute("SELECT a.upload_id AS upload_id,u.name AS name,u.mime AS mime FROM agent_message_attachments a "
+                       "LEFT JOIN uploads u ON u.id=a.upload_id WHERE a.source_id=? AND a.message_id=? ORDER BY a.upload_id",
+                       (source_id,message_id)).fetchall()
+        for value in rows:
+            mime=str(value['mime'] or '');name=str(value['name'] or '')
+            if mime in _SCHOOL_DOCUMENT_MIMES or (not mime and _SCHOOL_DOCUMENT_NAME.search(name)):
+                found.append(dict(upload_id=value['upload_id'],name=name,mime=mime,source_id=source_id,message_id=message_id))
+    if not found: return []
+    return [dict(f,key=family_pdf_material.job_key(dict(id=f['source_id']),dict(id=f['message_id']))) for f in found]
+
+
+def _school_document_wait(store,row,evidence):
+    """Why a notice with a still-unread document original must not be accepted as a complete task yet.
+
+    The product reads PDF/OOXML originals through its own bounded page worker; until that reading is complete the
+    notice's executable requirements are unknown, so accepting the free summary would drop user content. Only a
+    reading that can still arrive waits: a worker that already gave up, a document the page path does not own, or a
+    candidate whose complete original action is already saved never blocks the notice."""
+    plan=json.loads(row['plan'] or '{}')
+    if plan.get('school_original_action'): return None
+    with store._db() as c:
+        files=_school_document_files(c,row)
+        if not files: return None
+        complete={value.get('upload_id') for value in _school_pdf(store,c,row) if value.get('upload_id')}
+        waiting=[]
+        for value in files:
+            if value['upload_id'] in complete: continue
+            job=c.execute('SELECT attempts,done,error FROM agent_jobs WHERE id=?',(value['key'],)).fetchone()
+            if job is not None and job['done'] and str(job['error'] or ''): continue  # the page worker gave up; do not stall
+            waiting.append(value)
+        return waiting or None
+
+
 def _accept_school_reading(app,store,row,evidence,now,*,original=False):
     plan=json.loads(row['plan']);brief=plan.get('school_task',{});created=failed=0
     adjusted=_school_gap_accept(store,row,brief,None,evidence,now)
@@ -9891,6 +9940,32 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
             c.execute("UPDATE agent_items SET title=?,body=?,plan=? WHERE id=? AND state='pending' AND updated=?",
                       (brief.get('title') or row['title'],_school_folded_body(plan,brief.get('goal') or row['body']),_json(plan),row['id'],row['updated']))
         row['title']=brief.get('title') or row['title'];row['body']=_school_folded_body(plan,brief.get('goal') or row['body']);row['plan']=_json(plan)
+    if not original:
+        waiting=_school_document_wait(store,row,evidence)
+        wait_record=plan.get('school_document_wait') or {}
+        if waiting or wait_record:
+            waited=int(wait_record.get('ticks') or 0)
+            if waiting and waited<_SCHOOL_DOCUMENT_WAIT_TICKS:
+                brief.update(state='review',reason='原件（附件）尚未整理完成，完整行动与完成标准待补；已保存的候选与已读要求保留，整理完成后自动并入本事项。')
+                plan['school_task']=brief
+                plan['school_document_wait']=dict(ticks=waited+1,at=now.isoformat(),prior_state=wait_record.get('prior_state') or 'ready',documents=[value['name'] or value['upload_id'] for value in (waiting or [])])
+                with store._db() as c:
+                    c.execute("UPDATE agent_items SET plan=? WHERE id=? AND state='pending' AND updated=? AND plan=?",(_json(plan),row['id'],row['updated'],row['plan']))
+                return created,failed
+            # The reading cannot arrive any more: release the notice with a readable gap instead of stalling it forever.
+            if wait_record.get('prior_state')=='ready': brief['state']='ready'
+            names=[value['name'] or value['upload_id'] for value in (waiting or [])]
+            if not names: names=list(wait_record.get('documents') or [])
+            gap='内容待补：附件原件尚未读取' + ('（'+'、'.join(names)+'）' if names else '') + '；具体题目与要求待读到附件后补充。'
+            goal=(brief.get('goal') or row['body'] or '').strip()
+            if gap not in goal: goal=(goal+'\n'+gap).strip()
+            brief.update(goal=goal,material_gap=dict(documents=names,unread=True,reason_code='processing_pending'))
+            plan['school_task']=brief;plan.pop('school_document_wait',None)
+            plan['school_document_gap']=dict(refs=[q['ref'] for q in json.loads(row['evidence'] or '[]') if str(q.get('ref') or '').startswith('message:')],
+                                              names=names,at=now.isoformat())
+            with store._db() as c:
+                c.execute("UPDATE agent_items SET body=?,plan=? WHERE id=? AND state='pending' AND updated=?",(_school_folded_body(plan,goal),_json(plan),row['id'],row['updated']))
+            row['body']=_school_folded_body(plan,goal);row['plan']=_json(plan)
     if (original or any(brief.get(k) for k in ('material_evidence','page_evidence','pdf_evidence'))) and brief.get('state')=='ready':
         import family_agenda
         published=[family_agenda.sent_day(e.get('time')) for e in evidence]
@@ -9916,6 +9991,10 @@ def _accept_school_reading(app,store,row,evidence,now,*,original=False):
                 result=store.act(dict(id=row['id'],action='accept',expected_updated=row['updated']),school_auto=True)
                 _school_accept_fold(store,row,plan)
                 created+=not result.get('deduplicated',False)
+            if 'school_document_wait' in plan:
+                cleaned=dict(plan);cleaned.pop('school_document_wait',None)
+                with store._db() as c:
+                    c.execute("UPDATE agent_items SET plan=? WHERE id=?",(_json(cleaned),row['id']))
         except (AgentError,sqlite3.IntegrityError) as error:
             if isinstance(error,AgentError) and error.code=='school_correction_changed':
                 expected=_json(plan);brief.update(state='review',reason=str(error));plan['school_task']=brief
@@ -10020,6 +10099,60 @@ def _fold_school_follows(app, store, now):
             c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(target_plan),now.isoformat(),target['id']))
             used+=1
     return used
+
+
+_SCHOOL_DOCUMENT_LINE='内容待补：附件原件尚未读取'
+
+
+def _school_document_late(store,now):
+    """Fold an original's requirements into a task that was accepted while its page reading was still missing.
+
+    The bounded wait releases a notice with a readable gap instead of stalling it. If the page worker finishes later,
+    leaving that gap alone would keep user content out of the saved task, so the complete requirement lines join the
+    task's action here (and its own body) exactly once, the gap line is removed, and the fold is recorded. Only rows
+    that were released by the wait path carry the marker: no other accepted item is touched, no card or task is added,
+    and the task's cited messages, dates and publications stay as they were.
+    """
+    created=0
+    with store._db() as c:
+        rows=[dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='accepted' AND task_id!='' ORDER BY updated,id")]
+    for row in rows:
+        plan=json.loads(row['plan'] or '{}');gap=plan.get('school_document_gap')
+        if not gap or plan.get('school_document_folded') or plan.get('school_original_action'): continue
+        try:
+            with store._db() as c: material=_school_pdf(store,c,row)
+        except (AgentError,ValueError,KeyError,TypeError): continue
+        reading=_pdf_evidence(material) if material else None
+        if not reading or not reading.get('requirements_complete'): continue
+        lines=[]
+        for document in reading['model']:
+            for group in document['groups']:
+                for text in group.get('requirements') or []:
+                    text=str(text).strip()
+                    if text and text not in lines: lines.append(text)
+        if not lines: continue
+        with store._db() as c:
+            c.execute('BEGIN IMMEDIATE')
+            live=c.execute('SELECT * FROM agent_items WHERE id=?',(row['id'],)).fetchone()
+            if live is None or dict(live)!=row: continue
+            task=c.execute('SELECT * FROM manual_tasks WHERE id=?',(row['task_id'],)).fetchone()
+            if task is None: continue
+            action=str(task['action'] or '');body=str(row['body'] or '')
+            missing=[text for text in lines if text not in action]
+            has_gap=any(line.startswith(_SCHOOL_DOCUMENT_LINE) for line in action.splitlines())
+            if not missing and not has_gap: continue
+            def cleared(text):
+                kept=[line for line in text.splitlines() if not line.startswith(_SCHOOL_DOCUMENT_LINE) and line.strip()]
+                if missing: kept+=['附件要求：'+text_line for text_line in missing]
+                return '\n'.join(kept).strip()
+            plan['school_document_folded']=dict(refs=list(gap.get('refs') or []),requirements=missing or lines,at=now.isoformat(),names=list(gap.get('names') or []))
+            plan.pop('school_document_gap',None)
+            plan['school_folded']=list(plan.get('school_folded') or [])+[dict(change='document',refs=list(gap.get('refs') or []),at=now.isoformat(),
+                originals=[dict(text=text) for text in lines])]
+            c.execute('UPDATE manual_tasks SET action=? WHERE id=?',(cleared(action),row['task_id']))
+            c.execute('UPDATE agent_items SET body=?,plan=?,updated=? WHERE id=?',(cleared(body),_json(plan),now.isoformat(),row['id']))
+            created+=1
+    return created
 
 
 def _refresh_school(app, store, now, budget):
@@ -10730,6 +10863,8 @@ def run_once(app, now=None):
             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
             _fold_school_follows(app,store,now)
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
+            if _school_document_late(store,now): created+=0  # late original requirements join their accepted task, no new card
+
             # Fresh batches above go first; saved repeats of one affair are revisited only with a call to spare.
             same=_reconcile_school_same(app,store,now,min(1,max(0,budget-1)));budget-=same['used'];processed+=same['used'];failed+=same['failed']
             # Old batches holding a later notice of an earlier pending item go last: every existing recovery path keeps its turn.

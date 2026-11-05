@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import sqlite3
 import unittest
+from unittest import mock
 
 import family_agent as agent
 
@@ -268,6 +269,179 @@ class FoldAcceptTest(unittest.TestCase):
         twice = self.connection.execute("SELECT action,source FROM manual_tasks WHERE id='TASK-1'").fetchone()
         self.assertEqual(once['action'], twice['action'])
         self.assertEqual(once['source'], twice['source'])
+
+
+class DocumentOriginalWaitTest(unittest.TestCase):
+    """A document original's requirements are never dropped because the card was accepted before they were read.
+
+    The page worker reads PDF/OOXML originals in the background. If the notice is accepted first, the free summary
+    becomes a complete task without the attachment's executable requirements. These tests hold the acceptance while
+    the reading can still arrive, release it with a readable material gap when the worker gave up, and prove an
+    already merged original action is not read, waited for or duplicated a second time.
+    """
+
+    def setUp(self):
+        import io
+        import urllib.parse
+        from test_agent import AgentTests
+        self.fixture = AgentTests(methodName='runTest')
+        self.fixture.setUp()
+        self.app = self.fixture.app
+        self.store = self.fixture.store
+        self.source = self.fixture.source
+        self.mid = 'race-1'
+        stamp = '2026-11-04T16:05:00+08:00'
+        self.store.ingest(dict(source_id=self.source['id'], expected_cursor='10', cursor='11', checked_at=stamp,
+                               last_message_time=stamp, error='',
+                               messages=[dict(id=self.mid, time=stamp, kind='text', sender='英语唐老师',
+                                              sender_id='fiction-english', unread=False, message_order='1',
+                                              text='英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。')]))
+        import test_pdf
+        raw = test_pdf.build_pdf(1)
+        upload = self.app.save_upload(io.BytesIO(raw), len(raw), urllib.parse.quote('英语每日练习.pdf'))
+        self.store.message_attachment(dict(child_id='child-1', source_id=self.source['id'], message_id=self.mid,
+                                           attachment_id=upload['id'], action='attach'), self.app.upload_info)
+        self.upload_id = upload['id']
+        self.ref = 'message:' + self.source['id'] + ':' + self.mid
+
+    def tearDown(self):
+        self.fixture.doCleanups()
+
+    def item(self, plan=None):
+        brief = dict(policy=agent.SCHOOL_TASK_POLICY, state='ready', change='new', purpose='homework',
+                     title='英语《每日练习》', goal='今晚完成英语《每日练习》。\n做完放进英语夹里，明天带来。',
+                     reason='虚构：候选已是可直接保存的完整要求。')
+        stamp = NOW.isoformat()
+        evidence = [dict(ref=self.ref, time='2026-11-04T16:05:00+08:00', unread=False, kind='text',
+                         text='英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。',
+                         publisher='publisher:fiction-english', sender='英语唐老师')]
+        with self.store._db() as c:
+            c.execute("INSERT OR REPLACE INTO agent_items(id,job_id,child_id,kind,title,body,evidence,due,created,updated,plan,task_id) "
+                      "VALUES('agent-race','messages:race','child-1','school','英语《每日练习》',?,?, '2026-11-04',?,?,?, '')",
+                      ('今晚完成英语《每日练习》。\n做完放进英语夹里，明天带来。', json.dumps(evidence), stamp, stamp,
+                       json.dumps(plan or {'school_task': brief})))
+            return dict(c.execute("SELECT * FROM agent_items WHERE id='agent-race'").fetchone())
+
+    def load(self):
+        with self.store._db() as c:
+            return dict(c.execute("SELECT * FROM agent_items WHERE id='agent-race'").fetchone())
+
+    def tasks(self):
+        with self.store._db() as c:
+            return [dict(r) for r in c.execute('SELECT * FROM manual_tasks ORDER BY id')]
+
+    def test_accept_waits_while_the_document_original_is_not_read_yet(self):
+        row = self.item()
+        created, failed = agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+        self.assertEqual((created, failed), (0, 0))
+        with self.store._db() as c:
+            saved = dict(c.execute("SELECT * FROM agent_items WHERE id='agent-race'").fetchone())
+        plan = json.loads(saved['plan'])
+        self.assertEqual(saved['state'], 'pending')
+        self.assertEqual(plan['school_task']['state'], 'review')
+        self.assertIn('原件（附件）尚未整理完成', plan['school_task']['reason'])
+        self.assertEqual(plan['school_document_wait']['ticks'], 1)
+        self.assertEqual(self.tasks(), [])
+
+    def test_a_given_up_original_is_accepted_with_one_readable_gap(self):
+        row = self.item()
+        for _ in range(agent._SCHOOL_DOCUMENT_WAIT_TICKS):
+            agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+            row = self.load()
+        with self.store._db() as c:
+            job_key = agent.family_pdf_material.job_key(dict(id=self.source['id']), dict(id=self.mid))
+            c.execute("INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts,next_try,error,done) "
+                      "VALUES(?,?,3,'','页组整理未成功',1)", (job_key, 'gave-up'))
+        row = self.load()
+        agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+        saved = self.tasks()
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]['action'].count('内容待补：附件原件尚未读取'), 1)
+        self.assertIn('英语每日练习.pdf', saved[0]['action'])
+
+    def test_a_read_original_action_is_not_waited_for_or_duplicated(self):
+        merged = ['一、看图选词第1—3题。', '二、标星单词 under、near 各抄写一遍。', '不需要录音。']
+        brief = dict(policy=agent.SCHOOL_TASK_POLICY, state='ready', change='new', purpose='homework',
+                     title='英语《每日练习》', goal='英语《每日练习》见今天这份附件，今晚完成。\n' + '\n'.join(merged))
+        plan = {'school_task': dict(brief, goal='英语《每日练习》见今天这份附件，今晚完成。\n' + '\n'.join(merged)),
+                'school_original_action': dict(requirements=[dict(text=t, ref=self.ref) for t in merged],
+                                                                     anchors=[dict(ref=self.ref, quote='英语《每日练习》见今天这份附件，今晚完成。', upload_ids=[self.upload_id])])}
+        plan = dict(plan, school_original_action=dict(plan['school_original_action'], requirements=plan['school_original_action']['requirements']))
+        row = self.item(plan)
+        with self.store._db() as c:
+            c.execute("UPDATE agent_items SET body=? WHERE id='agent-race'", (plan['school_task']['goal'],))
+        row = self.load()
+        with self.store._db() as c:
+            self.assertIsNone(agent._school_document_wait(self.store, row, json.loads(row['evidence'])))
+        agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+        saved = self.tasks()
+        self.assertEqual(len(saved), 1)
+        for text in merged:
+            self.assertEqual(saved[0]['action'].count(text), 1)
+
+    def test_a_manual_accept_while_the_original_is_unread_is_refused(self):
+        row = self.item()
+        agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+        row = self.load()
+        with self.assertRaises(agent.AgentError) as caught:
+            self.store.act(dict(id='agent-race', action='accept', expected_updated=row['updated']))
+        self.assertEqual((caught.exception.status, caught.exception.code), (409, 'school_document_unread'))
+        saved = self.load()
+        self.assertEqual(saved['state'], 'pending')
+        self.assertIn('school_document_wait', json.loads(saved['plan']))
+        self.assertEqual(self.tasks(), [])
+
+    def test_the_release_path_accepts_while_the_worker_keeps_running(self):
+        row = self.item()
+        job_key = agent.family_pdf_material.job_key(dict(id=self.source['id']), dict(id=self.mid))
+        with self.store._db() as c:
+            c.execute("INSERT OR REPLACE INTO agent_jobs(id,fingerprint,attempts,next_try,error,done) VALUES(?,?,1,'','',0)", (job_key, 'running'))
+        for _ in range(agent._SCHOOL_DOCUMENT_WAIT_TICKS):
+            agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+            row = self.load()
+            self.assertEqual(row['state'], 'pending')
+        agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+        saved = self.tasks()
+        self.assertEqual(len(saved), 1)
+        plan = json.loads(self.load()['plan'])
+        self.assertNotIn('school_document_wait', plan)
+        self.assertIn('school_document_gap', plan)
+        self.assertEqual(saved[0]['action'].count('内容待补：附件原件尚未读取'), 1)
+        self.assertEqual(self.load()['state'], 'accepted')
+
+    def test_a_late_original_requirement_joins_the_released_task_once(self):
+        requirement_lines = ['一、看图选词第1—3题。', '二、标星单词 under、near 各抄写一遍。', '不需要录音。']
+        row = self.item()
+        for _ in range(agent._SCHOOL_DOCUMENT_WAIT_TICKS):
+            agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+            row = self.load()
+        agent._accept_school_reading(self.app, self.store, row, json.loads(row['evidence']), NOW)
+        self.assertEqual(len(self.tasks()), 1)
+        material = [dict(ref=self.ref, fingerprint='fictional-read-later', name='英语每日练习.pdf',
+                         upload_id=self.upload_id, original='pdf', mime='application/pdf', conversion=None,
+                         page_count=1, batches=[dict(pages=[1], updated='2026-11-04T20:07:00+08:00', draft=dict(
+                             title='英语《每日练习》', note='老师写明的英语练习要求，未见孩子作答。', uncertainties=[],
+                             originals=[dict(upload_id=self.upload_id, title='英语《每日练习》', note='', uncertainties=[],
+                                             requirements=requirement_lines, deferred_contexts=[])]) )])]
+        with mock.patch.object(agent, '_school_pdf', return_value=material):
+            self.assertEqual(agent._school_document_late(self.store, NOW), 1)
+            self.assertEqual(agent._school_document_late(self.store, NOW), 0)
+        saved = self.tasks()
+        self.assertEqual(len(saved), 1)
+        for text in requirement_lines:
+            self.assertEqual(saved[0]['action'].count(text), 1)
+        self.assertNotIn('内容待补：附件原件尚未读取', saved[0]['action'])
+        self.assertEqual(self.load()['state'], 'accepted')
+
+    def test_an_image_attachment_is_not_a_document_wait(self):
+        import io
+        import urllib.parse
+        raw = b'\xff\xd8\xff\xe0' + b'fictional-jpeg' + b'\xff\xd9'
+        upload = self.app.save_upload(io.BytesIO(raw), len(raw), urllib.parse.quote('识字小卡.jpg'),
+                                      )
+        with self.store._db() as c:
+            files = agent._school_document_files(c, dict(evidence=json.dumps([dict(ref=self.ref)])))
+        self.assertEqual([f['upload_id'] for f in files], [self.upload_id])
 
 
 if __name__ == '__main__':
