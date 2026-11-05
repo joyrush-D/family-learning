@@ -30,7 +30,7 @@ REPO=${FAMILY_LEARNING_REPO:-"$HOME/.local/share/family-learning/public-integrat
 # 构建源与证据源可分离：318 起按「主仓库 rsync → 副本排 .git → 副本构建」流程，
 # 构建源是副本（REPO），git 证据来自主仓库（GIT）。
 GIT=${FAMILY_GIT_REPO:-"$REPO"}
-NUMBER=${FAMILY_REBUILD_NUMBER:-319}
+NUMBER=${FAMILY_REBUILD_NUMBER:-322}
 APP_NAME=${FAMILY_REBUILD_APP_NAME:-一起成长.app}
 APP="$here/$APP_NAME"
 EVID="$here/证据"
