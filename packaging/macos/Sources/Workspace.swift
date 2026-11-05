@@ -623,6 +623,38 @@ extension DayItem {
         return "这件属于『\(workKindWord ?? "作业")』，按规矩要一张作业照片；已经记完成的话，照片补上才算核对过。"
     }
 
+    // MARK: 核对沉淀（Build 324）
+
+    /// `/api/day` 每条事项自带的核对进展（服务端 app.py:2019 task_progress）：只读已有 payload，
+    /// 不联网、不加接口；旧后台没有 progress 时按 0——全 0 就是「还没核对出什么」，界面不渲染。
+    var progressWrong: Int { max(0, progress?.wrong ?? 0) }
+    var progressClues: Int { max(0, progress?.clues ?? 0) }
+    var progressRetries: Int { max(0, progress?.retries ?? 0) }
+    var progressHistory: Int { max(0, progress?.history ?? 0) }
+
+    /// 有可说的进展才出现「核对与进展」：错题 / 知识点线索 / 独立再试 / 更正前诊断，任一 > 0。
+    var hasProgress: Bool { progressWrong > 0 || progressClues > 0 || progressRetries > 0 || progressHistory > 0 }
+
+    /// 卡片那一行：顺序固定 错题 → 线索 → 再试；最多两段（卡片只占一行，完整四行在详情里）。
+    /// 只做展示文案，不改写服务端原话，也不出现「掌握 / 精通 / 百分比」这类词。
+    var progressCardSegments: [(key: String, text: String)] {
+        var list: [(key: String, text: String)] = []
+        if progressWrong > 0 { list.append((key: "wrong", text: "已核对 \(progressWrong) 道错题")) }
+        if progressClues > 0 { list.append((key: "clues", text: "知识点线索 \(progressClues) 条")) }
+        if progressRetries > 0 { list.append((key: "retries", text: "独立再试 \(progressRetries) 次")) }
+        return list
+    }
+
+    /// 详情「核对与进展」四行：有的才写；线索括注「不等于掌握」、历史括注「作历史」按规格原话。
+    var progressDetailRows: [(key: String, text: String)] {
+        var list: [(key: String, text: String)] = []
+        if progressWrong > 0 { list.append((key: "wrong", text: "错题 \(progressWrong) 道")) }
+        if progressClues > 0 { list.append((key: "clues", text: "知识点线索 \(progressClues) 条（不等于掌握）")) }
+        if progressRetries > 0 { list.append((key: "retries", text: "独立再试 \(progressRetries) 次")) }
+        if progressHistory > 0 { list.append((key: "history", text: "更正前的诊断 \(progressHistory) 条（作历史）")) }
+        return list
+    }
+
     /// 行内徽章只用短词（≤6 字），最多 4 个：家长扫一眼就知道要不要签字、要不要带、要不要上传；
     /// 完整句子留在详情页。日期类只在不是「当天到期」时出现（当天到期的截止不挂），用相对词。
     func rowBadges(day: String) -> (shown: [String], extra: Int) {
@@ -3264,6 +3296,10 @@ struct DayCard: View {
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 11)
+            // Build 324：进展行固定压在卡片下方留白里（overlay 不参与布局），整卡只多 4pt；
+            // 全 0 时 hasCardProgress 为 false，内边距与高度完全回到 323 的样子。
+            .padding(.bottom, hasCardProgress ? 4 : 0)
+            .overlay(alignment: .bottomLeading) { progressLine }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.card))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -3276,6 +3312,46 @@ struct DayCard: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .probe("row-" + item.id, text: item.title)
+    }
+
+    // MARK: 核对进展（Build 324）
+    /// 卡片上是否有一行进展：有错题/线索/再试才占卡面；三者全 0（或旧后台没有 progress）就完全不渲染。
+    private var hasCardProgress: Bool { !item.progressCardSegments.isEmpty }
+
+    /// 卡片底部一行「已核对 N 道错题 · 知识点线索 M 条」：13px 次要色、单行，最多两段。
+    /// 用 overlay 挂在原卡片的下留白区里，底边只加 4pt——打开清单时卡片高度不随核对结果变化，列表节奏不跳。
+    private var progressLine: some View {
+        let segments = item.progressCardSegments
+        let shown = Array(segments.prefix(2))
+        let visibleText = shown.map(\.text).joined(separator: " · ")
+        return HStack(spacing: 0) {
+            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
+                if index < 2 {
+                    if index > 0 {
+                        Text(" · ")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(Palette.muted)
+                    }
+                    Text(segment.text)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .probe("progress-\(segment.key)-\(item.id)", text: segment.text)
+                } else {
+                    // 第三段起不上卡面（规格最多两段），但锚点照留，验收能读到三个数值。
+                    Color.clear
+                        .frame(width: 0, height: 0)
+                        .probe("progress-\(segment.key)-\(item.id)", text: segment.text)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 42)   // 与标题列对齐：12 卡片内边距 + 18 状态点 + 12 间距
+        .padding(.trailing, 36)  // 给右侧 chevron 留位置
+        .padding(.bottom, 1)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .probe("progress-\(item.id)", text: visibleText)
     }
 
     /// 跨天（Build 319）：只从 facts 里已知的日期算；开始/截止缺哪边就只说哪边，不编日期、不补时分。
@@ -3458,6 +3534,7 @@ struct DayDetail: View {
                     stepsSection
                     negativeSection
                     planSection
+                    progressSection
                     followUpSection
                     sourcesSection
                     materialsSection
@@ -3850,6 +3927,78 @@ struct DayDetail: View {
             return item.planLabel.replacingOccurrences(of: "家庭安排", with: "家里的安排")
         }
         return "家里的安排"
+    }
+
+    // MARK: 核对与进展（Build 324）
+    /// 详情浮层里的「核对与进展」：位置在家里安排之后、后续通知之前；只读 item.progress。
+    /// 错题/线索两行可点（分别切错题本、学习进展 tab）；四行全空时整节不渲染、不占高度。
+    @ViewBuilder
+    private var progressSection: some View {
+        if item.hasProgress {
+            block("核对与进展") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(Array(item.progressDetailRows.enumerated()), id: \.offset) { _, row in
+                        progressRow(row.key, text: row.text)
+                    }
+                    HStack(spacing: 8) {
+                        Button {
+                            store.closeDetail()
+                            store.mode = .learning
+                        } label: {
+                            Text("看学习进展").font(.system(size: 12))
+                        }
+                        .buttonStyle(GroveButtonStyle(kind: .quiet))
+                        .help("切到学习进展：这份作业核对出的知识点线索都在那里")
+                        .probe("progress-goto-learning", text: "看学习进展")
+                        Button {
+                            store.closeDetail()
+                            store.mode = .wrong
+                        } label: {
+                            Text("看错题本").font(.system(size: 12))
+                        }
+                        .buttonStyle(GroveButtonStyle(kind: .quiet))
+                        .help("切到错题本：核对时存下的错题都在那里")
+                        .probe("progress-goto-wrong", text: "看错题本")
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .probe("detail-progress", text: progressProbeText)
+        }
+    }
+
+    private var progressProbeText: String {
+        item.progressDetailRows.map(\.text).joined(separator: " · ")
+    }
+
+    /// 可点的行用按钮（切 tab），不可点的行只是文字；两种都留 `detail-progress-<key>` 锚点。
+    @ViewBuilder
+    private func progressRow(_ key: String, text: String) -> some View {
+        let label = Text(text)
+            .font(.system(size: 12.5))
+            .foregroundStyle(key == "history" ? Palette.muted : Palette.ink2)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if key == "wrong" || key == "clues" {
+            Button {
+                store.closeDetail()
+                store.mode = key == "wrong" ? .wrong : .learning
+            } label: {
+                HStack(spacing: 6) {
+                    label
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Palette.muted)
+                }
+            }
+            .buttonStyle(.plain)
+            .help(key == "wrong" ? "切到错题本" : "切到学习进展")
+            .probe("detail-progress-\(key)", text: text)
+        } else {
+            label.probe("detail-progress-\(key)", text: text)
+        }
     }
 
     @ViewBuilder
