@@ -69,21 +69,24 @@ function loginProxy(appPort,user,password){
   assert.ok(math,'the fixture has an item due tomorrow');
   const NOTE1='虚构反馈一：跟读已完成，家长听过。',NOTE2='虚构反馈二：照片没加，只写文字。',ORAL='虚构口头：背诵Unit 7课文',WRONG='虚构第3题',NOTE3='虚构反馈三：登录过期后重新登录，同一份草稿再保存。';
   const longest=mine.groups.flatMap(g=>g.items).filter(i=>(i.lines||[]).length).sort((a,b)=>b.lines.join('').length-a.lines.join('').length)[0]||item;
+  // 清单卡片现在只显示 1–2 条要点、完整要求放进详情（改版的设计），旧「整条标准在行内放得下」的 row-fit/inrow fits
+  // 探针随旧 NSTableView 一起消失。替代断言更强：详情里每一条要求都原样排开、高度足够不被裁切
+  // （detail-fit-<id>-<原始下标> 报 fits/cut），逐条校验，而不是只看清单里最长那一条。
+  const fits=row=>row.lines.map((l,i)=>[l,i]).filter(([l])=>String(l||'').trim()).map(([l,i])=>({name:'standard fits #'+(i+1),until:'detail-fit-'+row.id+'-'+i,contains:'fits',timeout:8}));
   const steps=[
    // Initial login from the workbench: the service's own login page in a login window; the window closes and the list reloads.
    {name:'login needed',until:'login-needed',timeout:20},{name:'login open',click:'login-open'},{name:'web login',native:'web_login'},
    {name:'list',until:'list-summary',contains:'共',timeout:20},{name:'upcoming',until:'upcoming',contains:'即将/待补：'},{name:'login state',native:'state'},
    {name:'pick child',key:String(childIndex+1),modifiers:['command']},
-   // Full width, nothing chosen: the longest standard is laid out whole and its frame lies inside its own table row.
-   {name:'full standard fits',until:'row-fit-'+longest.id,contains:'inrow fits',timeout:8},
-   {name:'row',click:'row-'+item.id},{name:'detail',until:'detail-title',contains:item.title.slice(0,4)},
+   // Full width, nothing chosen: the list is one-glance cards; the chosen item's whole standard is laid out in the detail.
+   {name:'row',click:'row-'+item.id},{name:'detail',until:'detail-title',contains:item.title.slice(0,4)},...fits(item),
    // Each unique source message opens in place from the item (the server's own message and its attachments) and returns to the same item.
    ...((item.publications||[]).length?[{name:'source open',click:'source-open-'+item.publications[0].ref},{name:'source text',until:'source-text',timeout:15},{name:'source item',until:'source-item',contains:item.id},{name:'source attachments read',until:'source-attachments',contains:'raw=ok',timeout:15},{name:'source back',click:'source-back'},{name:'same detail',until:'detail-title',contains:item.title.slice(0,4)}]:[]),
    {name:'wide',width:1440,native:'snapshot'},
-   // Geometry, not text: beside the 1440 detail each listed row's complete standard is laid out at the height the whole text needs at that width.
-   {name:'1440 standard fits',until:'row-fit-'+item.id,contains:'inrow fits',timeout:8},...(math&&math.id!==item.id?[{name:'1440 other standard fits',until:'row-fit-'+math.id,contains:'inrow fits',timeout:8}]:[]),
-   {name:'1440 close detail',click:'detail-back'},{name:'1440 full standard fits',until:'row-fit-'+longest.id,contains:'inrow fits',timeout:8},
-   {name:'1440 reopen',click:'row-'+item.id},{name:'1440 detail again',until:'detail-title',contains:item.title.slice(0,4)},
+   // Geometry, not text: at 1440 every requirement line of the open item, of the other tomorrow item and of the longest item is laid out whole in the detail.
+   ...fits(item),...(math&&math.id!==item.id?[{name:'1440 math',click:'row-'+math.id},...fits(math)]:[]),
+   {name:'1440 close detail',click:'detail-back'},{name:'1440 longest',click:'row-'+longest.id},...fits(longest),
+   {name:'1440 reopen',click:'row-'+item.id},{name:'1440 detail again',until:'detail-title',contains:item.title.slice(0,4)},...fits(item),
    {name:'feedback open',click:'feedback-new'},{name:'feedback sheet',until:'feedback-note'},
    {name:'focus note',click:'feedback-note'},{name:'type note',type:NOTE1},
    {name:'esc stays',key:'\u001b',code:53},{name:'still dirty',native:'dirty'},
@@ -120,7 +123,7 @@ function loginProxy(appPort,user,password){
    {name:'tomorrow row',click:'row-'+math.id},{name:'tomorrow words',until:'fact-'+tomorrow.role,contains:tomorrow.label+' 明天'},{name:'no invented morning',find_text:'明早',absent:true,timeout:3},
    {name:'narrow',width:900,native:'snapshot'},
    // At 900 the chosen item is a detail page over the kept list: 返回清单 brings back the same list before choosing again.
-   {name:'back to list',click:'detail-back'},{name:'list kept',until:'row-'+item.id},{name:'900 standard fits',until:'row-fit-'+item.id,contains:'inrow fits',timeout:8},{name:'back state',native:'state'},
+   {name:'back to list',click:'detail-back'},{name:'list kept',until:'row-'+item.id},{name:'900 pick',click:'row-'+item.id},...fits(item),{name:'back state',native:'state'},
    {name:'web tools for the same task',click:'row-'+item.id},{name:'check entry',click:'check-web'},{name:'web state',native:'state'}];
   const stepsFile=path.join(out,'native-steps.json');fs.writeFileSync(stepsFile,JSON.stringify(steps));
   const shots=path.join(out,'shots');fs.mkdirSync(shots,{recursive:true});

@@ -4,35 +4,61 @@ import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
 
-// 颜色、字号与可点高度取自原型 designs/family-grove/styles.css 的 :root（--paper、--leaf-*、--wood-*、--coral-*、--t-*、--hit）。
+// 颜色、字号与可点高度取自日清单改版 designs/family-day-redesign/SPEC.md 第 2 节 tokens（v2-ab.html :root）。
+// 旧名（leaf/wood/coral）保留成语义别名并换成新值，避免整份文件逐处改色值：leaf=主色墨绿、leaf50=主色浅、wood=中性底、coral=提醒。
 enum Palette {
-    static let paper = Color(red: 0xFB / 255, green: 0xF6 / 255, blue: 0xEA / 255)
-    static let paper2 = Color(red: 0xF4 / 255, green: 0xED / 255, blue: 0xDB / 255)
-    static let card = Color(red: 0xFF / 255, green: 0xFD / 255, blue: 0xF7 / 255)
-    static let desk = Color(red: 0xEA / 255, green: 0xE0 / 255, blue: 0xCA / 255)
-    static let line = Color(red: 0xE7 / 255, green: 0xDD / 255, blue: 0xC8 / 255)
-    static let line2 = Color(red: 0xD6 / 255, green: 0xC8 / 255, blue: 0xAB / 255)
-    static let ink = Color(red: 0x3B / 255, green: 0x33 / 255, blue: 0x26 / 255)
-    static let ink2 = Color(red: 0x66 / 255, green: 0x5A / 255, blue: 0x48 / 255)
-    static let leaf = Color(red: 0xA8 / 255, green: 0xD9 / 255, blue: 0x78 / 255)
-    static let leaf50 = Color(red: 0xF2 / 255, green: 0xF8 / 255, blue: 0xE7 / 255)
-    static let leaf100 = Color(red: 0xE3 / 255, green: 0xF1 / 255, blue: 0xD0 / 255)
-    static let leaf400 = Color(red: 0x86 / 255, green: 0xBE / 255, blue: 0x59 / 255)
-    static let leaf700 = Color(red: 0x2D / 255, green: 0x5A / 255, blue: 0x26 / 255)
-    static let leafInk = Color(red: 0x1F / 255, green: 0x4A / 255, blue: 0x1C / 255)
-    static let wood = Color(red: 0xF1 / 255, green: 0xE2 / 255, blue: 0xCC / 255)
-    static let wood300 = Color(red: 0xD8 / 255, green: 0xB8 / 255, blue: 0x8C / 255)
-    static let woodInk = Color(red: 0x6B / 255, green: 0x45 / 255, blue: 0x20 / 255)
-    static let coral = Color(red: 0xFD / 255, green: 0xE6 / 255, blue: 0xDD / 255)
-    static let coral400 = Color(red: 0xE9 / 255, green: 0x8A / 255, blue: 0x6E / 255)
-    static let coralInk = Color(red: 0xA1 / 255, green: 0x3F / 255, blue: 0x2A / 255)
-    static let cardShadow = Color(red: 0x6B / 255, green: 0x45 / 255, blue: 0x20 / 255).opacity(0.13)
+    static let paper = Color(hex: 0xF6F3EC)      // --paper 纸面
+    static let paper2 = Color(hex: 0xFAF7F0)     // --surface-2 卡面2
+    static let card = Color(hex: 0xFFFDF8)       // --surface 卡面
+    static let desk = Color(hex: 0xEFE9DC)
+    static let line = Color(hex: 0xE5DFD1)       // --line
+    static let line2 = Color(hex: 0xD8D0BE)      // --line-strong
+    static let ink = Color(hex: 0x1D1B16)        // --ink
+    static let ink2 = Color(hex: 0x565147)       // --ink-2
+    static let muted = Color(hex: 0x8B8578)      // --muted
+    static let leaf = Color(hex: 0x2F5D4B)       // --accent 墨绿
+    static let leaf50 = Color(hex: 0xE9F0EB)     // --accent-weak
+    static let leaf100 = Color(hex: 0xD3E3D8)    // --accent-line
+    static let leaf400 = Color(hex: 0x2F5D4B)
+    static let leaf700 = Color(hex: 0x24503F)    // --accent-ink
+    static let leafInk = Color(hex: 0x24503F)    // --accent-ink
+    static let wood = Color(hex: 0xF1ECE0)
+    static let wood300 = Color(hex: 0xD8D0BE)
+    static let woodInk = Color(hex: 0x565147)
+    static let coral = Color(hex: 0xFCF1E2)      // --warn-bg
+    static let coral400 = Color(hex: 0xF0DBC0)   // --warn-line
+    static let coralInk = Color(hex: 0x96591C)   // --warn
+    static let danger = Color(hex: 0x9A4432)
+    static let dangerBg = Color(hex: 0xFBEEE9)
+    static let planBg = Color(hex: 0xFDF8EC)     // 家里的安排
+    static let planLine = Color(hex: 0xF0E2C6)
+    static let planInk = Color(hex: 0xA3762A)
+    static let cardShadow = Color(red: 60 / 255, green: 48 / 255, blue: 24 / 255).opacity(0.10)
     static let rounded = Font.system(.body, design: .rounded)
-    /// 标题与控件用圆体（--font-round），正文 15、说明 13（--t-m / --t-xs），主要可点区域 44pt 高（--hit）。
+    /// 标题与控件用圆体，正文 13、说明 11.5，主要可点区域 44pt 高。
     static func round(_ size: CGFloat, _ weight: Font.Weight = .semibold) -> Font { .system(size: size, weight: weight, design: .rounded) }
-    static let body = Font.system(size: 15)
-    static let small = Font.system(size: 13)
+    static let body = Font.system(size: 13)
+    static let small = Font.system(size: 11.5)
     static let hit: CGFloat = 44
+    /// 科目识别色：只做识别点，一律配文字标签，不靠颜色单独表意（色弱可读）。事务取中性灰。
+    static func subjectDot(_ subject: String) -> Color {
+        switch subject {
+        case "语文": return Color(hex: 0xB4622F)
+        case "数学": return Color(hex: 0x2F5F8F)
+        case "英语": return Color(hex: 0x6B4FA0)
+        case "综合事务", "事务": return Color(hex: 0x6B7280)
+        default: return Color(hex: 0x8B8578)
+        }
+    }
+}
+
+extension Color {
+    /// 0xRRGGBB 十六进制，只给 Palette 用，省得每个 token 写三次 /255。
+    init(hex: UInt32) {
+        self.init(red: Double((hex >> 16) & 0xFF) / 255,
+                  green: Double((hex >> 8) & 0xFF) / 255,
+                  blue: Double(hex & 0xFF) / 255)
+    }
 }
 
 /// 三个主入口：日历（本周与所选日，日历内保留“待办/已办”切换）、错题本、学习进展。
@@ -492,7 +518,8 @@ struct GroveButtonStyle: ButtonStyle {
     private func colors(_ pressed: Bool) -> (fill: Color, ink: Color, edge: Color) {
         if !enabled { return (kind == .quiet ? Color.clear : Palette.paper2, Palette.ink2, kind == .quiet ? Color.clear : Palette.line2) }
         switch kind {
-        case .primary: return (Palette.leaf, Palette.leafInk, Palette.leaf400)
+        // 主色换成墨绿后，按下沉边用更深的主色，字必须转白，否则深绿底上深绿字看不清。
+        case .primary: return (Palette.leaf, Color.white, Palette.leaf700)
         case .secondary: return (Palette.card, Palette.ink, Palette.line2)
         case .quiet: return (pressed ? Palette.leaf50 : Color.clear, Palette.leaf700, Color.clear)
         }
@@ -648,20 +675,33 @@ struct WorkspaceView: View {
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
-            // 全窗固定层级：孩子与日期顶栏 → 模式与周导航 → 本周七天 → 主体。三种模式、选中与否都在同一位置，只有下方主体换排。
-            VStack(spacing: 0) {
-                HeaderBar(store: store, compact: width < 1180).geoProbe("context-header")
-                ModeBar(store: store).geoProbe("mode-strip", text: "mode=" + store.mode.id)
-                WeekStrip(store: store).padding(.horizontal, 16).padding(.bottom, 10)
-                    .geoProbe("week-strip", text: "weekday=13 day=22 count=13 minH=66")
-                Rectangle().fill(Palette.line).frame(height: 1)
-                main(width).frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .geoProbe("workspace-body", text: "width=\(Int(width)) T=\(Int(Self.splitWidth))")
+            Group {
+                if store.mode == .calendar {
+                    // 日清单改版：日历模式走新的三档工作台（左栏/看板/详情、胶囊/两列/抽屉、单列/sheet）。
+                    DayWorkbench(store: store, width: width, height: geo.size.height)
+                } else {
+                    // 错题本与学习进展沿用原布局：全窗固定层级顶栏 + 模式周导航 + 周条 + 主体。
+                    legacyStack(width)
+                }
             }
         }
         .background(Palette.paper)
         .environment(\.colorScheme, .light)
         .sheet(item: $store.sheet) { kind in SheetHost(store: store, kind: kind) }
+    }
+
+    /// 错题本 / 学习进展的原布局（孩子与日期顶栏 → 模式与周导航 → 本周七天 → 主体）。
+    @ViewBuilder
+    func legacyStack(_ width: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            HeaderBar(store: store, compact: width < 1180).geoProbe("context-header")
+            ModeBar(store: store).geoProbe("mode-strip", text: "mode=" + store.mode.id)
+            WeekStrip(store: store).padding(.horizontal, 16).padding(.bottom, 10)
+                .geoProbe("week-strip", text: "weekday=13 day=22 count=13 minH=66")
+            Rectangle().fill(Palette.line).frame(height: 1)
+            main(width).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .geoProbe("workspace-body", text: "width=\(Int(width)) T=\(Int(Self.splitWidth))")
+        }
     }
 
     /// 主体：没选时清单用主要宽度（最宽 860、居中），不留空的右栏。选中后宽窗（≥T）清单约 47%、右侧是这一项的详情；窄窗是带
@@ -1926,6 +1966,1961 @@ struct Inspector: View {
             }
         }
     }
+}
+
+// MARK: - 日清单工作台：三档宽度（≥1200 三栏 / 900–1199 两列+抽屉 / <900 单列+sheet）
+//
+// 结构取自 designs/family-day-redesign/SPEC.md 第 1 节与 v2-ab.html：
+// 左栏集合（今天要做 / 各科目 / 明后天 / 已取消 / 已完成），中栏看板（今天要做 / 明后天 / 已完成，
+// 列内是独立卡片），右栏 424 详情。数据只用 GET /api/day 的现有字段，不新增读写接口。
+
+enum DayScope: String, CaseIterable, Identifiable {
+    case today, upcoming, cancelled, closed, undated
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .today: return "今天要做"
+        case .upcoming: return "明后天"
+        case .cancelled: return "已取消"
+        case .closed: return "已完成"
+        case .undated: return "日期未定"
+        }
+    }
+
+    var empty: String {
+        switch self {
+        case .today: return "今天没有要做的事了。"
+        case .upcoming: return "明后天还没有新的安排。"
+        case .cancelled: return "没有被取消的事项。"
+        case .closed: return "这一天还没有已完成的事项。"
+        case .undated: return "没有日期未明确的事项。"
+        }
+    }
+}
+
+struct UpcomingCardModel: Identifiable {
+    let id: String
+    let title: String
+    let subject: String
+    let day: String
+    let pending: Bool
+    let change: String
+
+    var cancelled: Bool {
+        change.contains("取消") || change.lowercased().contains("cancel")
+    }
+}
+
+// 科目标签：综合事务在界面上简称「事务」（只影响显示，不影响筛选与计数）。
+@MainActor func daySubjectWords(_ subject: String) -> String {
+    if subject.isEmpty { return WorkspaceStore.unknown }
+    if subject == WorkspaceStore.general { return "事务" }
+    return subject
+}
+
+// 完成标准里「不做什么」类句子：句首否定词。详情侧把它们从编号步骤里拆出来。
+func isNegativeLine(_ line: String) -> Bool {
+    let text = line.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return false }
+    for prefix in ["不用", "不需要", "不必", "不要", "无需", "不", "别", "免"] where text.hasPrefix(prefix) {
+        return true
+    }
+    return false
+}
+
+extension WorkspaceStore {
+    var dayRawOpenItems: [DayItem] { (current?.groups ?? []).flatMap(\.items) }
+    var dayOpenItems: [DayItem] { dayRawOpenItems.filter { !isCancelledItem($0) } }
+    var dayUndatedItems: [DayItem] { (current?.undated ?? []).flatMap(\.items).filter { !isCancelledItem($0) } }
+    var dayClosedItems: [DayItem] { (current?.closed ?? []).flatMap(\.items) }
+
+    /// 明后天：只留还没被取消的未来项。取消项（标题或要求里写明「已取消/取消该项」）不占明后天列位，
+    /// 只在左栏「已取消」集合与胶囊里可点开——与网页端把取消项收进隐藏集合的口径一致，避免同一天两处条数不同。
+    var dayUpcomingCards: [UpcomingCardModel] {
+        let cancelledIDs = Set(dayCancelledItems.map { $0.id })
+        return (current?.upcoming ?? []).map { row in
+            UpcomingCardModel(id: row.id, title: row.title, subject: row.subject, day: row.day,
+                              pending: row.pending_review, change: row.change ?? "")
+        }.filter { card in
+            !card.cancelled && !cancelledIDs.contains(card.id)
+        }
+    }
+
+    /// 已取消：与网页端 calendar.js:417 groveIsCancelled 逐字同口径——
+    /// `!closed && /已取消|取消该项/.test(title + "\n" + lines.join("\n"))`。
+    /// 任务本身没有 cancelled 这个状态（学校取消会以原题 + 取消说明落库），所以不能在 closed/status 上判断；
+    /// 只看标题与要求原文（后续通知不参与，网页端也不看它），保证两端选中同一批事项。
+    func isCancelledItem(_ item: DayItem) -> Bool {
+        guard !item.closed else { return false }
+        let words = ([item.title] + item.lines).joined(separator: "\n")
+        return words.contains("已取消") || words.contains("取消该项")
+    }
+
+    var dayCancelledItems: [DayItem] {
+        let raw = dayRawOpenItems + (current?.undated ?? []).flatMap(\.items)
+        return raw.filter { isCancelledItem($0) }
+    }
+    var dayCompletedItems: [DayItem] { dayClosedItems }
+
+    var daySubjects: [String] {
+        var seen: [String] = []
+        for item in dayOpenItems where !item.subject.isEmpty && !seen.contains(item.subject) {
+            seen.append(item.subject)
+        }
+        let order = ["语文", "数学", "英语", WorkspaceStore.general]
+        return seen.sorted { left, right in
+            let l = order.firstIndex(of: left) ?? 50
+            let r = order.firstIndex(of: right) ?? 50
+            if l != r { return l < r }
+            return left < right
+        }
+    }
+
+    func dayCount(_ subject: String) -> Int {
+        dayOpenItems.filter { $0.subject == subject }.count
+    }
+
+    var dayProgress: (total: Int, done: Int) {
+        (dayOpenItems.count + dayClosedItems.count, dayCompletedItems.count)
+    }
+
+    /// 顶栏不再依赖旧 doneSwitch 的 showDone/showUndated 开关，自己算一行摘要。
+    /// 末尾保留「即将/待补 N」，与旧清单摘要同一句文案（原生验收按这句断言明后天的条数）。
+    var daySummaryLine: String {
+        var text = "共 \(dayProgress.total) 项 · 今天要做 \(dayOpenItems.count) · 已完成 \(dayProgress.done)"
+        let later = dayUpcomingCards.count
+        if later > 0 { text += " · 即将/待补 \(later)" }
+        return text
+    }
+
+    var dayUpcomingLine: String? {
+        let cards = dayUpcomingCards
+        guard !cards.isEmpty else { return nil }
+        let parts = cards.map { card -> String in
+            var text = String(card.day.dropFirst(min(5, card.day.count))) + " " + card.title
+            if card.pending { text += "（待补）" }
+            if !card.change.isEmpty { text += "（" + card.change + "）" }
+            return text
+        }
+        return "即将/待补：" + parts.joined(separator: "；")
+    }
+
+    var dayMaterialsLine: String? {
+        let groups = current?.materials ?? []
+        let names = groups.flatMap(\.items).map(\.title)
+        guard !names.isEmpty else { return nil }
+        return "学校资料待整理，不算当天要做：" + names.prefix(4).joined(separator: "、")
+    }
+}
+
+struct DayProgressBar: View {
+    let done: Int
+    let total: Int
+
+    var body: some View {
+        HStack(spacing: 9) {
+            Text("\(total) 件 · 已完成 \(done)")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.ink2)
+                .lineLimit(1)
+            ZStack(alignment: .leading) {
+                Capsule().fill(Palette.line).frame(width: 104, height: 5)
+                Capsule().fill(Palette.leaf)
+                    .frame(width: total > 0 ? max(0, min(104, 104 * CGFloat(done) / CGFloat(total))) : 0, height: 5)
+            }
+        }
+    }
+}
+
+struct DayTag: View {
+    let text: String
+    var tone: Color = Palette.paper2
+    var ink: Color = Palette.ink2
+    var border: Color = Palette.line
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(ink)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(tone))
+            .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(border, lineWidth: 1))
+    }
+}
+
+// MARK: 工作台外壳与三档布局
+
+struct DayWorkbench: View {
+    @ObservedObject var store: WorkspaceStore
+    let width: CGFloat
+    let height: CGFloat
+
+    @State private var scope: DayScope = .today
+    @State private var subject: String?
+
+    static let wideWidth: CGFloat = 1200
+    static let midWidth: CGFloat = 900
+
+    var body: some View {
+        VStack(spacing: 0) {
+            DayTopBar(store: store, compact: width < 1180)
+                .geoProbe("context-header", text: "width=\(Int(width))")
+            if !store.notice.isEmpty {
+                HStack(spacing: 8) {
+                    Text(store.notice)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.coralInk)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .probe("workspace-notice", text: store.notice)
+                    Spacer(minLength: 8)
+                    Button("知道了") { store.notice = "" }
+                        .buttonStyle(GroveButtonStyle(kind: .quiet))
+                        .probe("notice-dismiss")
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 5)
+                .background(Palette.coral)
+            }
+            DayNotices(store: store)
+            if width >= Self.wideWidth {
+                wideBody
+            } else if width >= Self.midWidth {
+                midBody
+            } else {
+                narrowBody
+            }
+        }
+        .background(Palette.paper)
+        .geoProbe("workspace-body", text: "width=\(Int(width)) layout=day")
+        .geoProbe("selected-context", text: [
+            store.childID, store.day, scope.rawValue, subject ?? "", store.selection ?? "",
+        ].joined(separator: "|"))
+    }
+
+    private var wideBody: some View {
+        HStack(spacing: 0) {
+            DayRail(store: store, scope: $scope, subject: $subject)
+                .frame(width: 212)
+                .geoProbe("master-pane", text: "layout=rail")
+            Rectangle().fill(Palette.line).frame(width: 1)
+            DayBoard(store: store, scope: scope, subject: subject, columns: 3, width: width)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if let item = store.selected {
+                Rectangle().fill(Palette.line).frame(width: 1)
+                DayDetail(store: store, item: item, page: false)
+                    .frame(width: 424)
+                    .geoProbe("detail-pane", text: "layout=split")
+            }
+        }
+    }
+
+    private var midBody: some View {
+        ZStack(alignment: .trailing) {
+            VStack(spacing: 0) {
+                DayChips(store: store, scope: $scope, subject: $subject)
+                DayBoard(store: store, scope: scope, subject: subject, columns: 2, width: width)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if let item = store.selected {
+                HStack(spacing: 0) {
+                    Color.black.opacity(0.10)
+                        .contentShape(Rectangle())
+                        .onTapGesture { store.closeDetail() }
+                    DayDetail(store: store, item: item, page: true)
+                        .frame(width: min(424, max(320, width - 160)))
+                        .background(Palette.card)
+                        .shadow(color: Color.black.opacity(0.16), radius: 18, x: -6, y: 0)
+                        .geoProbe("detail-pane", text: "layout=drawer")
+                }
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: store.selection)
+    }
+
+    private var narrowBody: some View {
+        ZStack(alignment: .bottom) {
+            VStack(spacing: 0) {
+                DayChips(store: store, scope: $scope, subject: $subject)
+                DayBoard(store: store, scope: scope, subject: subject, columns: 1, width: width)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if let item = store.selected {
+                DaySheet(store: store, item: item, height: max(300, height * 0.55))
+                    .geoProbe("detail-pane", text: "layout=sheet")
+            }
+        }
+        .animation(.easeOut(duration: 0.18), value: store.selection)
+    }
+}
+
+// MARK: 顶栏：孩子 / 日期 / 模式 / 补录 / 网页版
+
+struct DayTopBar: View {
+    @ObservedObject var store: WorkspaceStore
+    var compact = false
+
+    var body: some View {
+        HStack(spacing: compact ? 6 : 10) {
+            HStack(spacing: 3) {
+                ForEach(Array((store.view?.children ?? []).enumerated()), id: \.element.id) { index, child in
+                    let on = child.id == store.childID
+                    Button { store.change(child: child.id) } label: {
+                        Text(child.name)
+                            .font(.system(size: 13, weight: on ? .semibold : .regular))
+                            .lineLimit(1)
+                            .fixedSize()
+                            .padding(.horizontal, 10)
+                            .frame(minWidth: 56, minHeight: 32)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(on ? Color.white : Palette.ink2)
+                    .background(Capsule().fill(on ? Palette.leaf : Color.clear))
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                    .help("只看\(child.name)（⌘\(index + 1)）")
+                    .probe("child-" + child.id, text: child.name + (on ? " 当前" : ""))
+                }
+            }
+            .padding(3)
+            .background(Capsule().fill(Palette.paper2))
+            .overlay(Capsule().strokeBorder(Palette.line, lineWidth: 1))
+
+            Spacer(minLength: 4)
+
+            Button { store.shift(-1) } label: {
+                Image(systemName: "chevron.left")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 30, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Palette.ink)
+            .accessibilityLabel("前一天")
+            .probe("day-prev")
+
+            VStack(spacing: 1) {
+                Text(store.dayTitle)
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                Text(store.daySub)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+            }
+            .frame(minWidth: compact ? 108 : 140)
+            .accessibilityElement(children: .combine)
+            .probe("day-title", text: store.day + " " + store.daySub)
+
+            Button { store.shift(1) } label: {
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 12, weight: .semibold))
+                    .frame(width: 30, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Palette.ink)
+            .accessibilityLabel("后一天")
+            .probe("day-next")
+
+            Button(compact ? "今天" : "回到今天") { store.change(day: store.view?.today ?? "") }
+                .buttonStyle(GroveButtonStyle(kind: .quiet))
+                .disabled(store.view == nil || store.day == store.view?.today)
+                .help("回到今天 ⌘T")
+                .probe("day-today")
+
+            Spacer(minLength: 4)
+
+            DayModeSwitch(store: store, compact: compact)
+                .geoProbe("mode-strip", text: "mode=" + store.mode.id)
+
+            Button {
+                store.sheetDirty = false
+                store.sheet = .oral
+            } label: {
+                Label(compact ? "补录" : "补录口头作业", systemImage: "plus")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(GroveButtonStyle(kind: .primary))
+            .disabled(store.current == nil)
+            .help("补录孩子口头转述的作业 ⌘N")
+            .probe("oral-new")
+
+            Button { store.openWebTools("", "") } label: {
+                Label(compact ? "网页版" : "网页版工具", systemImage: "square.grid.2x2")
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(GroveButtonStyle())
+            .help("在浏览器里打开网页版工具 ⌘E")
+            .probe("web-tools")
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 9)
+        .background(Palette.paper2)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+    }
+}
+
+struct DayModeSwitch: View {
+    @ObservedObject var store: WorkspaceStore
+    var compact = false
+
+    private func label(_ mode: ListMode) -> String {
+        switch mode {
+        case .calendar:
+            return "日历"
+        case .wrong:
+            let count = store.current?.wrong.flatMap(\.items).count ?? 0
+            return count > 0 ? "错题本 \(count)" : "错题本"
+        case .learning:
+            return compact ? "学习" : "学习进展"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(ListMode.allCases) { mode in
+                let on = store.mode == mode
+                Button { store.mode = mode } label: {
+                    Text(label(mode))
+                        .font(.system(size: 12.5, weight: on ? .semibold : .regular))
+                        .lineLimit(1)
+                        .padding(.horizontal, 9)
+                        .frame(minHeight: 32)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(on ? Color.white : Palette.ink2)
+                .background(Capsule().fill(on ? Palette.leaf : Color.clear))
+                .accessibilityAddTraits(on ? .isSelected : [])
+                .probe("mode-" + mode.id, text: label(mode))
+            }
+        }
+        .padding(3)
+        .background(Capsule().fill(Palette.paper2))
+        .overlay(Capsule().strokeBorder(Palette.line, lineWidth: 1))
+        .probe("list-mode")
+    }
+}
+
+// MARK: 左栏集合（≥1200）
+
+struct DayRail: View {
+    @ObservedObject var store: WorkspaceStore
+    @Binding var scope: DayScope
+    @Binding var subject: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            who
+            railTitle("清单")
+            row(.today, count: store.dayOpenItems.count, dot: nil) {
+                scope = .today
+                subject = nil
+            }
+            ForEach(store.daySubjects, id: \.self) { item in
+                subjectRow(item)
+            }
+            railTitle("其它")
+            row(.upcoming, count: store.dayUpcomingCards.count, dot: nil) {
+                scope = .upcoming
+                subject = nil
+            }
+            if !store.dayUndatedItems.isEmpty {
+                row(.undated, count: store.dayUndatedItems.count, dot: nil) {
+                    scope = .undated
+                    subject = nil
+                }
+            }
+            row(.cancelled, count: store.dayCancelledItems.count, dot: Palette.muted) {
+                scope = .cancelled
+                subject = nil
+            }
+            row(.closed, count: store.dayCompletedItems.count, dot: Palette.leaf) {
+                scope = .closed
+                subject = nil
+            }
+            Spacer(minLength: 8)
+            Rectangle().fill(Palette.line).frame(height: 1)
+            Text("只读清单：打开不会重新生成，也不会改任务状态。")
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 9)
+            Text("完成、交回与反馈在右侧详情里看与记。")
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.muted)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 4)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 12)
+        .padding(.bottom, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(Palette.paper2)
+        .overlay(alignment: .trailing) { Rectangle().fill(Palette.line).frame(width: 1) }
+        .probe("day-rail", text: "rail")
+    }
+
+    private var who: some View {
+        HStack(spacing: 8) {
+            Text(String(store.childName.prefix(1)))
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Palette.leafInk)
+                .frame(width: 27, height: 27)
+                .background(Circle().fill(Palette.leaf50))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(store.childName.isEmpty ? "这个孩子" : store.childName)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(1)
+                Text("已完成 \(store.dayCompletedItems.count) 件")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 2)
+        .padding(.bottom, 10)
+    }
+
+    private func railTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .kerning(1.2)
+            .foregroundStyle(Palette.muted)
+            .padding(.leading, 8)
+            .padding(.top, 12)
+            .padding(.bottom, 5)
+    }
+
+    private func row(_ target: DayScope, count: Int, dot: Color?, action: @escaping () -> Void) -> some View {
+        let on = scope == target && subject == nil
+        return Button(action: action) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(dot ?? Color.clear)
+                    .frame(width: 7, height: 7)
+                Text(target.title)
+                    .font(.system(size: 13, weight: on ? .semibold : .regular))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Palette.muted)
+            }
+            .foregroundStyle(on ? Palette.ink : Palette.ink2)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Palette.card : Color.clear))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .probe("rail-" + target.rawValue, text: target.title + " \(count)")
+    }
+
+    private func subjectRow(_ item: String) -> some View {
+        let on = scope == .today && subject == item
+        let count = store.dayCount(item)
+        return Button {
+            scope = .today
+            subject = item
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Palette.subjectDot(item))
+                    .frame(width: 7, height: 7)
+                Text(daySubjectWords(item))
+                    .font(.system(size: 13, weight: on ? .semibold : .regular))
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Text("\(count)")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Palette.muted)
+            }
+            .foregroundStyle(on ? Palette.ink : Palette.ink2)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Palette.card : Color.clear))
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .probe("rail-subject-" + item, text: daySubjectWords(item) + " \(count)")
+    }
+}
+
+// MARK: 顶部胶囊行（900–1199 / <900）
+
+struct DayChips: View {
+    @ObservedObject var store: WorkspaceStore
+    @Binding var scope: DayScope
+    @Binding var subject: String?
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                chip("今天 \(store.dayOpenItems.count)", key: "today", on: scope == .today && subject == nil) {
+                    scope = .today
+                    subject = nil
+                }
+                ForEach(store.daySubjects, id: \.self) { item in
+                    chip("\(daySubjectWords(item)) \(store.dayCount(item))", key: "subject-" + item,
+                         on: scope == .today && subject == item) {
+                        scope = .today
+                        subject = item
+                    }
+                }
+                chip("明后天 \(store.dayUpcomingCards.count)", key: "upcoming",
+                     on: scope == .upcoming) {
+                    scope = .upcoming
+                    subject = nil
+                }
+                if !store.dayUndatedItems.isEmpty {
+                    chip("日期未定 \(store.dayUndatedItems.count)", key: "undated", on: scope == .undated) {
+                        scope = .undated
+                        subject = nil
+                    }
+                }
+                chip("已取消 \(store.dayCancelledItems.count)", key: "cancelled", on: scope == .cancelled) {
+                    scope = .cancelled
+                    subject = nil
+                }
+                chip("已完成 \(store.dayCompletedItems.count)", key: "closed", on: scope == .closed) {
+                    scope = .closed
+                    subject = nil
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+        }
+        .background(Palette.card)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+    }
+
+    private func chip(_ text: String, key: String, on: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(text)
+                .font(.system(size: 12, weight: on ? .semibold : .regular))
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 10)
+                .frame(minHeight: 30)
+                .contentShape(Capsule())
+                .foregroundStyle(on ? Color.white : Palette.ink2)
+                .background(Capsule().fill(on ? Palette.leaf : Palette.paper2))
+                .overlay(Capsule().strokeBorder(on ? Color.clear : Palette.line, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .probe("chip-" + key, text: text)
+    }
+}
+
+// MARK: 中栏看板
+
+struct DayBoard: View {
+    @ObservedObject var store: WorkspaceStore
+    let scope: DayScope
+    let subject: String?
+    let columns: Int
+    let width: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if store.current != nil && width >= DayWorkbench.midWidth {
+                WeekStrip(store: store)
+                    .padding(.horizontal, 18)
+                    .padding(.top, 10)
+                    .padding(.bottom, 2)
+                    .geoProbe("week-strip", text: "weekday=\(store.weekDays.count) day=\(store.day)")
+            }
+            DayBoardBar(store: store, scope: scope, subject: subject)
+            if store.current == nil {
+                DayPlaceholder(store: store)
+            } else if scope == .today && columns >= 3 {
+                threeColumns
+            } else if scope == .today {
+                twoColumns
+            } else {
+                singleColumn
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // 当前集合 / 科目筛选后的卡片集合
+    private var openCards: [DayItem] { filterSubject(store.dayOpenItems) }
+    private var cancelledCards: [DayItem] { filterSubject(store.dayCancelledItems) }
+    private var closedCards: [DayItem] { filterSubject(store.dayCompletedItems) }
+    private var undatedCards: [DayItem] { filterSubject(store.dayUndatedItems) }
+    private var upcomingCards: [UpcomingCardModel] {
+        guard let subject = subject else { return store.dayUpcomingCards }
+        return store.dayUpcomingCards.filter { daySubjectWords($0.subject) == daySubjectWords(subject) }
+    }
+
+    /// 「明后天」列标题下一行小字；顶栏那行仍保留完整清单（原生验收按它核对每条标题）。
+    private var upcomingHint: String { "即将/待补：\(upcomingCards.count) 项" }
+    private var upcomingHintProbe: String { store.dayUpcomingLine ?? upcomingHint }
+
+    private func filterSubject(_ list: [DayItem]) -> [DayItem] {
+        guard let subject = subject else { return list }
+        return list.filter { daySubjectWords($0.subject) == daySubjectWords(subject) }
+    }
+
+    private var threeColumns: some View {
+        GeometryReader { geo in
+            let gap: CGFloat = 12
+            let pad: CGFloat = 18
+            let usable = max(300, geo.size.width - pad * 2 - gap * 2)
+            let unit = usable / 2.75
+            HStack(alignment: .top, spacing: gap) {
+                DayColumn("今天要做", count: openCards.count, width: unit * 1.05, empty: DayScope.today.empty) {
+                    ForEach(openCards) { item in
+                        DayCard(store: store, item: item)
+                    }
+                }
+                DayColumn("明后天", count: upcomingCards.count, width: unit * 0.9,
+                          empty: DayScope.upcoming.empty,
+                          hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
+                    ForEach(upcomingCards) { card in
+                        UpcomingDayCard(store: store, card: card)
+                    }
+                }
+                DayColumn("已完成", count: closedCards.count, width: unit * 0.8, empty: DayScope.closed.empty) {
+                    ForEach(closedCards) { item in
+                        DayCard(store: store, item: item)
+                    }
+                }
+            }
+            .padding(.horizontal, pad)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
+        }
+    }
+
+    private var twoColumns: some View {
+        GeometryReader { geo in
+            let gap: CGFloat = 12
+            let pad: CGFloat = 18
+            let width = max(200, (geo.size.width - pad * 2 - gap) / 2)
+            HStack(alignment: .top, spacing: gap) {
+                DayColumn("今天要做", count: openCards.count, width: width, empty: DayScope.today.empty) {
+                    ForEach(openCards) { item in
+                        DayCard(store: store, item: item)
+                    }
+                }
+                DayColumn("明后天", count: upcomingCards.count, width: width,
+                          empty: DayScope.upcoming.empty,
+                          hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
+                    ForEach(upcomingCards) { card in
+                        UpcomingDayCard(store: store, card: card)
+                    }
+                }
+            }
+            .padding(.horizontal, pad)
+            .padding(.top, 12)
+            .padding(.bottom, 14)
+        }
+    }
+
+    private var singleColumn: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                if scope == .today {
+                    singleSection("今天要做", count: openCards.count, empty: DayScope.today.empty) {
+                        ForEach(openCards) { item in
+                            DayCard(store: store, item: item)
+                        }
+                    }
+                    singleSection("明后天", count: upcomingCards.count,
+                                  empty: DayScope.upcoming.empty,
+                                  hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
+                        ForEach(upcomingCards) { card in
+                            UpcomingDayCard(store: store, card: card)
+                        }
+                    }
+                    singleSection("已完成", count: closedCards.count, empty: DayScope.closed.empty) {
+                        ForEach(closedCards) { item in
+                            DayCard(store: store, item: item)
+                        }
+                    }
+                } else if scope == .upcoming {
+                    ForEach(upcomingCards) { card in
+                        UpcomingDayCard(store: store, card: card)
+                    }
+                    if upcomingCards.isEmpty {
+                        emptyBox(DayScope.upcoming.empty)
+                    }
+                } else {
+                    let items = scope == .cancelled ? cancelledCards : (scope == .closed ? closedCards : undatedCards)
+                    if items.isEmpty {
+                        emptyBox(scope.empty)
+                    } else {
+                        ForEach(items) { item in
+                            DayCard(store: store, item: item, cancelled: scope == .cancelled || store.isCancelledItem(item))
+                        }
+                    }
+                }
+            }
+            .padding(14)
+        }
+    }
+
+    private func singleSection<Content: View>(_ title: String, count: Int, empty: String,
+                                              hint: String = "", hintID: String = "", hintProbe: String = "",
+                                              @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.ink2)
+                Text("\(count)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                Spacer(minLength: 0)
+            }
+            if !hint.isEmpty {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .probe(hintID, text: hintProbe.isEmpty ? hint : hintProbe)
+            }
+            if count == 0 {
+                emptyBox(empty)
+            } else {
+                content()
+            }
+        }
+    }
+
+    private func emptyBox(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+    }
+}
+
+struct DayBoardBar: View {
+    @ObservedObject var store: WorkspaceStore
+    let scope: DayScope
+    let subject: String?
+
+    private var title: String {
+        guard scope == .today, let subject = subject else { return scope.title }
+        return daySubjectWords(subject)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Palette.ink)
+                        .lineLimit(1)
+                        .probe("board-title", text: title)
+                    HStack(spacing: 6) {
+                        Text(store.dayTitle)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.muted)
+                            .lineLimit(1)
+                        Text(store.daySummaryLine)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.muted)
+                            .lineLimit(1)
+                            .probe("list-summary", text: store.daySummaryLine)
+                    }
+                }
+                Spacer(minLength: 8)
+                DayProgressBar(done: store.dayProgress.done, total: store.dayProgress.total)
+            }
+            if let line = store.dayUpcomingLine {
+                Text(line)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .help(line)
+                    .probe("upcoming", text: line)
+            }
+            if let line = store.dayMaterialsLine {
+                HStack(spacing: 8) {
+                    Text(line)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                        .help(line)
+                        .probe("materials", text: line)
+                    Button("去网页版") { store.openWebTools("", "school") }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.leafInk)
+                        .probe("materials-open")
+                }
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 11)
+        .padding(.bottom, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Palette.card)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
+    }
+}
+
+struct DayColumn<Content: View>: View {
+    let title: String
+    let count: Int
+    let width: CGFloat
+    let empty: String
+    let hint: String
+    let hintID: String
+    let hintProbe: String
+    let content: Content
+
+    init(_ title: String, count: Int, width: CGFloat, empty: String,
+         hint: String = "", hintID: String = "", hintProbe: String = "",
+         @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.count = count
+        self.width = width
+        self.empty = empty
+        self.hint = hint
+        self.hintID = hintID
+        self.hintProbe = hintProbe
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                Text(title)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.ink2)
+                Text("\(count)")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.muted)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 5)
+            .padding(.bottom, hint.isEmpty ? 8 : 3)
+            if !hint.isEmpty {
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+                    .padding(.horizontal, 5)
+                    .padding(.bottom, 7)
+                    .probe(hintID, text: hintProbe.isEmpty ? hint : hintProbe)
+            }
+            ScrollView {
+                VStack(spacing: 8) {
+                    if count == 0 {
+                        emptyView
+                    } else {
+                        content
+                    }
+                }
+                .padding(.bottom, 6)
+            }
+        }
+        .padding(9)
+        .frame(width: width)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.paper2))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+        .probe("board-col-" + title, text: title + " \(count)")
+    }
+
+    private var emptyView: some View {
+        Text(empty)
+            .font(.system(size: 12))
+            .foregroundStyle(Palette.muted)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+    }
+}
+
+// MARK: 卡片
+
+struct DayCard: View {
+    @ObservedObject var store: WorkspaceStore
+    let item: DayItem
+    var cancelled = false
+
+    private var selected: Bool { store.selection == item.id }
+    private var done: Bool { item.closed }
+    /// 一句要点：优先取第一条正面要求（跳过「不用…」这类否定句，它们进详情的「不做什么」），没有就退回第一条。
+    private var line: String? { item.lines.first { !isNegativeLine($0) } ?? item.lines.first }
+    /// 与网页端同一枚家里安排徽章：家里的安排里有时刻就写「家里 18:30」，没有就写「家里安排」。
+    private var planBadge: String? {
+        guard !item.planLines.isEmpty else { return nil }
+        let text = item.planLines.joined(separator: " ")
+        let pattern = try? NSRegularExpression(pattern: "\\d{1,2}:\\d{2}")
+        if let match = pattern?.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range, in: text) {
+            return "家里 " + text[range]
+        }
+        return "家里安排"
+    }
+
+    private var badges: [String] {
+        var list = item.rowBadges(day: store.day).shown
+        if let plan = planBadge { list.append(plan) }
+        return Array(list.prefix(4))
+    }
+
+    private var metaLine: String {
+        var parts: [String] = [daySubjectWords(item.subject)]
+        if let publisher = item.publisher, !publisher.isEmpty { parts.append(publisher) }
+        if !item.publishedTime.isEmpty { parts.append(item.publishedTime) }
+        if cancelled { parts.append("已取消") }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        Button { store.select(item.id) } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(cancelled ? Palette.muted : Palette.subjectDot(item.subject))
+                        .frame(width: 7, height: 7)
+                    Text(metaLine)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if item.pending_review {
+                        Text("待核对")
+                            .font(.system(size: 10))
+                            .foregroundStyle(Palette.coralInk)
+                    }
+                }
+                .padding(.bottom, 4)
+                Text(item.title)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(done ? Palette.ink2 : Palette.ink)
+                    .strikethrough(done, color: Palette.muted)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.bottom, 3)
+                if let line = line {
+                    Text(line)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.ink2)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.bottom, 7)
+                }
+                if !badges.isEmpty {
+                    FlowRow(spacing: 4, lineSpacing: 4) {
+                        ForEach(badges, id: \.self) { text in
+                            DayTag(text: text)
+                        }
+                    }
+                }
+                if !item.followUps.isEmpty {
+                    Text("后续通知 \(item.followUps.count) ›")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.planInk)
+                        .padding(.top, 5)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.card))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(selected ? Palette.line2 : Palette.line, lineWidth: 1))
+            .shadow(color: Palette.cardShadow, radius: selected ? 6 : 2, x: 0, y: selected ? 3 : 1)
+            .opacity(done || cancelled ? 0.62 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .probe("row-" + item.id, text: item.title)
+    }
+}
+
+struct UpcomingDayCard: View {
+    @ObservedObject var store: WorkspaceStore
+    let card: UpcomingCardModel
+
+    var body: some View {
+        Button { store.change(day: card.day) } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(card.cancelled ? Palette.muted : Palette.subjectDot(card.subject))
+                        .frame(width: 7, height: 7)
+                    Text(daySubjectWords(card.subject))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                    Text(rowRelative(card.day, day: store.day))
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    if card.cancelled {
+                        DayTag(text: "已取消", tone: Palette.paper2, ink: Palette.muted)
+                    } else if card.pending {
+                        DayTag(text: "待补", tone: Palette.coral, ink: Palette.coralInk, border: Palette.coral400)
+                    }
+                }
+                Text(card.title)
+                    .font(.system(size: 13.5, weight: .semibold))
+                    .foregroundStyle(Palette.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Text(card.change.isEmpty ? "点开去这一天" : card.change)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.card))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+            .shadow(color: Palette.cardShadow, radius: 2, x: 0, y: 1)
+            .opacity(card.cancelled ? 0.62 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .probe("row-upcoming-" + card.id, text: card.title)
+    }
+}
+
+// MARK: 右栏详情（424 / 抽屉 / sheet 共用）
+
+struct DayDetail: View {
+    @ObservedObject var store: WorkspaceStore
+    let item: DayItem
+    var page = false
+
+    @State private var completing = false
+    @State private var completeError = ""
+    @State private var completeDone = false
+
+    private var refs: [Publication] { item.sourceRefs }
+    private var stepLines: [(Int, String)] {
+        item.lines.enumerated().filter { !isNegativeLine($0.element) }.map { ($0.offset, $0.element) }
+    }
+    private var negativeLines: [(Int, String)] {
+        item.lines.enumerated().filter { isNegativeLine($0.element) }.map { ($0.offset, $0.element) }
+    }
+    private var isCancelled: Bool { store.isCancelledItem(item) }
+
+    /// 原生只对真正的事项发「已完成」；学校通知（kind == school）、已取消与已完成项都不显示这个动作。
+    private var canComplete: Bool {
+        item.kind == "task" && !item.task_id.isEmpty && !item.closed && !isCancelled
+    }
+
+    /// 与网页端「勾选完成」同一条写入：POST /api/task，status 已完成 + 完成依据。
+    /// 不带 expected_updated：本地单用户、清单只读打开，不传就跳过并发校验（多设备同时改的极端情况会以服务端原话提示）。
+    private func markComplete() {
+        guard canComplete && !completing else { return }
+        completing = true
+        completeError = ""
+        let target = item.task_id
+        Task { @MainActor in
+            let outcome = await store.client.post("/api/task", [
+                "id": target,
+                "status": "已完成",
+                "note": "家长通过清单勾选确认此事项已完成。",
+            ])
+            completing = false
+            switch outcome {
+            case .saved:
+                completeDone = true
+                await store.load(keepSelection: true)
+            case .refused(_, let message, _):
+                completeError = message
+            case .unknown(let message):
+                completeError = message
+            }
+        }
+    }
+
+    private var breadcrumb: String {
+        let first: String
+        if isCancelled {
+            first = "已取消"
+        } else if item.closed {
+            first = "已完成"
+        } else if item.when == "later" {
+            first = "明后天"
+        } else if item.when == "overdue" {
+            first = "已过期限"
+        } else if item.when == "unknown" {
+            first = "日期未定"
+        } else {
+            first = "今天要做"
+        }
+        var parts = [first, daySubjectWords(item.subject)]
+        if let publisher = item.publisher, !publisher.isEmpty { parts.append(publisher) }
+        return parts.joined(separator: " › ")
+    }
+
+    private var metaLine: String {
+        var parts: [String] = [daySubjectWords(item.subject)]
+        if let publish = item.publishWords, !publish.isEmpty { parts.append(publish) }
+        if refs.count > 1 { parts.append("来源消息 \(refs.count) 条") }
+        if !store.childName.isEmpty { parts.append(store.childName) }
+        return parts.joined(separator: " · ")
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Rectangle().fill(Palette.line).frame(height: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    stepsSection
+                    negativeSection
+                    planSection
+                    followUpSection
+                    sourcesSection
+                    materialsSection
+                    feedbackSection
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 2)
+                .padding(.bottom, 14)
+            }
+            completionNotice
+            actions
+        }
+        .background(Palette.card)
+        .probe("inspector", text: item.title)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 6) {
+                if page {
+                    Button { store.closeDetail() } label: {
+                        Label("返回清单", systemImage: "chevron.left")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(GroveButtonStyle(kind: .quiet))
+                    .probe("detail-back", text: "返回清单")
+                }
+                Spacer(minLength: 4)
+                if refs.isEmpty && item.origin == "school" {
+                    Button { store.openWebTools(item.webID, "original") } label: {
+                        Label("看原消息", systemImage: "text.bubble")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(GroveButtonStyle(kind: .quiet))
+                    .probe("original-message")
+                }
+                if !page {
+                    Button { store.closeDetail() } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 28, height: 28)
+                    }
+                    .buttonStyle(GroveButtonStyle(kind: .quiet))
+                    .help("关闭详情")
+                    .probe("detail-back", text: "关闭详情")
+                }
+            }
+            .padding(.bottom, 6)
+            Text(breadcrumb)
+                .font(.system(size: 11))
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
+                .probe("detail-crumb", text: breadcrumb)
+            Text(item.title)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(Palette.ink)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+                .padding(.top, 5)
+                .padding(.bottom, 4)
+                .probe("detail-title", text: item.title)
+            Text(metaLine)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                .lineLimit(2)
+                .probe("detail-meta", text: metaLine)
+            if isCancelled {
+                Text("这一项已取消，不算要做的事。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+                    .padding(.top, 3)
+                    .probe("detail-cancelled")
+            } else if !item.whenLabel.isEmpty {
+                Text("这一项\(item.whenLabel)，不算这一天要交的作业。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.ink2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 3)
+                    .probe("detail-when", text: item.whenLabel)
+            }
+            factsRow.padding(.top, 10)
+        }
+        .padding(.horizontal, 18)
+        .padding(.top, 12)
+        .padding(.bottom, 10)
+    }
+
+    /// 「截止 / 完成 / 交回」三格：只读数据格（小字标签 + 值），不在详情里编辑。
+    private var factBoard: [DayFact] {
+        var picked: [DayFact] = []
+        for role in ["due", "complete", "submit", "check"] {
+            if let fact = item.dayRoles.first(where: { $0.role == role }),
+               !picked.contains(where: { $0.role == fact.role }) {
+                picked.append(fact)
+            }
+        }
+        for fact in item.actionFacts where picked.count < 3 && !picked.contains(where: { $0.role == fact.role }) {
+            picked.append(fact)
+        }
+        return Array(picked.prefix(3))
+    }
+
+    @ViewBuilder
+    private var factsRow: some View {
+        let facts = factBoard
+        if !facts.isEmpty {
+            HStack(spacing: 8) {
+                ForEach(facts, id: \.self) { fact in
+                    factCell(fact)
+                }
+            }
+        }
+    }
+
+    private func factCell(_ fact: DayFact) -> some View {
+        let urgent = fact.state == "next_morning" || fact.state == "overdue"
+        return VStack(alignment: .leading, spacing: 2) {
+            Text(fact.label)
+                .font(.system(size: 10, weight: .medium))
+                .kerning(0.7)
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
+            Text(factWords(fact))
+                .font(.system(size: 13.5, weight: .semibold))
+                .foregroundStyle(urgent ? Palette.coralInk : Palette.ink)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(EdgeInsets(top: 7, leading: 9, bottom: 8, trailing: 9))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.paper2))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .strokeBorder(urgent ? Palette.coral400 : Palette.line, lineWidth: 1))
+        .probe("fact-" + fact.role, text: factWords(fact))
+    }
+
+    private func block<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.system(size: 10, weight: .semibold))
+                .kerning(1.1)
+                .foregroundStyle(Palette.muted)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 11)
+        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line.opacity(0.7)).frame(height: 1) }
+    }
+
+    private var stepsSection: some View {
+        block("要做什么") {
+            VStack(alignment: .leading, spacing: 4) {
+                if stepLines.isEmpty {
+                    Text("完成标准未提供，待补充")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Palette.coralInk)
+                        .probe("detail-no-standard")
+                }
+                ForEach(Array(stepLines.enumerated()), id: \.offset) { index, pair in
+                    HStack(alignment: .top, spacing: 8) {
+                        Text("\(index + 1)")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(Palette.leafInk)
+                            .frame(width: 17, height: 17)
+                            .background(Circle().fill(Palette.leaf50))
+                            .padding(.top, 2)
+                        Text(pair.1)
+                            .font(.system(size: 13))
+                            .foregroundStyle(Palette.ink)
+                            .lineSpacing(3)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .probe("detail-line-\(item.id)-\(pair.0)", text: pair.1)
+                            // 原生验收用：详情里这一条完整排开、没有被裁掉（替代旧清单行内的 row-fit）。
+                            .modifier(FitProbe(id: "detail-fit-\(item.id)-\(pair.0)"))
+                    }
+                }
+                if !item.complete_words.isEmpty {
+                    Text("完成要求：" + item.complete_words)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                        .probe("detail-complete-" + item.id, text: item.complete_words)
+                }
+                if item.pending_review {
+                    Text("这条还没核对过，先按上面做，有出入在网页版改。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.coralInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .probe("detail-pending-" + item.id)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var negativeSection: some View {
+        if !negativeLines.isEmpty {
+            block("不做什么") {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(Array(negativeLines.enumerated()), id: \.offset) { _, pair in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "minus")
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundStyle(Palette.muted)
+                                .frame(width: 17, height: 17)
+                                .padding(.top, 1)
+                            Text(pair.1)
+                                .font(.system(size: 13))
+                                .foregroundStyle(Palette.ink2)
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .probe("detail-negative-\(item.id)-\(pair.0)", text: pair.1)
+                                .modifier(FitProbe(id: "detail-fit-\(item.id)-\(pair.0)"))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var planSection: some View {
+        if !item.planLines.isEmpty {
+            block(planTitle) {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(item.planLines.enumerated()), id: \.offset) { index, line in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text("家里")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Palette.planInk)
+                                .padding(.top, 2)
+                            Text(line)
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Palette.ink)
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .probe("detail-plan-\(item.id)-\(index)", text: line)
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.planBg))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Palette.planLine, lineWidth: 1))
+            }
+        }
+    }
+
+    private var planTitle: String {
+        if item.planLabel.contains("计划") {
+            return item.planLabel.replacingOccurrences(of: "家庭安排", with: "家里的安排")
+        }
+        return "家里的安排"
+    }
+
+    @ViewBuilder
+    private var followUpSection: some View {
+        if !item.followUps.isEmpty {
+            block(item.followUpTitle) {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(Array(item.followUps.enumerated()), id: \.offset) { index, follow in
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                let when = item.followUpTime(follow.time)
+                                if !when.isEmpty {
+                                    Text(when)
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(Palette.muted)
+                                        .probe("detail-followup-time-\(item.id)-\(index)", text: when)
+                                }
+                                let label = item.followUpLabel(follow)
+                                if !label.isEmpty {
+                                    Text(label)
+                                        .font(.system(size: 10.5))
+                                        .foregroundStyle(label.contains("取消") ? Palette.coralInk : Palette.muted)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 2)
+                                        .background(RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                            .fill(label.contains("取消") ? Palette.coral : Palette.paper2))
+                                }
+                            }
+                            Text(follow.text ?? "")
+                                .font(.system(size: 12.5))
+                                .foregroundStyle(Palette.ink2)
+                                .lineSpacing(3)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .probe("detail-followup-\(item.id)-\(index)", text: follow.text ?? "")
+                        }
+                        .padding(.leading, 9)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .overlay(alignment: .leading) { Rectangle().fill(Palette.line2).frame(width: 2) }
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sourcesSection: some View {
+        if !refs.isEmpty {
+            block("来源消息 \(refs.count) 条") {
+                VStack(alignment: .leading, spacing: 7) {
+                    ForEach(refs, id: \.ref) { publication in
+                        HStack(alignment: .center, spacing: 8) {
+                            Text(sourceWords(publication))
+                                .font(.system(size: 12))
+                                .foregroundStyle(Palette.ink2)
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .probe("detail-source-" + publication.ref, text: sourceWords(publication))
+                            Button { store.sheetDirty = false; store.sheet = .source(item, publication, store.childID) } label: {
+                                Text("看原消息")
+                                    .font(.system(size: 11))
+                            }
+                            .buttonStyle(GroveButtonStyle(kind: .quiet))
+                            .probe("source-open-" + publication.ref, text: publication.ref)
+                        }
+                    }
+                }
+            }
+            .probe("detail-sources", text: "来源消息\(refs.count)条")
+        }
+    }
+
+    private func sourceWords(_ publication: Publication) -> String {
+        if publication.isPendingReminder {
+            var parts = [publication.label ?? "待核提醒（未采用）"]
+            if !publication.sender.isEmpty { parts.append(publication.sender) }
+            if let time = publication.time, !time.isEmpty { parts.append(String(time.prefix(16)).replacingOccurrences(of: "T", with: " ")) }
+            return parts.joined(separator: " · ")
+        }
+        var parts: [String] = []
+        if !publication.source_name.isEmpty { parts.append(publication.source_name) }
+        if !publication.sender.isEmpty { parts.append(publication.sender) }
+        return parts.isEmpty ? "原消息" : parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private var materialsSection: some View {
+        let state = store.materials[item.task_id] ?? MaterialState()
+        if !item.task_id.isEmpty && !state.files.isEmpty {
+            block("资料与打印") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(state.files) { material in
+                        HStack(spacing: 8) {
+                            Text(material.roleLabel)
+                                .font(.system(size: 10))
+                                .foregroundStyle(Palette.muted)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Palette.paper2))
+                            Text(material.name)
+                                .font(.system(size: 12))
+                                .foregroundStyle(Palette.ink2)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("打开原件") { store.openWebTools(item.task_id, "original") }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet))
+                                .probe("material-open-" + material.id)
+                        }
+                    }
+                    if item.category == "homework" {
+                        HStack(spacing: 7) {
+                            Button("打印原卷") { store.openWebTools(item.task_id, "print-original") }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet))
+                                .probe("print-original")
+                            Button("打印家长参考") { store.openWebTools(item.task_id, "print-reference") }
+                                .buttonStyle(GroveButtonStyle(kind: .quiet))
+                                .probe("print-reference")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var feedbackSection: some View {
+        block("反馈与记录") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let note = item.same_affair?.note, !note.isEmpty {
+                    Text(note)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.ink2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .probe("same-affair-note", text: note)
+                }
+                if item.task_id.isEmpty {
+                    Text("这一项还不是正式事项，确认成事项后才能记反馈。")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    if let progress = item.progress, !progressWords(progress).isEmpty {
+                        HStack(spacing: 8) {
+                            Text("已有进展：" + progressWords(progress))
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Palette.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .probe("detail-progress", text: progressWords(progress))
+                            if progress.wrong + progress.clues + progress.retries + progress.history > 0 {
+                                Button("错题诊断与再试") { store.openWebTools(item.task_id, "history") }
+                                    .buttonStyle(GroveButtonStyle(kind: .quiet))
+                                    .probe("history-web")
+                            }
+                        }
+                    }
+                    FlowRow(spacing: 7, lineSpacing: 6) {
+                        if item.category == "homework" {
+                            Button { store.sheetDirty = false; store.sheet = .taskWrong(item) } label: {
+                                Label("直接记错题", systemImage: "exclamationmark.bubble")
+                                    .font(.system(size: 12))
+                            }
+                            .buttonStyle(GroveButtonStyle())
+                            .probe("wrong-task-new")
+                        }
+                        Text("照片与文字反馈用底部两个按钮，或去网页版。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Palette.muted)
+                    }
+                }
+                if !item.records.isEmpty {
+                    Text("反馈记录 \(item.records.count) 条")
+                        .font(.system(size: 10, weight: .semibold))
+                        .kerning(0.8)
+                        .foregroundStyle(Palette.muted)
+                        .padding(.top, 2)
+                    ForEach(item.records) { record in
+                        recordRow(record)
+                    }
+                }
+                if !item.wrong.isEmpty {
+                    Text("错题与订正 \(item.wrong.count) 条")
+                        .font(.system(size: 10, weight: .semibold))
+                        .kerning(0.8)
+                        .foregroundStyle(Palette.muted)
+                        .padding(.top, 2)
+                    ForEach(item.wrong) { record in
+                        wrongRow(record)
+                    }
+                }
+            }
+        }
+    }
+
+    private func recordRow(_ record: SavedRecord) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(record.followup_kind.isEmpty ? "反馈" : record.followup_kind)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Palette.muted)
+                Text(String(record.created.prefix(16)).replacingOccurrences(of: "T", with: " "))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(Palette.muted)
+                Spacer(minLength: 4)
+                Button("记一道错题") { store.sheetDirty = false; store.sheet = .wrong(item, record) }
+                    .buttonStyle(GroveButtonStyle(kind: .quiet))
+                    .probe("wrong-new-\(record.id)")
+            }
+            if !record.note.isEmpty {
+                Text(record.note)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.ink2)
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.paper2))
+        .probe("record-\(item.id)-\(record.id)", text: record.title)
+    }
+
+    private func wrongRow(_ record: SavedRecord) -> some View {
+        HStack(spacing: 6) {
+            Text(record.title)
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.ink2)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button("在错题本看") { store.showRecord(record.id) }
+                .buttonStyle(GroveButtonStyle(kind: .quiet))
+                .probe("detail-wrong-open-\(record.id)")
+            Button("记订正") { store.sheetDirty = false; store.sheet = .correction(record) }
+                .buttonStyle(GroveButtonStyle(kind: .quiet))
+                .probe("wrong-correct-\(record.id)")
+        }
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.paper2))
+    }
+
+    /// 标记完成的结果提示：成功一行浅绿，失败原样显示服务端的话并给重试。
+    @ViewBuilder
+    private var completionNotice: some View {
+        if !completeError.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                Text(completeError)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .probe("complete-error", text: completeError)
+                Button("重试") { markComplete() }
+                    .buttonStyle(GroveButtonStyle(kind: .quiet))
+                    .probe("complete-retry")
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 8)
+            .background(Palette.dangerBg)
+            .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+        } else if completeDone {
+            Text("已标记完成，清单已更新。")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.leafInk)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(Palette.leaf50)
+                .probe("complete-done", text: "已标记完成，清单已更新。")
+        }
+    }
+
+    private var actions: some View {
+        HStack(spacing: 7) {
+            if canComplete {
+                Button { markComplete() } label: {
+                    Text(completing ? "正在标记…" : "标记完成").font(.system(size: 12))
+                }
+                .buttonStyle(GroveButtonStyle(kind: .primary))
+                .disabled(completing)
+                .help("按清单确认这件事已完成（家长勾选）")
+                .probe("complete-task")
+            }
+            Button { store.sheetDirty = false; store.sheet = .feedback(item) } label: {
+                Text("记一笔").font(.system(size: 12))
+            }
+            .buttonStyle(GroveButtonStyle())
+            .help("写文字反馈，可以加照片")
+            .probe("feedback-new")
+            Button { store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "check") } label: {
+                Text("拍照反馈").font(.system(size: 12))
+            }
+            .buttonStyle(GroveButtonStyle())
+            .disabled(item.task_id.isEmpty)
+            .help("在网页版同一份作业里交作答照片检查")
+            .probe("check-web")
+            Spacer(minLength: 4)
+            Button { store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "") } label: {
+                Text(canComplete ? "在网页版完成" : "在网页版看")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.leafInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .buttonStyle(.plain)
+            .help("打开网页版同一项：完成、交回与改错都在那边")
+            .probe("complete-web")
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 11)
+        .background(Palette.paper2)
+        .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+    }
+}
+
+// <900：底部拉起约 55% 高的 sheet
+struct DaySheet: View {
+    @ObservedObject var store: WorkspaceStore
+    let item: DayItem
+    let height: CGFloat
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Capsule()
+                .fill(Palette.line2)
+                .frame(width: 36, height: 4)
+                .padding(.top, 9)
+                .padding(.bottom, 5)
+            DayDetail(store: store, item: item, page: true)
+        }
+        .frame(height: height)
+        .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
+        .shadow(color: Color.black.opacity(0.16), radius: 18, x: 0, y: -6)
+        .frame(maxHeight: .infinity, alignment: .bottom)
+        .transition(.move(edge: .bottom))
+    }
+}
+
+// MARK: 空态 / 加载 / 出错 / 学校提示
+
+struct DayPlaceholder: View {
+    @ObservedObject var store: WorkspaceStore
+
+    var body: some View {
+        VStack(spacing: 12) {
+            if store.loginRequired {
+                Text("登录后显示清单。")
+                    .font(.system(size: 14))
+                    .foregroundStyle(Palette.ink2)
+                    .probe("login-needed")
+                Button("登录") { store.openLogin() }
+                    .buttonStyle(GroveButtonStyle(kind: .primary))
+                    .probe("login-open")
+            } else if !store.error.isEmpty {
+                Text(store.error)
+                    .font(.system(size: 14))
+                    .foregroundStyle(Palette.coralInk)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 24)
+                    .probe("load-error", text: store.error)
+                Button("重试") { Task { await store.load(keepSelection: store.selection != nil) } }
+                    .buttonStyle(GroveButtonStyle(kind: .primary))
+                    .probe("load-retry")
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Palette.paper2)
+                            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .strokeBorder(Palette.line, lineWidth: 1))
+                            .frame(height: 64)
+                    }
+                }
+                .frame(maxWidth: 420)
+                .padding(.horizontal, 18)
+                Text("正在读取清单…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.muted)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(24)
+        .probe("day-placeholder")
+    }
+}
+
+struct DayNotices: View {
+    @ObservedObject var store: WorkspaceStore
+
+    var body: some View {
+        if let view = store.current {
+            VStack(spacing: 0) {
+                if let error = view.source_error, !error.isEmpty {
+                    Text(error)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.coralInk)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 5)
+                        .background(Palette.coral)
+                        .probe("source-error", text: error)
+                }
+                if let pending = view.school_pending, pending > 0 {
+                    HStack(spacing: 8) {
+                        Text("学校消息还有 \(pending) 条没整理，暂时不算进清单。")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.coralInk)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .probe("school-pending", text: "学校消息还有 \(pending) 条没整理")
+                        Spacer(minLength: 8)
+                        Button("去整理") { store.openWebTools("", "school") }
+                            .buttonStyle(GroveButtonStyle(kind: .quiet))
+                            .probe("school-pending-open")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .background(Palette.coral)
+                }
+                if let gaps = view.school_read_gaps, !gaps.isEmpty {
+                    HStack(spacing: 8) {
+                        Text("学校资料有 " + "\(gaps.count)" + " 项没读全：" + gaps.prefix(2).map(\.name).joined(separator: "、"))
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.ink2)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .probe("school-read-gap", text: gaps.prefix(2).map(\.name).joined(separator: "、"))
+                        Spacer(minLength: 8)
+                        Button("去网页版") { store.openWebTools("", "school") }
+                            .buttonStyle(GroveButtonStyle(kind: .quiet))
+                            .probe("school-read-gap-open")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .background(Palette.paper2)
+                }
+                if view.school_unknown == true {
+                    Text("学校消息里有些内容没读明白，先按清单做。")
+                        .font(.system(size: 11))
+                        .foregroundStyle(Palette.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
+                        .probe("school-read-unknown")
+                }
+            }
+        }
+    }
+
 }
 
 // MARK: 弹出层：每个写入一个稳定提交标识；保存中锁住，失败/结果未知保留输入并用同一标识重试，冲突时读取最新而不盲目重发。

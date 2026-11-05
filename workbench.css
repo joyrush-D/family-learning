@@ -481,3 +481,458 @@ dialog.record-topic{width:min(760px,94vw)}.record-topic-head h2{margin:4px 0 6px
 @media (max-width:899px){
   .grove-detail-refs .school-original-group{flex-wrap:nowrap;align-items:center}
 }
+
+/* ———— Build 314：日清单重做（三栏看板 / 两列抽屉 / 手机单列 + 底部拉起详情）。只覆盖 .grove3，旧规则保持不动。 ———— */
+.grove3{--g-paper:#f6f3ec;--g-surface:#fffdf8;--g-surface2:#faf7f0;--g-ink:#1d1b16;--g-ink2:#565147;--g-muted:#8b8578;--g-line:#e5dfd1;--g-line2:#d8d0be;--g-accent:#2f5d4b;--g-accent-ink:#24503f;--g-accent-weak:#e9f0eb;--g-warn:#96591c;--g-warn-bg:#fcf1e2;--g-warn-line:#f0dbc0;--g-danger:#9a4432;--g-danger-bg:#fbeee9;--g-cn:#b4622f;--g-math:#2f5f8f;--g-en:#6b4fa0;--g-misc:#6b7280;font-size:13px;color:var(--g-ink)}
+.grove3 :where(h1,h2,h3,p,ul,ol,li){margin:0;padding:0}
+.grove3 .grove-dot{width:7px;height:7px;border-radius:50%;background:var(--g-misc);flex:0 0 auto;display:inline-block}
+.grove3 .grove-dot.subj-chinese{background:var(--g-cn)}.grove3 .grove-dot.subj-math{background:var(--g-math)}.grove3 .grove-dot.subj-english{background:var(--g-en)}.grove3 .grove-dot.subj-general{background:var(--g-misc)}
+.grove3 .grove-sr{position:absolute!important;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.grove3 .grove-hide{font-size:0!important;line-height:0!important;color:transparent!important;letter-spacing:0!important;word-spacing:0!important;display:inline}
+/* 外壳：桌面两列（看板 + 424 详情），左栏由 aside 承担；两列/手机单列。 */
+.grove3{display:grid;grid-template-columns:minmax(0,1fr) 424px;gap:16px;align-items:stretch}
+.grove3 .grove-board{min-width:0;display:flex;flex-direction:column;background:var(--g-paper);border:1px solid var(--g-line);border-radius:12px;overflow:hidden}
+.grove3 .grove-board-scroll{flex:1;min-height:0;overflow:auto;padding:10px 14px 14px}
+.grove3 .grove-detail{display:flex;flex-direction:column;min-height:0;background:var(--g-surface);border:1px solid var(--g-line);border-radius:12px;overflow:hidden}
+.grove3 .grove-detail-body{flex:1;min-height:0;overflow:auto;padding:0 16px 12px}
+@media(max-width:899px){.grove3 .grove-detail-body{padding-bottom:96px}}
+.grove3 .grove-back{display:none;padding:10px 12px 0}
+.grove3[data-view="list"] .grove-detail{display:none}
+/* 顶栏：标题 + 进度 + 动作；手机再加一行孩子切换。 */
+.grove3 .grove-bar{display:flex;flex-direction:column;gap:6px;padding:10px 14px 8px;background:var(--g-surface);border-bottom:1px solid var(--g-line)}
+.grove3 .grove-bar-main{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.grove3 .grove-bar-title{min-width:0}
+.grove3 .grove-bar-h{font:600 17px/1.3 var(--round);color:var(--g-ink);letter-spacing:.2px}
+.grove3 .grove-bar-h strong{font-size:20px}
+.grove3 .grove-bar-sub{font-size:11.5px;color:var(--g-muted);margin-top:1px}
+.grove3 .grove-bar-side{margin-left:auto;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.grove3 .grove-bar-done{font-size:11.5px;color:var(--g-muted);white-space:nowrap}
+.grove3 .grove-bar-progress{display:inline-flex;align-items:center;width:104px}
+.grove3 .grove-progress{display:block;width:100%;height:5px;border-radius:99px;background:#e2dccd;overflow:hidden}
+.grove3 .grove-progress i{display:block;height:100%;border-radius:99px;background:var(--g-accent)}
+.grove3 .grove-bar-side .primary,.grove3 .grove-add{min-height:32px;padding:0 10px;font-size:12.5px;border-radius:8px}
+.grove3 .grove-quiet{min-height:32px;height:32px;padding:0 8px;font-size:12.5px;border:1px solid var(--g-line2);border-radius:8px;background:var(--g-surface);color:var(--g-ink2);white-space:nowrap;display:inline-flex;align-items:center}
+.grove3 .grove-bar-kids .today-controls{position:static;margin:0;display:flex;justify-content:flex-start;min-width:0}
+.grove3 .grove-bar-kids .child-filters .small,.grove3 .grove-bar-kids .child-filters .muted{display:none}
+.grove3 .grove-bar-kids .child-filters button{min-height:30px;padding:1px 10px;font-size:12.5px}
+/* 三列看板 */
+.grove3 .grove-cols{display:grid;grid-template-columns:1.05fr .9fr .8fr;gap:12px;align-items:start}
+.grove3 .grove-col{background:var(--g-surface2);border:1px solid var(--g-line);border-radius:12px;padding:8px;min-width:0}
+.grove3 .grove-col-head{display:flex;align-items:baseline;gap:6px;font:600 12px/1.4 var(--round);color:#4a453b;margin:1px 5px 6px}
+.grove3 .grove-col-head em{font-style:normal;color:var(--g-muted);font-weight:500;font-size:11px}
+.grove3 .grove-col-body{display:flex;flex-direction:column;gap:8px}
+/* 今天列：科目分组（保留 h2.grove-tag 作为组标题与既有测试的组名来源） */
+.grove3 .grove-subject{margin:0}
+.grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{display:inline-flex;align-items:center;gap:6px;margin:1px 3px 5px;padding:0;background:none;border:0;box-shadow:none;font:600 11.5px/1.3 var(--round);color:var(--g-muted);letter-spacing:.2px}
+.grove3 .grove-subject>.grove-tag .grove-dot{display:none}
+.grove3 .grove-subject .grove-rows{display:flex;flex-direction:column;gap:8px}
+/* 卡片：科目点+老师+时间 / 标题 / ≤2 条要点 / 徽章 / 后续通知一行；左侧留完成勾选。 */
+.grove3 .grove-row{display:flex;gap:8px;padding:8px 9px;border:1px solid var(--g-line);border-radius:10px;background:var(--g-surface);box-shadow:0 1px 2px rgba(60,48,24,.06);min-width:0}
+.grove3 .grove-row.is-selected{border-color:#b9ae95;box-shadow:0 2px 10px rgba(60,48,24,.12)}
+.grove3 .grove-row.is-done{background:#f3f7ee;opacity:.78}
+.grove3 .grove-row.is-done .grove-title{color:var(--g-muted);text-decoration:line-through}
+.grove3 .grove-check{flex:0 0 auto;width:24px;height:24px;min-height:24px;border-radius:7px;border:1px solid var(--g-line2);background:var(--g-surface);display:grid;place-items:center;margin-top:2px}
+.grove3 .grove-check input{width:16px;height:16px;margin:0}
+.grove3 .grove-row.is-done .grove-check{background:var(--g-accent);border-color:var(--g-accent)}
+.grove3 .grove-open{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;align-items:stretch;text-align:left;padding:0;border:0;background:transparent;min-height:0;font:inherit;color:inherit;cursor:pointer}
+.grove3 .grove-card-k{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--g-muted);line-height:1.3}
+.grove3 .grove-card-who{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grove3 .grove-k-flag{font-size:10px;line-height:1;padding:2px 5px;border-radius:4px;background:var(--g-warn-bg);color:var(--g-warn);border:1px solid var(--g-warn-line);white-space:nowrap}
+.grove3 .grove-k-flag.is-cancel,.grove3 .grove-k-flag.is-review{background:var(--g-danger-bg);color:var(--g-danger);border-color:#f0d4ca}
+.grove3 .grove-k-flag.is-later{background:var(--g-surface2)}
+.grove3 .grove-title{font:600 13.5px/1.45 var(--round);color:var(--g-ink);display:block;overflow-wrap:anywhere}
+.grove3 .grove-points{display:flex;flex-direction:column;gap:1px;font-size:12px;line-height:1.6;color:var(--g-ink2);overflow-wrap:anywhere}
+.grove3 .grove-point{display:block}
+.grove3 .grove-point-more{display:block;margin-top:2px;font-size:11px;color:var(--g-accent-ink)}
+.grove3 .grove-badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:2px}
+.grove3 .grove-badge{font-size:11px;line-height:1;padding:3px 6px;border-radius:5px;border:1px solid var(--g-line);background:var(--g-surface2);color:#6c6555;white-space:nowrap}
+.grove3 .grove-badge.is-quiet{background:#e9f2e3;border-color:#d5e6ca;color:#4f7a44}
+.grove3 .grove-badge.is-bring{background:#e8f0f6;border-color:#d3e2ee;color:#3d6b8f}
+.grove3 .grove-badge.is-sign{background:#fbeae4;border-color:#f0d4ca;color:#b0553f}
+.grove3 .grove-badge.is-due{background:#fdf2dc;border-color:#f0e2c6;color:#96621c}
+.grove3 .grove-badge.is-plan{background:#fdf8ec;border-color:#f0e2c6;color:#a3762a}
+.grove3 .grove-badge.is-more{background:transparent;color:var(--g-muted)}
+.grove3 .grove-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:1px}
+.grove3 .grove-chips .grove-chip{font-size:10.5px;min-height:20px;padding:2px 6px;border-radius:5px;background:transparent;border:1px solid var(--g-line);color:var(--g-muted)}
+.grove3 .grove-chips .grove-chip.is-coral{color:var(--g-danger);border-color:#f0d4ca;background:var(--g-danger-bg)}
+.grove3 .grove-followups-hint{display:inline-flex;align-items:center;gap:4px;margin-top:3px;font-size:11px;font-weight:600;color:#8a6d3b}
+.grove3 .grove-empty{display:block;border:1px dashed var(--g-line2);border-radius:10px;padding:12px;font-size:12px;line-height:1.6;color:var(--g-muted)}
+/* 明后天 / 已取消：轻量卡，无正文。 */
+.grove3 .grove-later{border:1px solid var(--g-line);border-radius:10px;background:var(--g-surface);padding:8px 9px;display:flex;flex-direction:column;gap:3px;box-shadow:0 1px 2px rgba(60,48,24,.06)}
+.grove3 .grove-later.is-cancelled{opacity:.62}
+.grove3 .grove-later-open{display:flex;flex-direction:column;gap:3px;align-items:stretch;text-align:left;padding:0;border:0;background:transparent;font:inherit;color:inherit;cursor:pointer;min-height:0}
+.grove3 .grove-later-title{font:600 12.5px/1.45 var(--round);color:var(--g-ink);overflow-wrap:anywhere}
+.grove3 .grove-later.is-cancelled .grove-later-title{color:var(--g-muted);text-decoration:line-through}
+.grove3 .grove-later-meta{font-size:10.5px;color:var(--g-muted)}
+/* 详情 */
+.grove3 .grove-detail-hd{padding:13px 16px 10px;border-bottom:1px solid #efeade;flex:0 0 auto}
+.grove3 .grove-crumb{font:600 10.5px/1.3 var(--round);letter-spacing:.6px;color:var(--g-muted);margin-bottom:5px}
+.grove3 .grove-h.grove-detail-title{font:600 18px/1.42 var(--round);color:var(--g-ink);overflow-wrap:anywhere}
+.grove3 .grove-detail-source{font-size:11.5px;color:var(--g-muted);margin-top:4px}
+.grove3 .grove-detail-meta{display:flex;flex-direction:column;gap:6px;margin-top:7px}
+.grove3 .grove-detail .grove-facts{display:flex;gap:8px;flex-wrap:wrap;padding:0;border:0}
+.grove3 .grove-detail .grove-fact{flex:1 1 132px;flex-direction:row;align-items:baseline;gap:6px;border:1px solid var(--g-line);border-radius:8px;padding:6px 9px;background:var(--g-surface2);min-width:0}
+.grove3 .grove-detail .grove-fact span{font-size:10px;letter-spacing:.7px;color:var(--g-muted)}
+.grove3 .grove-detail .grove-fact strong{font-size:13px;font-weight:600;color:var(--g-ink)}
+.grove3 .grove-detail .grove-fact em{font-style:normal;font-size:10px;color:var(--g-warn)}
+.grove3 .grove-detail-refs{display:flex;flex-wrap:wrap;gap:4px}
+.grove3 .grove-detail-refs button{min-height:26px;padding:0 8px;font-size:11px;border-radius:6px;border:1px solid var(--g-line2);background:var(--g-surface)}
+.grove3 .grove-when{font-size:11.5px;color:var(--g-muted);margin:9px 0 0}
+.grove3 .grove-detail .grove-card{background:var(--g-surface2);border:1px solid var(--g-line);border-radius:10px;padding:10px 12px;margin:10px 0}
+.grove3 .grove-detail .grove-card h3{font:600 10px/1.3 var(--round);letter-spacing:1.1px;color:#9a9384;margin:0 0 6px}
+.grove3 .grove-detail-steps ul.grove-standards{counter-reset:g3;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.grove3 .grove-detail-steps ul.grove-standards li{counter-increment:g3;display:flex;gap:8px;font-size:13px;line-height:1.62;color:var(--g-ink2);padding:0}
+.grove3 .grove-detail-steps ul.grove-standards li::before{content:counter(g3);flex:0 0 17px;height:17px;border-radius:50%;background:var(--g-accent-weak);color:var(--g-accent-ink);font:600 10px/17px var(--round);text-align:center;margin-top:2px}
+.grove3 .grove-detail-neg h3{color:#9a9384}
+.grove3 .grove-neg-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;font-size:13px;line-height:1.6;color:var(--g-ink2)}
+.grove3 .grove-plan-card{background:#fdf8ec!important;border-color:#f0e2c6!important}
+.grove3 .grove-plan-card h3{color:#a3762a!important}
+.grove3 .grove-plan-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:3px;font-size:12.5px;line-height:1.65;color:var(--g-ink2)}
+.grove3 .grove-followups-list{margin:0;padding:0}
+.grove3 .grove-followup{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px;align-items:baseline}
+.grove3 .grove-followup-time{font-size:10.5px;color:var(--g-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.grove3 .grove-followup-label{font-size:10px;line-height:1;padding:3px 5px;border-radius:4px;border:1px solid var(--g-line);background:var(--g-surface);color:var(--g-ink2)}
+.grove3 .grove-followup-label.is-correct{background:var(--g-warn-bg);border-color:var(--g-warn-line);color:var(--g-warn)}
+.grove3 .grove-followup-label.is-cancel{background:var(--g-danger-bg);border-color:#f0d4ca;color:var(--g-danger)}
+.grove3 .grove-followup-text{font-size:12.5px;line-height:1.62;color:#4f4a40;overflow-wrap:anywhere}
+.grove3 .grove-src-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:6px}
+.grove3 .grove-src-list li{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;font-size:12px;color:var(--g-ink2)}
+.grove3 .grove-src-who{font-weight:600;color:var(--g-ink)}
+.grove3 .grove-src-meta{font-size:11px;color:var(--g-muted)}
+.grove3 .grove-src-list button{min-height:24px;padding:0 7px;font-size:11px;border-radius:5px;border:1px solid var(--g-line2);background:var(--g-surface)}
+.grove3 .grove-materials h3{font:600 10px/1.3 var(--round);letter-spacing:1.1px;color:#9a9384;margin:0 0 6px}
+.grove3 .grove-detail .grove-actions,.grove3 .grove-detail .grove-print{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:8px 0 0}
+.grove3 .grove-detail .grove-actions button{min-height:30px;padding:0 9px;font-size:12px;border-radius:7px}
+.grove3 .grove-detail-feedback .grove-history{margin:6px 0 0;padding:0;list-style:none;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.grove3 .grove-more{margin:10px 0 0}
+.grove3 .grove-more>summary{font-size:12px;color:var(--g-muted);min-height:30px;display:flex;align-items:center;cursor:pointer}
+.grove3 .grove-more .tasktools{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+.grove3 .grove-more .tasktools button{min-height:28px;padding:0 8px;font-size:11.5px;border-radius:6px;border:1px solid var(--g-line);background:var(--g-surface)}
+.grove3 .grove-detail-bar{display:flex;gap:8px;align-items:center;flex:0 0 auto;padding:9px 16px 10px;border-top:1px solid var(--g-line);background:var(--g-surface);position:static}
+.grove3 .grove-detail-bar button{flex:1;min-height:36px;font-size:12.5px;border-radius:8px;border:1px solid var(--g-line2);background:var(--g-surface)}
+.grove3 .grove-detail-bar button.primary{background:var(--g-accent);border-color:var(--g-accent);color:#fff}
+/* 手机/两列：日历块 + 集合胶囊 + 单列分节 + 底部固定条 + 底部拉起详情 */
+.grove3 .grove-chips-row{display:flex;gap:6px;overflow-x:auto;padding:0 0 8px;margin:0 0 2px;scrollbar-width:none}
+.grove3 .grove-chips-row::-webkit-scrollbar{display:none}
+.grove3 .grove-chips-row .grove-set{display:inline-flex;align-items:center;gap:5px;min-height:34px;padding:0 10px;border-radius:99px;border:1px solid var(--g-line);background:var(--g-surface2);color:#5c564a;font-size:12px;font-weight:500;white-space:nowrap;flex:0 0 auto}
+.grove3 .grove-chips-row .grove-set.is-on{background:var(--g-accent);border-color:var(--g-accent);color:#fff}
+.grove3 .grove-chips-row .grove-set i{font-style:normal;font-size:11px;opacity:.8}
+.grove3 .grove-chips-row .grove-set-dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.7}
+.grove3 .grove-cal{margin-top:10px}
+.grove3 .grove-phone-bar{position:fixed;left:0;right:0;bottom:calc(56px + env(safe-area-inset-bottom,0px));z-index:15;display:flex;gap:8px;padding:7px 12px;background:var(--g-surface);border-top:1px solid var(--g-line);box-shadow:0 -2px 10px rgba(60,48,24,.06)}
+.grove3 .grove-phone-bar button{min-height:38px;border-radius:8px;font-size:12.5px}
+.grove3 .grove-phone-later{flex:0 0 auto;min-width:92px;border:1px solid var(--g-line2);background:var(--g-surface);color:var(--g-ink2)}
+.grove3 .grove-phone-later.is-empty{display:inline-flex;align-items:center;justify-content:center;border:1px dashed var(--g-line2);color:var(--g-muted);padding:0 10px}
+.grove3 .grove-phone-bar .primary{flex:1}
+/* 手机：单列，看板上方头部压紧，日历块放页面下方 */
+@media(max-width:899px){
+ .grove3{display:block}
+ .grove3 .grove-board{border:0;background:transparent;border-radius:0;overflow:visible}
+ .grove3 .grove-board-scroll{overflow:visible;padding:0}
+ .grove3 .grove-bar{padding:0 0 6px;background:transparent;border:0;gap:4px}
+ .grove3 .grove-bar-h{font-size:19px}
+ .grove3 .grove-bar-h strong{font-size:22px}
+ .grove3 .grove-bar-sub{font-size:11px}
+ .grove3 .grove-bar-side{margin-left:0;gap:6px}
+ .grove3 .grove-bar-done{display:none}
+ .grove3 .grove-bar-progress{flex:1;min-width:80px;width:auto}
+ .grove3 .grove-cols{display:block}
+ .grove3 .grove-col{background:transparent;border:0;padding:0;margin:0 0 12px}
+ .grove3 .grove-col-head{font-size:12.5px;margin:0 2px 6px;padding:0}
+ .grove3 .grove-col-head::before{content:"";display:inline-block;width:3px;height:12px;border-radius:2px;background:var(--g-line2);margin-right:6px;vertical-align:-1px}
+ .grove3 .grove-col.is-today .grove-col-head::before{background:var(--g-accent)}
+ .grove3 .grove-col.is-done .grove-col-head::before{background:var(--g-muted)}
+ .grove3 .grove-col-body{gap:8px}
+ .grove3 .grove-cal{margin-top:14px;padding-top:12px;border-top:1px solid var(--g-line)}
+ .grove3 .grove-detail{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom));top:auto;max-height:min(48vh,400px);z-index:30;border-radius:16px 16px 0 0;border:0;box-shadow:0 -8px 28px rgba(60,48,24,.18);padding-top:2px}
+ .grove3 .grove-detail::before{content:"";display:block;width:36px;height:4px;border-radius:99px;background:#ddd5c4;margin:8px auto 2px}
+ .grove3 .grove-back{display:block;padding:4px 14px 0}
+ .grove3 .grove-detail-hd{padding:8px 16px 8px}
+ .grove3 .grove-h.grove-detail-title{font-size:16.5px}
+ .grove3 .grove-detail-bar{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+}
+@media(min-width:900px) and (max-width:1199px){
+ .grove3{display:grid;grid-template-columns:minmax(0,1fr);gap:0}
+ .grove3 .grove-cols{grid-template-columns:1fr 1fr}
+ .grove3 .grove-detail{position:fixed;right:0;top:0;bottom:0;width:min(440px,94vw);z-index:30;border-radius:0;border-left:1px solid var(--g-line);box-shadow:-10px 0 30px rgba(60,48,24,.14)}
+ .grove3 .grove-back{display:block;padding:12px 16px 0}
+}
+/* 桌面宽：aside 变成 212px 的“今天集合”栏；nav 仍在 aside 里（窄屏底部条不受影响）。main 让出左栏，内容占满视口高度。 */
+body.grove-wide[data-page="home"] aside{width:212px;padding:12px;overflow:auto;background:var(--g-surface2);border-right:1px solid var(--g-line);gap:8px}
+body.grove-wide[data-page="home"] aside .leaf,body.grove-wide[data-page="home"] aside .brand{display:none}
+body.grove-wide[data-page="home"] aside nav{display:flex;flex-direction:column;gap:4px;margin-top:10px}
+body.grove-wide[data-page="home"] aside nav button{min-height:32px;padding:0 10px;border-radius:8px;font-size:12.5px}
+body.grove-wide[data-page="home"] aside .sidefoot{font-size:10.5px;padding-top:6px;margin-top:auto}
+body.grove-wide[data-page="home"] main{margin-left:212px;max-width:none;padding:12px 16px 12px 16px}
+.grove-wide .grove3{height:calc(100dvh - 24px);grid-template-columns:minmax(0,1fr) 424px}
+.grove-wide .grove-rail-data{display:flex;flex-direction:column;gap:10px;min-width:0}
+.grove-wide .grove-rail-who .grove-rail-label{display:none}
+.grove-wide .grove-rail-who .today-controls{position:static;margin:0}
+.grove-wide .grove-rail-who .child-filters{display:flex;flex-wrap:wrap;gap:4px}
+.grove-wide .grove-rail-who .child-filters .small,.grove-wide .grove-rail-who .child-filters .muted{display:none}
+.grove-wide .grove-rail-who .child-filters button{min-height:28px;padding:1px 9px;font-size:12px;border-radius:99px}
+.grove-wide .grove-rail-sets{display:flex;flex-direction:column;gap:2px}
+.grove-wide .grove-set-head{font:600 9.5px/1.3 var(--round);letter-spacing:1.2px;color:#9a9384;margin:8px 6px 3px}
+.grove-wide .grove-set{display:flex;align-items:center;gap:7px;min-height:30px;padding:0 8px;border-radius:8px;border:0;background:transparent;font-size:12.5px;color:#3d3931;text-align:left;width:100%}
+.grove-wide .grove-set.is-on{background:var(--g-surface);box-shadow:0 1px 2px rgba(60,48,24,.06);font-weight:600}
+.grove-wide .grove-set i{margin-left:auto;font-style:normal;font-size:11px;color:#9a9384}
+.grove-wide .grove-set-dot{width:7px;height:7px;border-radius:50%;background:var(--g-muted);flex:0 0 auto}
+.grove-wide .grove-set-dot.is-today{background:var(--g-accent)}
+.grove-wide .grove-set-dot.is-later{background:var(--g-warn)}
+.grove-wide .grove-set-dot.is-cancelled{background:var(--g-danger)}
+.grove-wide .grove-set-dot.is-done{background:var(--g-line2)}
+.grove-wide .grove-rail-cal{margin-top:2px}
+.grove-wide .grove-rail-cal .grove-tabs{margin:0 0 6px;grid-template-columns:repeat(3,1fr);padding:2px}
+.grove-wide .grove-rail-cal .grove-tabs button{min-height:44px;font-size:11.5px}
+.grove-wide .grove-rail-cal .grove-week{margin:0}
+.grove-wide .grove-rail-cal .grove-week-head strong{font-size:12px}
+.grove-wide .grove-rail-cal .grove-week-days{grid-template-columns:repeat(4,1fr);gap:2px;padding:2px}
+.grove-wide .grove-rail-cal .grove-day{min-height:44px;padding:3px 1px}
+.grove-wide .grove-rail-cal .grove-day span{font-size:9.5px}
+.grove-wide .grove-rail-cal .grove-day strong{font-size:13px}
+.grove-wide .grove-rail-cal .grove-day em{font-size:9px}
+.grove-wide .grove-rail-cal #today-courses{margin:6px 0 0;padding:6px 8px;font-size:10.5px}
+.grove-wide .grove-rail-cal #today-courses h2{font-size:10.5px}
+.grove-wide .grove-cols{gap:10px;padding:0}
+.grove-wide .grove-detail{border-radius:12px}
+/* 手机底部原站点 nav 之上再让出固定条的空间，最后一张卡不被遮 */
+@media(max-width:899px){body[data-page="home"] main{padding-bottom:calc(150px + env(safe-area-inset-bottom,0px))}}
+
+/* Build 314 修正：桌面常显详情；旧宽屏 #task-groups 两列栅格覆盖；顶部留白压紧。 */
+.grove3 #task-groups{display:block!important;min-width:0}
+.grove3 .grove-board-scroll{padding:4px 12px 12px}
+.grove3 .grove-cols{padding:0}
+.grove3 .grove-col{padding:7px 7px 8px}
+.grove3 .grove-col-head{margin:0 4px 5px}
+.grove3 .grove-bar{padding:8px 12px 7px;gap:4px}
+.grove3 .grove-bar-sub{margin-top:0}
+@media(min-width:1200px){
+ body.grove-wide[data-page="home"] main{padding-top:8px}
+ .grove3{height:calc(100dvh - 20px)}
+ .grove3 .grove-detail{display:flex}
+}
+@media(max-width:1199px){.grove3[data-view="list"] .grove-detail{display:none}}
+@media(min-width:900px) and (max-width:1199px){
+ .grove3 .grove-cols{grid-template-columns:1.15fr .9fr;grid-auto-rows:min-content;align-items:start}
+ .grove3 .grove-col.is-today{grid-row:1 / span 2;grid-column:1}
+ .grove3 .grove-col.is-later{grid-column:2;grid-row:1}
+ .grove3 .grove-col.is-done{grid-column:2;grid-row:2}
+}
+@media(max-width:899px){.grove3 .grove-board-scroll{padding:0}}
+
+/* Build 314 修正 2：桌面详情常显（提高优先级）；顶部再压紧；1200–1319 收窄详情列。 */
+@media(min-width:1200px){
+ .grove3[data-view="list"] .grove-detail{display:flex}
+ body.grove-wide[data-page="home"] main{padding-top:6px}
+ .grove3 .grove-bar{padding:7px 12px 6px}
+ .grove3 .grove-bar-h{font-size:16px}
+ .grove3 .grove-bar-h strong{font-size:19px}
+ .grove3 .grove-bar-sub{font-size:11px;line-height:1.2}
+ .grove3 .grove-col{padding:6px 6px 7px}
+ .grove3 .grove-col-head{margin:0 4px 4px;font-size:11.5px}
+ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:10.5px;margin:0 3px 4px}
+ .grove3 .grove-subject .grove-rows{gap:7px}
+ .grove3 .grove-row{padding:7px 8px}
+ .grove3 .grove-title{font-size:13px}
+ .grove3 .grove-points{font-size:11.5px;line-height:1.5}
+ .grove3 .grove-board-scroll{padding-top:0}
+}
+@media(min-width:1200px) and (max-width:1319px){.grove-wide .grove3{grid-template-columns:minmax(0,1fr) 360px}}
+@media(max-width:899px){.grove3 .grove-bar-sub{font-size:11px}}
+
+/* Build 314 修正 3：手机头部压紧（孩子+日期一行、标题+进度一行）；1200–1399 收掉“已完成 x/y”与宽进度条避免换行。 */
+@media(max-width:1399px){.grove-wide .grove-bar-done{display:none}.grove-wide .grove-bar-progress{width:72px}}
+.grove3 .grove-bar.is-phone{flex-direction:column;align-items:stretch;gap:2px;padding:0 0 5px}
+.grove3 .grove-bar.is-phone .grove-bar-kids{display:flex;align-items:center;gap:8px;min-width:0}
+.grove3 .grove-bar.is-phone .grove-bar-kids .today-controls{flex:1;min-width:0;margin:0;position:static}
+.grove3 .grove-bar.is-phone .grove-bar-date{font-size:11.5px;color:var(--g-muted);white-space:nowrap}
+.grove3 .grove-bar.is-phone .grove-bar-done{font-size:11.5px;color:var(--g-muted);white-space:nowrap}
+.grove3 .grove-bar.is-phone .grove-bar-main{display:flex;align-items:center;gap:10px;flex-wrap:nowrap}
+.grove3 .grove-bar.is-phone .grove-bar-h{font-size:19px;flex:0 0 auto}
+.grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:22px}
+.grove3 .grove-bar.is-phone .grove-bar-sub{display:none}
+.grove3 .grove-bar.is-phone .grove-bar-progress{flex:1;min-width:60px;width:auto;display:flex;align-items:center}
+.grove3 .grove-bar.is-phone .grove-progress{width:100%}
+.grove3 .grove-chips-row{margin-top:6px;padding-bottom:6px}
+
+/* Build 314 修正 4：日期事实并进徽章行（卡更矮）；手机头部再压 4px。 */
+.grove3 .grove-badges .grove-badge.is-fact{background:var(--g-surface2);border-color:var(--g-line);color:#6c6555}
+.grove3 .grove-badges .grove-badge.is-due{background:#fdf2dc;border-color:#f0e2c6;color:#96621c}
+.grove3 .grove-badge.is-fact{font-size:10.5px;padding:3px 5px}
+@media(max-width:899px){
+ .grove3 .grove-bar.is-phone{padding:0 0 3px}
+ .grove3 .grove-chips-row{margin-top:4px;padding-bottom:5px}
+ .grove3 .grove-chips-row .grove-set{min-height:32px;padding:0 9px}
+}
+
+/* Build 314 修正 5：1440 首屏 5 张卡需要更矮的卡面（桌面宽专用）。 */
+@media(min-width:1200px){
+ .grove-wide .grove3 .grove-bar{padding:6px 12px 5px}
+ .grove-wide .grove3 .grove-bar-h{font-size:15.5px;line-height:1.25}
+ .grove-wide .grove3 .grove-bar-h strong{font-size:18px}
+ .grove-wide .grove3 .grove-bar-sub{font-size:10.5px;line-height:1.15}
+ .grove-wide .grove3 .grove-subject>.grove-tag,.grove-wide .grove3 .grove-subject>h2.grove-tag{font-size:10px;margin:0 3px 3px}
+ .grove-wide .grove3 .grove-subject .grove-rows{gap:6px}
+ .grove-wide .grove3 .grove-row{padding:6px 7px;gap:7px}
+ .grove-wide .grove3 .grove-title{font-size:12.5px;line-height:1.38}
+ .grove-wide .grove3 .grove-points{font-size:11px;line-height:1.42}
+ .grove-wide .grove3 .grove-card-k{font-size:10px}
+ .grove-wide .grove3 .grove-badge{font-size:10.5px;padding:2px 5px}
+ .grove-wide .grove3 .grove-badge.is-fact{font-size:10px;padding:2px 4px}
+ .grove-wide .grove3 .grove-point-more{font-size:10.5px;margin-top:1px}
+ .grove-wide .grove3 .grove-followups-hint{font-size:10.5px;margin-top:2px}
+ .grove-wide .grove3 .grove-chips .grove-chip{font-size:10px;min-height:18px;padding:1px 5px}
+ .grove-wide .grove3 .grove-cols{gap:10px}
+ .grove-wide .grove3 .grove-col{padding:5px 5px 6px}
+}
+
+/* Build 314 修正 6：左栏（rail）压紧，保证 1440×860 里 集合 + 日历 + 主导航 全部在首屏可点。 */
+.grove-wide .grove-rail-data{gap:8px}
+.grove-wide .grove-rail-cal .grove-tabs{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:2px;padding:2px;margin:0 0 6px}
+.grove-wide .grove-rail-cal .grove-tabs button{min-height:44px;font-size:11px;padding:0 2px;white-space:nowrap}
+.grove-wide .grove-rail-cal .grove-week-head{display:flex;align-items:center;justify-content:space-between;gap:4px;padding:0 2px 2px}
+.grove-wide .grove-rail-cal .grove-week-head strong{font-size:11px;white-space:nowrap}
+.grove-wide .grove-rail-cal .grove-week-head button{width:44px;height:44px;min-height:44px}
+.grove-wide .grove-rail-cal .grove-week-days{grid-template-columns:repeat(4,1fr);gap:2px;padding:2px}
+.grove-wide .grove-rail-cal .grove-day{min-height:44px;padding:2px 1px}
+.grove-wide .grove-rail-cal .grove-day span{font-size:9px}
+.grove-wide .grove-rail-cal .grove-day strong{font-size:12px}
+.grove-wide .grove-rail-cal .grove-day em{font-size:8.5px}
+.grove-wide .grove-rail-cal #today-courses{margin:6px 0 0;padding:6px 8px;font-size:10.5px;border-radius:8px}
+.grove-wide .grove-rail-cal #today-courses h2{font-size:10.5px;margin:0 0 3px}
+.grove-wide .grove-rail-cal #today-courses .grove-plans li,.grove-wide .grove-rail-cal #today-courses .grove-lessons li{font-size:10px;line-height:1.35}
+.grove-wide .grove-set{min-height:26px;font-size:12px;padding:0 7px}
+.grove-wide .grove-set-head{margin:6px 6px 2px;font-size:9px}
+.grove-wide .grove-set i{font-size:10.5px}
+.grove-wide aside nav{margin-top:8px!important}
+.grove-wide aside nav button{min-height:30px!important;font-size:12px!important}
+.grove-wide aside .sidefoot{font-size:10px;padding-top:4px}
+
+/* Build 314 修正 7（lead 5 点）：已取消不占明后天列；详情事实格去输入框感；步骤区避开旧 ::before；手机底部留出悬浮条+导航两份。 */
+.grove3 .grove-cancelled[hidden]{display:none}
+.grove3 .grove-cancelled{margin-top:10px;border-top:1px dashed var(--g-line);padding-top:8px}
+.grove3 .grove-cancelled .grove-col-body{display:flex;flex-direction:column;gap:8px;max-width:360px}
+.grove3 .grove-detail .grove-facts{display:flex;gap:18px;flex-wrap:wrap;padding:0;border:0;background:none}
+.grove3 .grove-detail .grove-fact{flex:0 1 auto;display:flex;flex-direction:column;align-items:flex-start;gap:1px;border:0;border-radius:0;background:transparent;padding:0;box-shadow:none;min-width:0}
+.grove3 .grove-detail .grove-fact span{font-size:10px;letter-spacing:.9px;color:var(--g-muted)}
+.grove3 .grove-detail .grove-fact strong{font-size:14px;font-weight:600;color:var(--g-ink);line-height:1.35}
+.grove3 .grove-detail .grove-fact em{font-style:normal;font-size:10px;color:var(--g-warn)}
+.grove3 .grove-badges .grove-chips{display:contents}
+.grove3 .grove-steps ul.grove-standards{counter-reset:g3;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px}
+.grove3 .grove-steps ul.grove-standards li{counter-increment:g3;display:flex;gap:8px;font-size:13px;line-height:1.62;color:var(--g-ink2);padding:0}
+.grove3 .grove-steps ul.grove-standards li::before{content:counter(g3);flex:0 0 17px;height:17px;border-radius:50%;background:var(--g-accent-weak);color:var(--g-accent-ink);font:600 10px/17px var(--round);text-align:center;margin-top:2px;position:static!important;width:17px;top:auto;left:auto;display:block}
+.grove3 .grove-bar.is-phone .child-filters{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;flex-wrap:nowrap}
+.grove3 .grove-bar.is-phone .child-filters::-webkit-scrollbar{display:none}
+.grove3 .grove-bar.is-phone .child-filters button{width:auto;flex:0 0 auto;min-height:30px;padding:0 10px;font-size:12.5px;border-radius:99px}
+.grove3 .grove-phone-bar{bottom:calc(66px + env(safe-area-inset-bottom,0px));box-sizing:border-box;width:100%;left:0;right:auto;padding:7px 12px}
+.grove3 .grove-phone-bar .grove-phone-later{flex:0 0 auto}
+.grove3 .grove-phone-bar .primary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:899px){body[data-page="home"] main{padding-bottom:calc(96px + env(safe-area-inset-bottom,0px))}}
+
+
+/* Build 314 修正 7：日历控件的点击区必须 ≥44（既有 test_calendar_learning_ui 断言 .grove-tabs button 与 [data-grove-day] 高度）。 */
+.grove-wide .grove-tabs button{min-height:44px!important}
+.grove-wide .grove-tabs{padding:2px}
+.grove-wide .grove-week .grove-day{min-height:44px!important}
+.grove-wide .grove-week-head button{width:44px!important;height:44px!important;min-height:44px!important}
+
+/* Build 314 修正 8：`grove-wide` 只属于桌面宽度；从宽屏缩到窄屏、JS 尚未重渲染的瞬间，纯 CSS 也要恢复移动端外壳（否则 site nav 会短暂变成 212px 侧栏里的 30px 按钮）。 */
+@media (max-width:850px){
+ body.grove-wide[data-page="home"] aside{position:static;inset:auto;width:auto;padding:15px 20px 0;overflow:visible;background:transparent;border-right:0;gap:0}
+ body.grove-wide[data-page="home"] aside .leaf,body.grove-wide[data-page="home"] aside .brand{display:block}
+ body.grove-wide[data-page="home"] aside nav{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));position:fixed;inset:auto 0 0;z-index:20;margin-top:0;gap:0}
+ body.grove-wide[data-page="home"] aside nav button{min-height:50px}
+ .grove-wide aside nav button{min-height:50px!important;font-size:12px!important}
+ body.grove-wide[data-page="home"] main{margin-left:0;max-width:none;padding:12px 16px calc(100px + env(safe-area-inset-bottom))}
+}
+@media (min-width:851px) and (max-width:1199px){
+ body.grove-wide[data-page="home"] aside{position:fixed;inset:0 auto 0 0;width:188px;padding:30px 17px;overflow:auto;background:transparent;border-right:0}
+ body.grove-wide[data-page="home"] aside .leaf,body.grove-wide[data-page="home"] aside .brand{display:block}
+ .grove-wide aside nav button{min-height:44px!important}
+ body.grove-wide[data-page="home"] main{margin-left:188px;max-width:none;padding:23px}
+}
+
+/* Build 314 修正 9：桌面左栏是 flex 列，日历/集合区自己滚动，主导航始终贴在左栏底部可见可点（fixture 数据多时也不被推下去）。 */
+@media (min-width:1200px){
+ body.grove-wide[data-page="home"] aside{display:flex;flex-direction:column;overflow:hidden}
+ body.grove-wide[data-page="home"] #groveRailData{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px}
+ body.grove-wide[data-page="home"] aside nav{margin-top:auto;flex:0 0 auto}
+ body.grove-wide[data-page="home"] aside .sidefoot{flex:0 0 auto}
+}
+
+/* Build 314 修正 10：手机端「日历/课表」压在清单上方并吸顶（测试要在点击 tab 后仍能看到 #today-courses 与 .grove-tabs），本周条留在清单之后。 */
+@media (max-width:899px){
+ .grove3 .grove-cal-top{position:sticky;top:0;z-index:8;background:var(--g-paper);padding:4px 0 6px;border-bottom:1px solid var(--g-line);max-height:74px;overflow:hidden}
+ .grove3 .grove-cal-top .grove-tabs{margin:0}
+ .grove3 .grove-cal-sched{margin:2px 0 4px;padding:0;border:0;background:transparent}
+ .grove3 .grove-cal-sched #today-courses{margin:0;padding:0;border:0;background:transparent;box-shadow:none;font-size:12px}
+ .grove3 .grove-cal-sched #today-courses h2{font-size:12.5px;margin:2px 0}
+ .grove3 .grove-cal-sched #today-courses .grove-plans{margin:2px 0}
+ .grove3 .grove-cal-bottom{margin-top:16px}
+ .grove3 .grove-cal-bottom .grove-week-head{justify-content:flex-start;gap:8px}
+}
+
+/* Build 314 收尾：去掉手机底部悬浮条（补录与“明天 N”收回顶栏），底部只留站点导航。 */
+@media (max-width:899px){
+ .grove3 .grove-bar.is-phone .grove-bar-later{font-size:11.5px;color:var(--g-muted);white-space:nowrap}
+ .grove3 .grove-bar.is-phone .grove-bar-main .primary{min-height:32px;height:32px;font-size:12px;padding:0 10px;border-radius:99px;flex:0 0 auto;white-space:nowrap}
+ .grove3 .grove-phone-bar{display:none!important}
+}
+
+/* Build 314 收尾2：压紧桌面中栏顶部（首卡 top<=120）与手机日历条。 */
+@media (min-width:1200px){
+ .grove3 .grove-board-scroll{padding-top:0}
+ .grove3 .grove-cols{padding:8px 12px 12px}
+ .grove3 .grove-col>.grove-tag,.grove3 .grove-col>h3{margin:0 0 3px}
+ .grove3 .grove-bar{padding:7px 12px}
+}
+
+/* Build 314 收尾3：补录并入手机顶栏胶囊行；桌面中栏顶部再压。 */
+.grove3 .grove-chips-row .grove-chip.is-add{min-height:30px;border:1px solid var(--g-accent);background:var(--g-accent);color:#fff;font-weight:600}
+@media (max-width:899px){
+ .grove3 .grove-bar.is-phone{padding:0 0 2px}
+ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:30px}
+}
+@media (min-width:1200px){
+ .grove3 .grove-bar{margin-bottom:0;padding-bottom:5px}
+ .grove3 .grove-board-scroll{padding-top:0}
+ .grove3 .grove-cols{padding-top:0}
+ .grove3 .grove-col{padding-top:2px}
+ .grove3 .grove-col-head{margin:0 4px 0}
+ .grove3 .grove-col>.grove-tag,.grove3 .grove-col>h3{margin:0}
+}
+
+/* Build 314 修正 11：1440/1200 左栏 flex 钉底主导航（覆盖 margin-top:8px!important），保证四项完整可见。 */
+@media (min-width:1200px){
+ body.grove-wide[data-page="home"] aside nav{margin-top:auto!important}
+ body.grove-wide[data-page="home"] aside nav button{min-height:30px!important;font-size:12px!important}
+}
+@media (min-width:851px) and (max-width:1199px){
+ body.grove-wide[data-page="home"] aside{display:flex;flex-direction:column;overflow:hidden}
+ body.grove-wide[data-page="home"] #groveRailData{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px}
+ body.grove-wide[data-page="home"] aside nav{margin-top:auto!important;flex:0 0 auto}
+ body.grove-wide[data-page="home"] aside nav button{min-height:36px!important;font-size:12px!important}
+ body.grove-wide[data-page="home"] aside .sidefoot{flex:0 0 auto;margin-top:0}
+}
+/* Build 314 修正 12：手机顶部日历条压成单行说明（去掉小卡外观与 max-height 裁切，消除与「今天要做」的图层重叠）。 */
+@media (max-width:899px){
+ .grove3 .grove-cal-top{max-height:none;overflow:visible;padding:2px 0 4px}
+ .grove3 .grove-cal-top #today-courses{margin:0;padding:0;border:0;background:transparent;box-shadow:none;display:block;min-height:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:18px}
+ .grove3 .grove-cal-top #today-courses > *{display:inline;font-size:11.5px;color:var(--g-muted);border:0;padding:0;margin:0}
+ .grove3 .grove-cal-top #today-courses h2{font-size:11.5px;display:inline;margin:0}
+ .grove3 .grove-cal-top #today-courses h2 span{display:none}
+ .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons){display:inline;list-style:none}
+ .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li{display:inline;margin:0}
+ .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li+li::before{content:" · "}
+}
+
+/* Build 314 修正 13：手机顶部日历条只留 46px tab + 18px 单行说明，彻底消除裁切/重叠。 */
+@media (max-width:899px){
+ .grove3 .grove-cal-top{max-height:none;overflow:visible;padding:1px 0 3px}
+ .grove3 .grove-cal-top #today-courses{height:18px;line-height:18px;margin:0;padding:0;border:0;background:transparent;box-shadow:none;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+ .grove3 .grove-cal-top #today-courses *{display:inline!important;min-height:0!important;height:auto!important;padding:0!important;margin:0!important;border:0!important;background:transparent!important;box-shadow:none!important;font-size:11.5px!important;line-height:18px!important;color:var(--g-muted)!important}
+ .grove3 .grove-cal-top #today-courses h2 span{display:none!important}
+ .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons){display:inline!important;list-style:none}
+ .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li{display:inline!important}
+ .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li+li::before{content:" · "}
+}
