@@ -49,9 +49,15 @@ def folded(change, ref='message:fiction-group:9', text='数学《星河练习》
 
 
 class FoldedLinesTest(unittest.TestCase):
-    def test_reminder_lines_stay_as_written(self):
+    def test_reminder_moves_to_a_later_notice_not_the_body(self):
+        # A same-fold reminder is a later notice, not another current requirement: its whole original is a follow-up line.
         lines = agent._school_folded_lines(dict(school_folded=[folded('same')]))
-        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', lines)
+        self.assertEqual(lines, ['后到提醒原文（2026-11-04 17:00）：数学《星河练习》第12页第1—3题，今晚完成。'])
+        import family_agenda
+        parsed = family_agenda._follow_up(lines[0])
+        self.assertEqual(parsed['label'], '提醒')
+        self.assertEqual(parsed['time'], '2026-11-04 17:00')
+        self.assertIn('数学《星河练习》第12页第1—3题，今晚完成。', parsed['text'])
 
     def test_appended_and_updated_lines_stay_labelled(self):
         appended = agent._school_folded_lines(dict(school_folded=[folded('append', text='交回时间不变。')]))
@@ -160,8 +166,49 @@ class FoldPendingTest(unittest.TestCase):
         self.assertIn('不用带叶子和旧书', row['body'])
         self.assertEqual(row['due'], '')
 
+    def test_a_notice_older_than_the_adopted_correction_is_not_called_a_correction(self):
+        # m04 arrived at 20:00 but was sent 16:00, before m09 (17:00) that already changed the range: it repeats the older
+        # wording, so the card must read it as an earlier reminder, never as the correction of "第1—4题" beside "第1—3题".
+        self.connection.execute('CREATE TABLE agent_messages(source_id TEXT, id TEXT, payload TEXT)')
+        for source_id, message_id, when, text in (
+                ('fiction-qq', '1', '2026-11-04T15:40:00+08:00', '数学《每日练习》第26页第1—4题，今晚完成。'),
+                ('fiction-qq', '9', '2026-11-04T17:00:00+08:00', '更正：第26页只做第1—3题，第4题不做。')):
+            self.connection.execute('INSERT INTO agent_messages VALUES(?,?,?)',
+                                    (source_id, message_id, json.dumps(dict(time=when, text=text), ensure_ascii=False)))
+        self.connection.commit()
+        plan = dict(school_task=dict(state='ready', goal='完成数学《每日练习》第26页第1—3题。'),
+                    school_messages=[dict(source_id='fiction-qq', message_id='1'),
+                                     dict(source_id='fiction-qq', message_id='9')])
+        self.save_card('完成数学《每日练习》第26页第1—3题，第4题不做。', '2026-11-06', plan)
+        item = dict(child_id='child-1', body='完成数学《每日练习》第26页1—4题，今晚做并签字，周五交。',
+                    due='2026-11-06',
+                    evidence=[quote('message:fiction-wx:4', '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字，周五交。',
+                                    '2026-11-04T16:00:00+08:00')])
+        ok = agent.Store._school_fold_pending(self.store, self.connection, item,
+                                              dict(item_id='agent-card', change='update'), NOW)
+        self.assertTrue(ok)
+        row = self.connection.execute("SELECT * FROM agent_items WHERE id='agent-card'").fetchone()
+        self.assertIn('先前提醒（2026-11-04 16:00）：', row['body'])
+        self.assertIn('第26页1—4题', row['body'])
+        self.assertNotIn('后到更正原文', row['body'])
+        self.assertEqual(row['due'], '2026-11-06')
+        plan = json.loads(row['plan'])
+        self.assertEqual(plan['school_folded'][-1]['change'], 'earlier')
+        lines = [line for line in row['body'].split('\n') if '先前提醒' in line]
+        self.assertEqual(len(lines), 1)
+        # A string assertion is not enough: the projection must parse this line as one follow-up (label + time), or it stays
+        # in the card's own body and the old "1—4题" wording still reads beside "1—3题".
+        import family_agenda
+        parsed = family_agenda._follow_up(lines[0])
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed['label'], '先前提醒')
+        self.assertEqual(parsed['time'], '2026-11-04 16:00')
+        self.assertIn('第26页1—4题', parsed['text'])
+
     def test_a_plain_reminder_keeps_one_body_and_its_day(self):
         row = self.fold('same')
+        # The reminder's words read as its own later notice; the card body keeps the requirement in force only.
+        self.assertIn('后到提醒原文（2026-11-04 16:00）：', row['body'])
         self.assertIn('今晚完成', row['body'])
         self.assertEqual(row['due'], '2026-11-06')
 

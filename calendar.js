@@ -677,8 +677,9 @@ function todayTasksHTML(){
   +'</div>'+cancelledHTML;
  const phoneBar='';
  const tabCal=mode==='desktop'?'':`<div class="grove-cal">${groveTabsHTML(view)}</div>`;
- const chipsAdd=mode==='desktop'?'':`<div class="grove-chips-row" role="group" aria-label="清单范围"><button type="button" class="grove-chip is-add" data-homework-new="${esc(currentChild()?.id)}">＋补录</button>${groveSetListHTML(view,true)}</div>`;
- const phoneCal=mode==='desktop'?'':`<div class="grove-cal-top">${groveTabsHTML(view)}<div class="grove-cal-sched">${groveScheduleHTML(view)}</div></div>`;
+ const schedEmpty=!!(view.schedule&&!(view.schedule.lessons||[]).length&&!(view.schedule.plans||[]).length&&!view.schedule_error);
+ const chipsAdd=mode==='desktop'?'':`<div class="grove-chips-row" role="group" aria-label="清单范围"><button type="button" class="grove-chip is-add" data-homework-new="${esc(currentChild()?.id)}">＋补录</button>${groveSetListHTML(view,true)}${schedEmpty?`<button type="button" class="grove-chip" data-page="calendar">日历 / 导入课表</button>`:''}</div>`;
+ const phoneCal=mode==='desktop'?'':`<div class="grove-cal-top">${groveTabsHTML(view)}${schedEmpty?'':`<div class="grove-cal-sched">${groveScheduleHTML(view)}</div>`}</div>${schedEmpty?`<div hidden>${groveScheduleHTML(view)}</div>`:''}`;
  const phoneWeek=mode==='desktop'?'':`<div class="grove-cal-bottom">${groveWeekHTML(view,day)}</div>`;
  const body=groveTab==='wrong'?`${tabCal}<div class="grove-wrongbook">${groveWrongHTML(view)}</div>`
   :groveTab==='learning'?`${tabCal}<div class="grove-learning-list">${groveLearningHTML(view)}</div>`
@@ -955,6 +956,8 @@ function groveRailHost(){return document.getElementById('groveRailData')}
 function groveAfterRender(){
  const home=page==='home',view=home?groveView():null,mode=groveMode(),wide=home&&mode==='desktop'&&!!view;
  document.body.classList.toggle('grove-wide',wide);
+ // 手机/两列：把「消息读取缺口」条挪到清单末尾，顶部让给今天要做（语义不变，仍可见可点）。
+ if(home&&mode!=='desktop'){const gapEl=document.querySelector('.grove-cols')?.parentElement?.querySelector('.today-source-gap'),colsEl=document.querySelector('.grove-cols');if(gapEl&&colsEl)colsEl.after(gapEl)}
  const aside=document.querySelector('aside');if(!aside)return;
  let host=groveRailHost();
  if(!wide){if(host)host.remove();return}

@@ -2576,6 +2576,9 @@ class Store:
         old=json.loads(row['evidence'] or '[]');seen={q.get('ref') for q in old}
         added=[q for q in item.get('evidence') or [] if q.get('ref') not in seen]
         change=str(link.get('change') or 'same')
+        # A notice that arrived later but was sent before the card's newest adopted message only repeats the older
+        # wording: it must read as an earlier reminder, never as the correction the card already carries.
+        stored_change=_school_earlier_change(change,[_school_original_time(q) for q in added],_school_adopted_times(c,plan))
         lines=[line for line in str(row['body'] or '').split('\n') if line.strip()]
         if change=='same':
             for line in str(item.get('body') or '').split('\n'):
@@ -2586,7 +2589,7 @@ class Store:
         # The later original stays verbatim in this card's own plan: it proves the fold, while the card's cited originals (which
         # the agenda reads one day's own words from) stay the first notice and its corrections. Its own lines join the visible
         # body for every change: a reminder's requirement, a labelled replacement, or the ground of a cancellation.
-        folded.append(dict(refs=[q.get('ref') for q in added],change=change,at=now.isoformat(),
+        folded.append(dict(refs=[q.get('ref') for q in added],change=stored_change,at=now.isoformat(),
                            originals=[dict(ref=q.get('ref'),text=q.get('text'),time=q.get('time'),sender=q.get('sender'),publisher=q.get('publisher')) for q in added]))
         plan['school_folded']=folded
         body=_school_folded_body(plan,body)
@@ -3225,7 +3228,7 @@ def _school_oral_entry(entry):
     return bool(_SCHOOL_ORAL_PERSON.search(sender) or _SCHOOL_ORAL_ACCOUNT.search(account))
 
 
-_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：'}
+_SCHOOL_FOLDED_LABEL = {'cancel':'取消依据：','update':'后到更正原文：','append':'后到补充原文：','same':'后到提醒原文：','earlier':'先前提醒：'}
 
 
 def _school_folded_originals(plan):
@@ -3238,6 +3241,51 @@ def _school_folded_originals(plan):
             text=str((original or {}).get('text') or '').strip()
             if text: found.append((str((original or {}).get('ref') or ''),text,change,str((original or {}).get('time') or '')))
     return found
+
+
+_SCHOOL_FOLD_NOTE_EARLIER = '后到原文（早于已采纳的更正，仅作记录）：'
+
+
+def _school_message_times(c, refs):
+    """The sending times of the messages a card already adopted, newest last.
+
+    A later notice's own time is compared with these to tell a true correction from an earlier reminder that only
+    arrived later: the card must never call the older wording its correction.
+    """
+    found=[]
+    for ref in refs or []:
+        parts=str(ref or '').split(':',2)
+        if len(parts)!=3 or parts[0]!='message': continue
+        try: row=c.execute('SELECT payload FROM agent_messages WHERE source_id=? AND id=?',(parts[1],parts[2])).fetchone()
+        except Exception: continue
+        if row is None: continue
+        try: when=str(json.loads(row['payload']).get('time') or '')
+        except Exception: when=''
+        if when: found.append(when)
+    return found
+
+
+def _school_original_time(original):
+    """When a folded original was sent: its stored time, else the collection banner's own stamp."""
+    banner,_text=_school_folded_text((original or {}).get('text'))
+    return str((original or {}).get('time') or banner or '')
+
+
+def _school_earlier_change(change, times, adopted):
+    """A later-arriving notice that is older than every message already adopted is an earlier reminder, not a change."""
+    # Only a replacement-style label can be contradicted by an older wording ("更正: 1—4题" beside "1—3题"); a plain
+    # reminder's own label (提醒) is true whenever it was sent, so an older reminder stays a reminder.
+    if change not in ('update','append'): return change
+    known=[str(t or '') for t in times if t]
+    if not known or not adopted: return change
+    newest=max(str(t) for t in adopted)
+    return 'earlier' if all(t<newest for t in known) else change
+
+
+def _school_adopted_times(c, plan):
+    refs=['message:'+str(m.get('source_id'))+':'+str(m.get('message_id'))
+          for m in (plan or {}).get('school_messages') or [] if isinstance(m,dict) and m.get('source_id') and m.get('message_id')]
+    return _school_message_times(c, refs)
 
 
 _SCHOOL_FOLD_NOTE = '后到原文（更正/取消依据，不进本事项日期判断）：'
@@ -3270,7 +3318,8 @@ def _school_fold_note(original):
     ref,text,change,time=original
     banner,text=_school_folded_text(text)
     stamp=str(time or banner or '').strip()[:16].replace('T',' ')
-    return _SCHOOL_FOLD_NOTE+(stamp or '时间未知')+'（'+ref+'）「'+str(text or '').strip()+'」'
+    prefix=_SCHOOL_FOLD_NOTE_EARLIER if change=='earlier' else _SCHOOL_FOLD_NOTE
+    return prefix+(stamp or '时间未知')+'（'+ref+'）「'+str(text or '').strip()+'」'
 
 
 def _school_folded_lines(plan):
@@ -3423,7 +3472,7 @@ def _school_accept_fold(store,row,plan):
     cited=[(ref,text) for ref,text,change,time in folded
            if ref and text and change in ('same','append')]
     noted=[_school_fold_note(original) for original in folded
-           if original[0] and original[1] and original[2] in ('update','cancel')]
+           if original[0] and original[1] and original[2] in ('update','cancel','earlier')]
     if not lines and not cited and not noted: return
     with store._db() as c:
         item=c.execute('SELECT task_id FROM agent_items WHERE id=?',(row['id'],)).fetchone()
@@ -9922,31 +9971,38 @@ def _fold_school_follows(app, store, now):
             if task is None: continue
             evidence,_=_school_material(store,c,row)
             change=str((link or {}).get('change') or brief.get('change') or 'same')
+            target_plan=json.loads(target['plan'] or '{}')
+            stored_change=_school_earlier_change(change,[_school_original_time(e) for e in evidence],
+                                                 _school_adopted_times(c,target_plan))
             lines=[line for line in str(task['action'] or '').split('\n') if line.strip()]
-            for line in str(row['body'] or '').split('\n'):
-                line=line.strip()
-                if line and line not in lines: lines.append(line)
+            if stored_change not in ('same','earlier'):
+                for line in str(row['body'] or '').split('\n'):
+                    line=line.strip()
+                    if line and line not in lines: lines.append(line)
             # Every line of the later original stays visible in the action, and its message stays readable in the sources.
             # Both paths write the same convention: a reminder/addition is cited (its message is part of the affair's own
             # day), while a replacement/cancellation is a readable note with its words and sending time, never a cited
-            # message line: the agenda reads one day's roles from every cited message.
-            folded_plan={'school_folded':[dict(change=change,originals=[
+            # message line: the agenda reads one day's roles from every cited message. A reminder's own words are listed
+            # as a follow-up (后到提醒原文) instead of repeating the requirement the card already carries: the saved card
+            # keeps today's requirement, and the reminder reads as its own later notice.
+            folded_plan={'school_folded':[dict(change=stored_change,originals=[
                 dict(ref=e.get('ref'),text=e.get('text'),time=e.get('time')) for e in evidence])]}
             for line in _school_folded_lines(folded_plan):
                 if line not in lines: lines.append(line)
             source=str(task['source'] or '')
             cited=[e for e in evidence if e.get('ref') and str(e.get('text') or '').strip()]
             extra=[str(e.get('ref'))+'\n'+str(e.get('text')).strip() for e in cited
-                   if change in ('same','append') and str(e.get('ref')) not in source]
-            notes=[_school_fold_note((str(e.get('ref')),str(e.get('text')),change,str(e.get('time') or '')))
-                   for e in cited if change in ('update','cancel')]
+                   if stored_change in ('same','append') and str(e.get('ref')) not in source]
+            notes=[_school_fold_note((str(e.get('ref')),str(e.get('text')),stored_change,str(e.get('time') or '')))
+                   for e in cited if stored_change in ('update','cancel','earlier')]
             notes=[note for note in notes if note not in source]
             if extra: source=source+'\n\n'+'\n\n'.join(extra)
             if notes: source=source+'\n\n'+'\n'.join(notes)
             due=task['due']
             if change=='cancel':
                 due=''
-            elif change in ('update','append'):
+            elif change in ('update','append') and stored_change!='earlier':
+                # An earlier reminder never moves the day: it is older than the wording the task already carries.
                 due=_school_late_due(evidence) or task['due']
             c.execute('UPDATE manual_tasks SET action=?,source=?,due=? WHERE id=?',
                       ('\n'.join(lines),source,due,task['id']))
@@ -9959,7 +10015,7 @@ def _fold_school_follows(app, store, now):
                       (task['id'],_json(plan),now.isoformat(),row['id']))
             target_plan=json.loads(target['plan'] or '{}')
             target_plan.setdefault('school_folded',[]).append(dict(item_id=row['id'],refs=[e.get('ref') for e in evidence],at=now.isoformat(),
-                                                                     change=change,
+                                                                     change=stored_change,
                                                                      originals=[dict(ref=e.get('ref'),text=e.get('text'),time=e.get('time'),sender=e.get('sender'),publisher=e.get('publisher')) for e in evidence]))
             c.execute('UPDATE agent_items SET plan=?,updated=? WHERE id=?',(_json(target_plan),now.isoformat(),target['id']))
             used+=1

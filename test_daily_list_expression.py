@@ -322,6 +322,16 @@ class FollowUpTests(unittest.TestCase):
         self.assertIn('朗读仍是《风经过小巷》第2、3自然段各两遍。', row['lines'])
         self.assertIn('今天18:30由家长听读。', row['lines'])
 
+    def test_a_prior_reminder_reads_before_the_later_correction_and_keeps_its_label(self):
+        later = ('\n后到更正原文（2026-11-04 17:00）：只做第1—3题。'
+                 '\n先前提醒（2026-11-04 16:00）：再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
+        task, item = self._task_and_item(self.BASE + later)
+        row = self._row(task, item)
+        self.assertEqual([f['label'] for f in row['follow_ups']], ['先前提醒', '更正'])
+        self.assertEqual([f['time'] for f in row['follow_ups']], ['2026-11-04 16:00', '2026-11-04 17:00'])
+        self.assertEqual(row['follow_ups'][0]['text'],
+                         '再提醒今天那份数学《每日练习》：第26页1—4题，今晚做、签字。')
+
     def test_multi_line_originals_are_kept_whole_in_arrival_order_at_the_same_time(self):
         later = ('\n后到补充原文（2026-11-04 17:00）：交回时间不变。'
                  '\n后到补充原文（2026-11-04 17:00）：周五仍交给数学周老师。'
@@ -358,6 +368,37 @@ class FollowUpTests(unittest.TestCase):
         self.assertEqual(row['lines'], [])
         self.assertEqual(row['plan_lines'], ['家长自己的安排'])
         self.assertEqual(row['follow_ups'], [{'label': '更正', 'time': '2026-11-04 16:00', 'text': '第4题不做。'}])
+
+
+class CompoundRestatementTests(unittest.TestCase):
+    """C9b: a line that joins two already-shown requirements with 后/，/； reads once; no similarity, only exact pieces.
+
+    Each piece must read earlier; a digit or negation of its own must also read earlier; and at least two lines stay,
+    so a two-line card is never emptied. A compound line with one new piece stays whole instead of being split into a
+    fragment (带跳绳，穿运动鞋 keeps 穿运动鞋 and the sentence it was written in)."""
+
+    TITLE = '数学：完成练习册第3页第2题'
+
+    def test_a_line_combining_two_shown_requirements_is_left_out(self):
+        shown = family_agenda.action_lines(
+            self.TITLE, '完成练习册第3页第2题。\n请家长签字。\n周五交给数学老师。\n家长签字后周五交给数学老师。')
+        self.assertEqual(shown, ['请家长签字。', '周五交给数学老师。'])
+
+    def test_a_different_number_keeps_both_lines(self):
+        shown = family_agenda.action_lines('语文：A', '交作业到1号本。\n交作业到2号本。')
+        self.assertEqual(shown, ['交作业到1号本。', '交作业到2号本。'])
+
+    def test_a_negation_of_its_own_keeps_both_lines(self):
+        shown = family_agenda.action_lines('语文：A', '明天交练习册。\n明天不交练习册。')
+        self.assertEqual(shown, ['明天交练习册。', '明天不交练习册。'])
+
+    def test_a_compound_line_with_one_new_piece_keeps_its_whole_sentence(self):
+        shown = family_agenda.action_lines('语文：A', '带跳绳。\n带跳绳，穿运动鞋。')
+        self.assertEqual(shown, ['带跳绳。', '带跳绳，穿运动鞋。'])
+
+    def test_at_least_two_lines_remain(self):
+        shown = family_agenda.action_lines('语文：A', '请家长签字，周五交给数学老师。\n家长签字后周五交给数学老师。')
+        self.assertEqual(shown, ['请家长签字，周五交给数学老师。', '家长签字后周五交给数学老师。'])
 
 
 class PunctuationTests(unittest.TestCase):

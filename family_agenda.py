@@ -1007,8 +1007,8 @@ _PLAN_LINE=re.compile(r'^家庭安排（计划\s*[^）]*）[：:]\s*(.*)$')
 # A later notice's own words, as the merge keeps them beside the card's original requirements. They are provenance for
 # the parent's review, not the requirement in force today, so the day row lists them as follow_ups (C9) and never mixes
 # them into lines: an older range beside its correction reads as two contradictory instructions.
-_FOLLOW_UP_LINE = re.compile(r'^(后到更正原文|后到补充原文|后到提醒原文|取消依据|后到原文)\s*(?:（([^）]*)）)?\s*[：:]\s*(.*)$')
-_FOLLOW_UP_LABEL = {'后到更正原文':'更正','后到补充原文':'补充','后到提醒原文':'提醒','取消依据':'取消','后到原文':'提醒'}
+_FOLLOW_UP_LINE = re.compile(r'^(后到更正原文|后到补充原文|后到提醒原文|先前提醒|取消依据|后到原文)\s*(?:（([^）]*)）)?\s*[：:]\s*(.*)$')
+_FOLLOW_UP_LABEL = {'后到更正原文':'更正','后到补充原文':'补充','后到提醒原文':'提醒','先前提醒':'先前提醒','取消依据':'取消','后到原文':'提醒'}
 _FOLLOW_UP_TIME = re.compile(r'(\d{4}-\d{2}-\d{2})[ T](\d{1,2}:\d{2})')
 
 def _follow_up(line):
@@ -1168,6 +1168,34 @@ def _label_line(content,shown):
     return content,set()
 
 
+_COMPOUND_SPLIT=re.compile(r'[后，,；;]')
+
+def _compound_parts(line):
+    """The pieces a combined restatement joins with 后/，/；, compared as plain words (display only)."""
+    return [part for part in (_plain(x) for x in _COMPOUND_SPLIT.split(str(line or ''))) if part]
+
+def _compound_covered(line,shown_text):
+    """True when every piece of this line already reads earlier, with its digits and negations also present there."""
+    parts=_compound_parts(line)
+    if len(parts)<2 or not all(part in shown_text for part in parts):return False
+    if any(ch in line and ch not in shown_text for ch in '不没别勿禁'):return False
+    return not (set(re.findall(r'\d+',str(line))) - set(re.findall(r'\d+',shown_text)))
+
+def _compound_drops(shown):
+    """Indices of combined restatement lines that add nothing over the lines already shown before them.
+
+    The guard keeps a two-line card from emptying (at least two lines must remain) and never lets a line's own
+    number/negation disappear without the earlier text carrying it, so 1号本/2号本 or 交/不交 stay two lines."""
+    if len(shown)<3:return set()
+    drops,kept=set(),[]
+    for i,line in enumerate(shown):
+        before=''.join(_plain(whole) for whole in kept)
+        if len(shown)-len(drops)-1>=2 and _compound_covered(line,before):
+            drops.add(i)
+        else:kept.append(line)
+    return drops
+
+
 def action_lines(title,action,words=None):
     """The saved action's lines as a card under this title shows them; display only, nothing is saved or rewritten.
 
@@ -1209,12 +1237,22 @@ def action_lines(title,action,words=None):
         if taken and not _plain(line):continue
         if _whole_title_repeat(line,heading):continue
         if any(_covered_by(_plain(whole),_plain(line)) for whole in shown):continue
+        # A line joining earlier pieces with 后/，/； either reads whole or goes whole in _compound_drops; splitting it
+        # here could leave a bare fragment of a sentence that the saved order never wrote.
+        parts=_compound_parts(line)
+        if len(parts)>=2:
+            before=''.join(_plain(whole) for whole in shown)
+            if any(part in before for part in parts):
+                if taken:edited.add(len(shown))
+                shown.append(line);continue
         line,repeated=_without_repeats(line,shown)
         if not _plain(line):continue
         if taken or repeated:edited.add(len(shown))
         shown.append(line)
+    drops=_compound_drops(shown)
     out=[]
     for i,line in enumerate(shown):
+        if i in drops:continue
         parts=_steps(line)
         if i in edited:parts=[part.strip().strip('；;，,') for part in parts]
         out.extend(part for part in parts if _plain(part))

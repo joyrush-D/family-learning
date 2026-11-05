@@ -936,3 +936,148 @@ body.grove-wide[data-page="home"] main{margin-left:212px;max-width:none;padding:
  .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li{display:inline!important}
  .grove3 .grove-cal-top #today-courses :is(.grove-plans,.grove-lessons) li+li::before{content:" · "}
 }
+
+/* Build 314 视觉关 1-3（手机）：顶部压到 ≤200px、可点热区 ≥44、sheet 降到 38vh 露出 ≥2 张卡。 */
+@media (max-width:899px){
+ /* 1) 顶部压紧：aside/main/hero/告警/胶囊/日历条/列头 逐层收 */
+ body[data-page="home"] aside{padding:6px 14px 0}
+ body[data-page="home"] main{padding:6px 12px calc(96px + env(safe-area-inset-bottom,0px))}
+ .grove3 .grove-bar.is-phone{padding:0 0 1px;gap:0}
+ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:28px;gap:6px}
+ .grove3 .grove-bar.is-phone .grove-bar-kids .child-filters{gap:4px}
+ .grove3 .grove-bar.is-phone .grove-bar-main{gap:6px;min-height:24px}
+ .grove3 .grove-bar.is-phone .grove-bar-h{font-size:18px;line-height:1.15}
+ .grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:21px}
+ .grove3 .grove-bar.is-phone .grove-progress{height:4px}
+ .grove3 .grove-bar.is-phone .grove-bar-daybtn{min-height:28px!important;height:28px;padding:0 6px;font-size:11.5px}
+ /* 缺口语义条压成单行 16px */
+ .grove3 .today-source-gap,body[data-page="home"] .today-source-gap{margin:2px 0!important;padding:1px 6px!important;font-size:11.5px!important;line-height:1.25!important}
+ .grove3 .today-source-gap button,body[data-page="home"] .today-source-gap button{min-height:0!important;height:16px!important;padding:0 2px!important;font-size:11.5px!important}
+ /* 集合胶囊 32px，热区后面用 ::after 扩到 44 */
+ .grove3 .grove-chips-row{margin:2px 0 0;gap:4px;height:32px;align-items:center}
+ .grove3 .grove-chips-row .grove-chip{min-height:30px!important;height:30px;font-size:11.5px;padding:0 8px;position:relative}
+ .grove3 .grove-chips-row .grove-chip.is-add{min-height:30px!important;height:30px}
+ /* 日历 tab + 单行课表说明：46+16 */
+ .grove3 .grove-cal-top{padding:0 0 2px}
+ .grove3 .grove-cal-top .grove-tabs{padding:1px;gap:2px}
+ .grove3 .grove-cal-top .grove-tabs button{min-height:44px!important;height:44px;font-size:13px}
+ .grove3 .grove-cal-top #today-courses{height:16px;line-height:16px;font-size:11px}
+ .grove3 .grove-cal-top #today-courses *{font-size:11px!important;line-height:16px!important}
+ /* 列头压紧 */
+ .grove3 .grove-board-scroll{padding:2px 0 0}
+ .grove3 .grove-cols{padding:0}
+ .grove3 .grove-col{padding:4px 5px 6px}
+ .grove3 .grove-col-head{font-size:10px;margin:0 2px 1px}
+ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:11px;line-height:1.3;margin:0 0 1px;padding:0 6px}
+ .grove3 .grove-subject{margin-top:4px}
+ /* 2) 可点热区 ≥44×44（视觉高度不变） */
+ .grove3 .grove-chips-row .grove-chip::after,
+ .grove3 .grove-bar.is-phone .child-filters button::after,
+ .grove3 .grove-bar.is-phone .grove-bar-daybtn::after,
+ .grove3 .grove-cal-top .grove-tabs button::after,
+ .grove3 .grove-cal-top #today-courses button::after,
+ .grove3 .grove-cal-top #today-courses a::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%);z-index:2}
+ .grove3 .grove-chips-row .grove-chip,
+ .grove3 .grove-bar.is-phone .child-filters button,
+ .grove3 .grove-bar.is-phone .grove-bar-daybtn,
+ .grove3 .grove-cal-top .grove-tabs button,
+ .grove3 .grove-cal-top #today-courses :is(button,a){position:relative}
+ /* 3) sheet 降到 38vh，上方露出 ≥2 张卡 */
+ .grove3 .grove-detail{max-height:min(27vh,240px)!important}
+}
+
+/* Build 314 视觉关 1-3（手机·二轮）：再压 40-55px，把首卡打到 ≤200。 */
+@media (max-width:899px){
+ body[data-page="home"] aside{padding:4px 14px 0}
+ body[data-page="home"] main{padding:4px 12px calc(96px + env(safe-area-inset-bottom,0px))}
+ .grove3 .grove-bar.is-phone{padding:0;gap:0;border-bottom:0}
+ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:26px;gap:5px}
+ .grove3 .grove-bar.is-phone .grove-bar-main{gap:5px;min-height:21px}
+ .grove3 .grove-bar.is-phone .grove-bar-h{font-size:17px;line-height:1.1}
+ .grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:20px}
+ .grove3 .grove-bar.is-phone .grove-progress{height:3px}
+ .grove3 .grove-bar.is-phone .grove-bar-daybtn{min-height:26px!important;height:26px;padding:0 5px;font-size:11px}
+ .grove3 .grove-board-scroll{padding:0}
+ .grove3 .grove-chips-row{margin:1px 0 0;height:30px}
+ .grove3 .grove-chips-row .grove-chip{min-height:28px!important;height:28px;font-size:11px;padding:0 7px}
+ .grove3 .grove-chips-row .grove-chip.is-add{min-height:28px!important;height:28px}
+ .grove3 .grove-cal-top{padding:0}
+ .grove3 .grove-cal-top .grove-tabs button{min-height:44px!important;height:44px;font-size:12.5px}
+ .grove3 .grove-cal-top #today-courses{height:14px;line-height:14px}
+ .grove3 .grove-cal-top #today-courses *{font-size:10.5px!important;line-height:14px!important}
+ .grove3 .grove-col{padding:3px 4px 5px}
+ .grove3 .grove-col-head{font-size:9.5px;line-height:1.2;margin:0 2px}
+ .grove3 .grove-col-body{padding-top:0}
+ .grove3 .grove-subject{margin-top:2px}
+ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:10.5px;line-height:1.25;margin:0 0 1px;padding:0 5px}
+ /* 手机今日卡：padding 10–12，行高 ≥1.55 可读 */
+ .grove3 #task-groups .grove-row{padding:10px 11px}
+ .grove3 #task-groups .grove-row .grove-title{line-height:1.55}
+ .grove3 #task-groups .grove-row .grove-points,.grove3 #task-groups .grove-row .grove-points .grove-point{line-height:1.6}
+}
+
+/* Build 314 视觉关 1-3（手机·收尾 10px） */
+@media (max-width:899px){
+ .grove3 .grove-chips-row{margin:0;height:28px}
+ .grove3 .grove-chips-row .grove-chip{min-height:28px!important;height:28px;padding:0 6px}
+ .grove3 .grove-cal-top .grove-tabs{padding:0;gap:1px}
+ .grove3 .grove-cal-top .grove-tabs button{min-height:44px!important;height:44px}
+ .grove3 .grove-cal-top #today-courses{height:12px;line-height:12px}
+ .grove3 .grove-cal-top #today-courses *{font-size:10px!important;line-height:12px!important}
+ .grove3 .grove-col{padding:2px 4px 4px}
+ .grove3 .grove-col-head{font-size:9px;line-height:1.1;margin:0 1px}
+ .grove3 .grove-subject{margin:1px 0 0}
+ .grove3 .grove-subject>.grove-tag,.grove3 .grove-subject>h2.grove-tag{font-size:10px;line-height:1.2;margin:0;padding:0 4px}
+}
+
+/* Build 314 视觉关 1-3（手机·终轮）：胶囊行 44 命中盒、隐藏列头、课表行回到 18px 供命中、bar 再压。 */
+@media (max-width:899px){
+ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:26px}
+ .grove3 .grove-bar.is-phone .child-filters button{min-height:26px!important;height:26px;padding:0 8px;font-size:11.5px}
+ .grove3 .grove-bar.is-phone .grove-bar-main{min-height:20px;gap:4px}
+ .grove3 .grove-bar.is-phone .grove-bar-h{font-size:16.5px;line-height:1.05}
+ .grove3 .grove-bar.is-phone .grove-bar-h strong{font-size:19px}
+ .grove3 .grove-bar.is-phone .grove-bar-daybtn{min-height:24px!important;height:24px;padding:0 4px;font-size:10.5px}
+ .grove3 .grove-col-head{display:none!important}
+ .grove3 .grove-col{padding:1px 4px 4px}
+ .grove3 .grove-cal-top #today-courses{height:18px;line-height:18px;overflow:visible}
+ .grove3 .grove-cal-top #today-courses *{font-size:10.5px!important;line-height:18px!important}
+ /* 胶囊行：容器 44 高，胶囊视觉仍 28（::before 画底），元素 44 就是命中盒 */
+ .grove3 .grove-chips-row{height:44px;align-items:center;overflow-x:auto;overflow-y:hidden;padding:0 2px;margin:0}
+ .grove3 .grove-chips-row .grove-set,.grove3 .grove-chips-row .grove-chip{position:relative;height:44px!important;min-height:44px!important;border:0!important;background:transparent!important;box-shadow:none!important;padding:0 8px!important;display:inline-flex;align-items:center;gap:4px;font-size:11px;color:var(--g-ink2,#565147)}
+ .grove3 .grove-chips-row .grove-set::before,.grove3 .grove-chips-row .grove-chip::before{content:"";position:absolute;left:0;right:0;top:50%;height:28px;transform:translateY(-50%);border-radius:999px;background:var(--g-surface,#fffdf8);border:1px solid var(--g-line,#e5dfd1);z-index:-1}
+ .grove3 .grove-chips-row .grove-set.is-on::before{background:var(--g-accent,#2f5d4b);border-color:var(--g-accent,#2f5d4b)}
+ .grove3 .grove-chips-row .grove-set.is-on{color:#fff}
+ .grove3 .grove-chips-row .grove-chip.is-add::before{background:var(--g-accent-weak,#e9f0eb);border-color:transparent}
+ /* 日历/导入课表按钮 44 热区（p 允许溢出，避免被 overflow 裁掉） */
+ .grove3 .grove-cal-top #today-courses button{position:relative}
+ .grove3 .grove-cal-top #today-courses button::after{content:"";position:absolute;left:50%;top:50%;width:44px;height:44px;transform:translate(-50%,-50%)}
+}
+
+/* Build 314 视觉关 1-3（手机·终轮 2）：孩子切换 44 视觉不变；看明天/日历按钮 44 热区 */
+@media (max-width:899px){
+ .grove3 .grove-bar.is-phone .grove-bar-kids{min-height:44px}
+ .grove3 .grove-bar.is-phone .child-filters{gap:5px;overflow:visible}
+ .grove3 .grove-bar.is-phone .child-filters button{position:relative;height:44px!important;min-height:44px!important;border:0!important;background:transparent!important;box-shadow:none!important;padding:0 10px!important;font-size:11.5px;color:var(--g-ink2,#565147)}
+ .grove3 .grove-bar.is-phone .child-filters button::before{content:"";position:absolute;left:0;right:0;top:50%;height:26px;transform:translateY(-50%);border-radius:999px;background:var(--g-surface,#fffdf8);border:1px solid var(--g-line,#e5dfd1);z-index:-1}
+ .grove3 .grove-bar.is-phone .child-filters button[aria-pressed="true"]::before{background:var(--g-accent,#2f5d4b);border-color:var(--g-accent,#2f5d4b)}
+ .grove3 .grove-bar.is-phone .child-filters button[aria-pressed="true"]{color:#fff}
+ .grove3 .grove-bar.is-phone .grove-bar-main{overflow:visible}
+ .grove3 .grove-bar.is-phone .grove-bar-daybtn{position:relative!important;height:44px!important;min-height:44px!important;margin:-10px 0!important;display:inline-flex!important;align-items:center;justify-content:center;padding:0 6px!important}
+ .grove3 .grove-cal-top #today-courses[data-schedule="none"]{display:none!important}
+ .grove3 .grove-chips-row .grove-chip[data-page="calendar"]{white-space:nowrap}
+}
+
+/* Build 314 视觉关：修复 site-nav 通用规则误伤「日历 tabs」（.grove-tabs 本身是 <nav>，被 aside nav button 命中压到 30/36px）。
+   用更高优先级把 tabs 按钮钉回 44px，site nav 的四项不受影响。 */
+body.grove-wide[data-page="home"] aside nav.grove-tabs button,
+body.grove-wide[data-page="home"] aside nav.grove-tabs button:hover{
+ min-height:44px!important;height:44px!important;font-size:11.5px!important;padding:0 2px!important;white-space:nowrap;
+}
+
+/* Build 314 视觉关：手机端杜绝横向滚动（fixture 有课表/长标题时也不让文档被撑宽）。 */
+@media (max-width:899px){
+ body[data-page="home"] main{overflow-x:clip}
+ .grove3,.grove3 .grove-board,.grove3 .grove-board-scroll,.grove3 .grove-list-head{max-width:100%;min-width:0;overflow-x:clip}
+ .grove3 .grove-tabs,.grove3 .grove-tabs button,.grove3 .grove-col{min-width:0}
+}
