@@ -445,5 +445,111 @@ class TitleNumberGuardTests(unittest.TestCase):
         self.assertEqual(family_agenda.action_lines('英语：完成《每日练习》', '完成英语《每日练习》。'), [])
 
 
+class WorkKindTests(unittest.TestCase):
+    """Build 320: each card names what kind of work it asks for, so the app requests the right evidence.
+
+    The judgement is display-only and first-match-wins in the product's order; a negated keyword (不用朗读) is not a
+    request, and 做题 stays the fallback rather than the label for every card. The three real-snapshot rows pin the
+    shapes the app already renders.
+    """
+
+    REAL_ENGLISH_TITLE = '英语：完成《每日练习》并放入英语夹'
+    REAL_ENGLISH_LINES = ['英语《每日练习》见今天这份附件，今晚完成，做完放进英语夹里，明天带来。',
+                          '一、看图选词第1—3题。', '二、标星单词 under、near 各抄写一遍。', '不需要录音。']
+    REAL_MATH_TITLE = '数学：完成《每日练习》第26页第1—3题'
+    REAL_MATH_LINES = ['第4题不做。', '每题写出算式并验算。', '请家长签字。', '周五交给数学老师。']
+    REAL_CHINESE_TITLE = '朗读《风经过小巷》第2、3自然段'
+    REAL_CHINESE_LINES = ['今晚朗读《风经过小巷》第2、3自然段，各读两遍，读给家长听；',
+                          '不用录音，也不用上传，明早我抽听']
+
+    def _work(self, title, lines=None, subject=''):
+        return family_agenda.work_kind(title, lines or [], subject)
+
+    def test_the_reading_card_asks_for_a_parent_confirmation(self):
+        work = self._work('朗读《风经过小巷》第2、3自然段')
+        self.assertEqual(work, {'kind': 'read_aloud', 'label': '朗读', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_following_the_teacher_aloud_is_read_aloud(self):
+        self.assertEqual(self._work('英语：跟读Unit 7第3—10个单词')['kind'], 'read_aloud')
+
+    def test_a_recognition_card_is_practice_not_reading(self):
+        self.assertEqual(self._work('语文：完成《识字小卡》练习')['kind'], 'practice')
+
+    def test_a_page_of_items_is_practice(self):
+        self.assertEqual(self._work('数学：完成练习册第12页第2至4题')['kind'], 'practice')
+
+    def test_handing_in_a_receipt_asks_for_a_photo(self):
+        self.assertEqual(self._work('交回《出游回执》'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'photo', 'need_photo': True})
+
+    def test_bringing_crayons_asks_for_a_confirmation_not_a_photo(self):
+        self.assertEqual(self._work('明天带彩笔'),
+                         {'kind': 'errand', 'label': '事务', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_dictation_asks_for_a_photo(self):
+        self.assertEqual(self._work('听写第3课单词')['kind'], 'dictation')
+        self.assertTrue(self._work('听写第3课单词')['need_photo'])
+
+    def test_a_negated_reading_does_not_make_the_card_reading(self):
+        self.assertEqual(self._work('语文：不用朗读，只要抄写两遍')['kind'], 'practice')
+
+    def test_a_negated_signature_is_not_a_photo_request(self):
+        work = self._work('明天把表带来，不用签字')
+        self.assertEqual(work['kind'], 'errand')
+        self.assertFalse(work['need_photo'])
+
+    def test_a_chat_with_a_parent_is_not_learnable_work(self):
+        self.assertEqual(self._work('和妈妈聊今天的事'),
+                         {'kind': 'other', 'label': '其他', 'evidence': 'none', 'need_photo': False})
+
+    def test_checking_answers_comes_before_practice(self):
+        out = self._work('数学：完成第3页后对照答案批改', ['每题写出算式。'])
+        self.assertEqual(out['kind'], 'check')
+        self.assertTrue(out['need_photo'])
+
+    def test_a_handmade_poster_is_craft(self):
+        self.assertEqual(self._work('美术：做一张秋天手抄报')['kind'], 'craft')
+
+    def test_reading_a_book_asks_for_a_log(self):
+        self.assertEqual(self._work('阅读《城南旧事》', ['读完写两句摘抄']),
+                         {'kind': 'reading', 'label': '阅读', 'evidence': 'log', 'need_photo': False})
+
+    def test_reciting_is_read_aloud_and_never_a_photo(self):
+        out = self._work('语文：背诵《静夜思》')
+        self.assertEqual((out['kind'], out['evidence'], out['need_photo']), ('read_aloud', 'confirm', False))
+
+    def test_the_title_and_the_lines_are_judged_together(self):
+        self.assertEqual(self._work('数学：完成《每日练习》', ['第3页第1—4题。'])['kind'], 'practice')
+
+    def test_a_result_has_exactly_the_four_contract_keys(self):
+        work = self._work('和妈妈聊今天的事')
+        self.assertEqual(set(work), {'kind', 'label', 'evidence', 'need_photo'})
+
+    def _real_row(self, title, lines):
+        task = {'id': 'task-work-1', 'child': CHILD['name'], 'title': title, 'action': '\n'.join(lines),
+                'action_lines': list(lines), 'focus': None, 'source': 'school', 'school_origin': True,
+                'progress': None}
+        agenda = {'due_on': DAY, 'due_kind': 'deadline', 'category': 'homework', 'scheduled_on': DAY}
+        item = {'id': 'item-work-1', 'kind': 'task', 'task_id': task['id'], 'title': title,
+                'child_ids': [CHILD['id']], 'agenda': agenda, 'closed': False, 'status': '待跟进'}
+        view = family_agenda.day_view([item], [task], [], CHILD, DAY, DAY, 'wrong')
+        return view['groups'][0]['items'][0]
+
+    def test_the_real_english_card_is_practice(self):
+        row = self._real_row(self.REAL_ENGLISH_TITLE, self.REAL_ENGLISH_LINES)
+        self.assertIn('work', row)
+        self.assertEqual(row['work']['kind'], 'practice')
+
+    def test_the_real_math_card_is_practice(self):
+        row = self._real_row(self.REAL_MATH_TITLE, self.REAL_MATH_LINES)
+        self.assertIn('work', row)
+        self.assertEqual(row['work']['kind'], 'practice')
+
+    def test_the_real_reading_card_is_read_aloud(self):
+        row = self._real_row(self.REAL_CHINESE_TITLE, self.REAL_CHINESE_LINES)
+        self.assertIn('work', row)
+        self.assertEqual(row['work']['kind'], 'read_aloud')
+
+
 if __name__ == '__main__':
     unittest.main()

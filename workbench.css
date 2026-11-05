@@ -1279,3 +1279,17 @@ body.grove-wide[data-page="home"] aside nav[aria-label="主导航"] button[data-
 .grove-tl-node span{display:block;font-size:11px;color:var(--g-muted);overflow-wrap:anywhere}
 .grove-tl-note{margin:10px 0 0;font-size:12px;color:var(--g-muted)}
 @media (max-width:899px){.grove-span{font-size:11.5px;gap:6px;margin-top:4px}.grove-span-dot{width:5px;height:5px}.grove-tl-node span{font-size:10.5px}}
+
+/* Build 320：作业类型 chip / 待补照片 / 类型化主按钮说明 */
+.grove3 .grove-work-chip{display:inline-flex;align-items:center;height:18px;padding:0 6px;margin-left:5px;border-radius:5px;background:var(--g-weak,#eef2ea);color:var(--g-accent-ink,#24503f);font-size:10.5px;font-weight:600;letter-spacing:.2px;vertical-align:1px;white-space:nowrap}
+.grove3 .grove-badge.is-gap{background:#fcf1e2;border-color:#f0dbc0;color:#96591c}
+.grove3 .grove-badges.is-work-gap{margin-top:2px}
+.grove3 .grove-work-gap-note{margin:6px 0 0;padding:7px 10px;border-radius:8px;background:#fcf1e2;border:1px solid #f0dbc0;color:#7a4a12;font-size:12px;line-height:1.6}
+@media (max-width:899px){
+ .grove3 .grove-work-chip{height:17px;font-size:10px;padding:0 5px;margin-left:4px}
+ .grove3 .grove-work-gap-note{font-size:11.5px;padding:6px 9px}
+}
+
+/* Build 320 修正：`.grove-rail-sets` 也是 <nav>，不能命中主导航的「钉底/压紧按钮」规则（否则集合被 margin-top:auto 推到左栏下半，上方留大空白）。 */
+body.grove-wide[data-page="home"] aside nav.grove-rail-sets{margin-top:0!important;flex:0 0 auto}
+body.grove-wide[data-page="home"] aside nav.grove-rail-sets button{min-height:0!important;font-size:13px!important}

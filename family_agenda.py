@@ -1025,6 +1025,53 @@ def _follow_up(line):
         if not _FOLLOW_UP_TIME.search(paren):
             text=text[stamp.end():].lstrip('，,；; ')
     return dict(label=label,time=time,text=text) if text else None
+
+
+# What kind of work a card asks for, so the app can request the right evidence. The order is the product's: a card that
+# says 核对/听写/朗读 is not downgraded to 做题 by a stray 练习 or 页 in its own words; first match wins.
+_WORK_KINDS = (
+    ('check', '核对', r'核对|对照答案|对答案|批改|检查作业'),
+    ('dictation', '听写', r'听写|默写'),
+    ('read_aloud', '朗读', r'朗读|背诵|跟读|读给家长|读两遍|读一遍|抽听|复述|口语|读熟'),
+    ('craft', '手工', r'手工|手抄报|制作|画画|美术|作品'),
+    ('errand', '事务', r'回执|签字|签名|交回|带到|带来|带物|带(?!回)|缴费|报名|问卷|填表|表格'),
+    ('reading', '阅读', r'阅读|读完|书名|课外书|读书|摘抄'),
+    ('practice', '做题', r'练习册|口算|计算|第\s*\d+\s*题|试卷|抄写|练习|页'),
+)
+_WORK_EVIDENCE = {'practice': ('photo', True), 'dictation': ('photo', True), 'craft': ('photo', True),
+                  'check': ('photo', True), 'read_aloud': ('confirm', False), 'reading': ('log', False),
+                  'errand': ('confirm', False), 'other': ('none', False)}
+_ERRAND_PHOTO = ('回执', '签字', '签名', '缴费', '报名', '问卷', '填表', '表格')
+# A negated keyword is not a request: 「不用朗读，只要抄写两遍」 asks for copying, not reading. Only the words the
+# negation governs are blanked, so a second, positive 朗读 in the same card still counts.
+_WORK_NEGATED = re.compile(r'(?:不用|不需要|不必|不要|无需)\s*(?:核对|对照答案|对答案|批改|检查作业|听写|默写|朗读|背诵|'
+                           r'跟读|读给家长|读两遍|读一遍|抽听|复述|口语|读熟|手工|手抄报|制作|画画|美术|作品|回执|'
+                           r'签字|签名|交回|带到|带来|带物|带(?!回)|缴费|报名|问卷|填表|表格|阅读|读完|书名|课外书|读书|'
+                           r'摘抄|练习册|口算|计算|第\s*\d+\s*题|试卷|抄写|练习|页)')
+
+
+def work_kind(title, lines, subject=''):
+    """What kind of work this is, so the card can ask for the right evidence. Display only.
+
+    The title names the work; lines only decide when the title is silent (a page's 带来/签字 is a hand-in step, not a
+    different kind of work, so it must not turn every practice card into an errand)."""
+    if isinstance(lines, str): parts = [lines]
+    else: parts = [str(line) for line in (lines or [])]
+    heading = _WORK_NEGATED.sub('', str(title or ''))
+    whole = _WORK_NEGATED.sub('', '\n'.join([str(title or '')] + parts))
+    def category(text):
+        for kind, _, pattern in _WORK_KINDS:
+            if re.search(pattern, text): return kind
+        return 'other'
+    kind = category(heading)
+    if kind == 'other': kind = category(whole)
+    label = next(label for kind_, label, _ in _WORK_KINDS if kind_ == kind) if kind != 'other' else '其他'
+    evidence, need_photo = _WORK_EVIDENCE[kind]
+    if kind == 'errand' and any(word in whole for word in _ERRAND_PHOTO):
+        evidence, need_photo = 'photo', True
+    return dict(kind=kind, label=label, evidence=evidence, need_photo=need_photo)
+
+
 # Helpers that only fill a gap in wording, never carry a fact of their own (C2 fold equivalence).
 _FOLD_CHARS='的了着里吧呢啊呀哦嘛和与及而'
 _NUM=re.compile(r'第?\d+(?:[至到\-—~]\d+)?\s*[页题课节遍张本号点分个次行段字天周月]?')
@@ -2267,14 +2314,16 @@ def day_view(inbox, tasks, records, child, day, today, wrong_source):
         # arrangement still open (之前安排), listed with its original facts; the review day is never a school date.
         when = day_role(a, day)
         if when == 'passed' and review_due(x): when = 'earlier'
-        return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=version['title'] if version and version['state'] == 'latest' else x.get('title', ''), subject=subject_key(a),
+        title = version['title'] if version and version['state'] == 'latest' else x.get('title', '')
+        subject = subject_key(a)
+        return dict(id=x['id'], kind=x.get('kind'), task_id=x.get('task_id') or '', title=title, subject=subject,
                     **({'version': version} if version else {}),
                     category='homework' if a.get('category') == 'homework' or x.get('kind') == 'study' else 'todo',
                     status=x.get('status', ''), closed=bool(x.get('closed')), pending_review=x.get('kind') == 'school',
                     **({'material': True} if x.get('school_material') else {}),
                     origin='school' if school else 'oral' if oral else 'family',
                     origin_label='学校消息' if school else '孩子口头转述' if oral else '家长录入',
-                    lines=lines, plan_lines=plan_lines, follow_ups=follow_ups, complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
+                    lines=lines, plan_lines=plan_lines, follow_ups=follow_ups, work=work_kind(title, lines, subject), complete_words=a.get('complete_words') or '', facts=day_facts(a, day, today, school),
                     today=any(exact_day(a.get(k)) == day for k in ('due_on', 'scheduled_on', 'complete_on', 'submit_on')),
                     when=when, publications=pubs, published_at=str(a.get('published_at') or ''),
                     publisher=next((p['sender'] or p['source_name'] for p in pubs if p['sender'] or p['source_name']), ''),

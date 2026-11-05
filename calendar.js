@@ -429,9 +429,39 @@ function groveMode(){const w=window.innerWidth||document.documentElement.clientW
 function groveIsCancelled(r){return !r?.closed&&/已取消|取消该项/.test(String(r?.title||'')+'\n'+(Array.isArray(r?.lines)?r.lines.join('\n'):''))}
 function groveSubjectDot(subject){return `<i class="grove-dot subj-${esc(groveSubjectClass({subject}))}" aria-hidden="true"></i>`}
 function groveCardSource(r){const who=String(r?.publisher||'').trim(),time=String(r?.published_at||'').slice(11,16);return [who,time].filter(Boolean).join(' · ')}
+function groveWork(r){
+ const w=r&&r.work;if(!w||typeof w!=='object'||Array.isArray(w))return null;
+ const kind=String(w.kind||'').trim(),label=String(w.label||'').trim();
+ if(!kind&&!label)return null;
+ return {kind,label,evidence:String(w.evidence||'').trim(),needPhoto:!!w.need_photo};
+}
+// Build 320：科目前面的浅色类型 chip（做题/朗读/回执…）。没有 work 字段（旧后台）时整块不渲染，保持原样。
+function groveWorkChipHTML(r){
+ const w=groveWork(r);if(!w||!w.label)return '';
+ return `<span class="grove-work-chip" data-work-chip="${esc(w.kind||w.label)}">${esc(w.label)}</span>`;
+}
+// 待补照片：work.need_photo 为真，但这条事项还没有带附件的反馈记录（软门，只标记不阻止完成）。
+function groveWorkGap(r){
+ const w=groveWork(r);if(!w||!w.needPhoto)return null;
+ const records=Array.isArray(r&&r.records)?r.records:[];
+ const hasPhoto=records.some(x=>Array.isArray(x&&x.attachments)&&x.attachments.length>0);
+ return hasPhoto?null:w;
+}
+// 主按钮文案按作业类型映射；点击仍走既有 data-feedback-new 反馈/拍照流程，不新增接口。
+function groveWorkAction(r){
+ const w=groveWork(r);if(!w)return null;const k=w.kind;
+ if(k==='practice'||k==='check')return {kind:k,text:'拍照核对'};
+ if(k==='dictation')return {kind:k,text:'拍照上传'};
+ if(k==='craft')return {kind:k,text:'拍照作品'};
+ if(k==='read_aloud')return {kind:k,text:'听读确认'};
+ if(k==='reading')return {kind:k,text:'登记读书'};
+ if(k==='errand')return {kind:k,text:w.needPhoto?'拍照回执':'确认已带到'};
+ return null;
+}
 function groveCardHeadHTML(r){
  const sub=String(r?.subject||'').trim()||'科目待定';
- return `<span class="grove-card-k">${groveSubjectDot(sub)}<span class="grove-card-who">${esc(sub)}${groveCardSource(r)?' · '+esc(groveCardSource(r)):''}</span>${r?.pending_review?'<span class="grove-k-flag is-review">待核对</span>':''}</span>`;
+ const workChip=groveWorkChipHTML(r);
+ return `<span class="grove-card-k">${groveSubjectDot(sub)}<span class="grove-card-who">${esc(sub)}${workChip}${groveCardSource(r)?' · '+esc(groveCardSource(r)):''}</span>${r?.pending_review?'<span class="grove-k-flag is-review">待核对</span>':''}</span>`;
 }
 function grovePlanBadgeHTML(r){
  const plan=grovePlanLines(r);if(!plan.length)return null;
@@ -588,7 +618,8 @@ function groveRowHTML(r){
  const state=r.closed?'done':groveIsCancelled(r)?'cancelled':(r.when==='overdue'||(r.facts||[]).some(f=>f.role==='due'&&f.state==='overdue'))?'overdue':'open';
  const stateWords={open:'未完成',done:'已完成',overdue:'已过期',cancelled:'已取消'}[state];
  const spanInfo=groveSpanInfo(r),spanAttrs=spanInfo&&spanInfo.span>=2?` data-span="${spanInfo.span}" data-span-days="${spanInfo.span}"`:'';
- return `<article class="grove-row subj-${groveSubjectClass(r)} is-state-${state}${on?' is-selected':''}${r.closed?' is-done':''}${groveIsCancelled(r)?' is-cancelled':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}"${spanAttrs}>`
+ const workW=groveWork(r),workAttr=workW&&workW.kind?` data-work-kind="${esc(workW.kind)}"`:'',workGap=groveWorkGap(r);
+ return `<article class="grove-row subj-${groveSubjectClass(r)} is-state-${state}${on?' is-selected':''}${r.closed?' is-done':''}${groveIsCancelled(r)?' is-cancelled':''}" data-subject-item="${esc(r.id)}" data-category="${esc(r.category)}" data-kind="${esc(r.kind)}"${r.today?' data-today':''}${task} data-when="${esc(r.when||'')}"${workAttr}${spanAttrs}>`
   +`<span class="grove-sr">${stateWords}</span>`
   +`${groveTitleText(r)!==String(r.title||'').trim()?`<span class="grove-sr" data-grove-full-title>${esc(r.title)}</span>`:''}`
   +groveCheckHTML(r,state)
@@ -598,6 +629,7 @@ function groveRowHTML(r){
   +(pts.points.length?`<span class="grove-points">${pts.points.map((p,i)=>`<span class="grove-point">${pts.points.length>1?['①','②'][i]+' ':''}${esc(p)}</span>`).join('')}${more}</span>`:'')
   +(capped.length?`<span class="grove-badges">${capped.map(b=>b.html).join('')}${hiddenBadges?`<span class="grove-badge is-more">+${hiddenBadges}</span>`:''}</span>`:'')
   +(factChips?`<span class="grove-chips is-facts grove-sr">${factChips}</span>`:'')
+  +(workGap?`<span class="grove-badges is-work-gap"><span class="grove-badge is-gap" data-work-gap="${esc(workGap.kind||'photo')}">待补照片</span></span>`:'')
   +groveSpanHTML(r)
   +((times||r.pending_review)?`<span class="grove-chips is-times">${times}${r.pending_review?'<span class="grove-chip is-coral">待核对</span>':''}</span>`:'')
   +(r.same_affair?.state==='uncertain'&&r.same_affair.note?`<span class="grove-unclear" role="note" data-same-affair="uncertain">${esc(r.same_affair.note)}</span>`:'')
@@ -664,7 +696,10 @@ function groveDetailHTML(r){
  }).join('');
  const history=[...(r.records||[]).map(x=>`<li data-grove-record="${esc(x.id)}"><span class="grove-chip">${esc(x.followup_kind||'反馈')}</span> <span class="small muted">${esc(String(x.created||'').slice(0,16).replace('T',' '))}${x.attachments?.length?` · 照片${x.attachments.length}份`:''}</span>${x.retry?retryViewHTML(x):`<p>${esc(x.note||x.title)}</p>`}</li>`),
   ...(r.wrong||[]).map(w=>`<li data-grove-wrong="${esc(w.id)}"><span class="grove-chip${w.state==='待订正'?' is-coral':' is-leaf'}">${esc(w.state||'待订正')}</span> <span>错题：${esc(w.title)}</span></li>`)].join('');
- const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open?`<button class="primary" data-task="${esc(t.id)}" data-feedback-new="${esc(t.id)}">${homework?'拍照反馈 / 写反馈':'写反馈'}</button>`:`<button data-task="${esc(t.id)}">查看反馈</button>`;
+ const workAct=open?groveWorkAction(r):null;
+ const workGap=groveWorkGap(r);
+ const workGapNote=workGap?`<p class="grove-work-gap-note" data-work-gap-note>这件属于「${esc(workGap.label||'这一类')}」，按规矩要一张作业照片；已经记完成的话，照片补上才算核对过。</p>`:'';
+ const primary=reportPending?`<button class="primary" data-study-task-add="${esc(t.id)}">核对报来的功课</button>`:open?(workAct?`<button class="primary" data-task="${esc(t.id)}" data-feedback-new="${esc(t.id)}" data-work-action="${esc(workAct.kind)}">${esc(workAct.text)}</button>`:`<button class="primary" data-task="${esc(t.id)}" data-feedback-new="${esc(t.id)}">${homework?'拍照反馈 / 写反馈':'写反馈'}</button>`):`<button data-task="${esc(t.id)}">查看反馈</button>`;
  const more=(open?`<button data-task-decisions="${esc(t.id)}">不参加 / 不用做</button><button data-task-plan="${esc(t.id)}">${t.agenda?.scheduled_on?'改计划日期':'转成计划'}</button><button data-task-focus="${esc(t.id)}">修改标题 / 日期</button>`:'')
   +(open&&homework?`<button data-study-task-add="${esc(t.id)}">作业计时</button>`:'')+`<button data-school-record-task="${esc(t.id)}">留作学习记录</button>`
   +(/阅读|读书|篇目|读后感/.test(t.title+t.action)?`<button data-reading-source="${esc(t.id)}">约定阅读任务</button>`:'')+(!uncertain&&taskClosed(t)&&!done?`<button data-task-restore="${esc(t.id)}">恢复跟进</button>`:'');
@@ -694,6 +729,7 @@ function groveDetailHTML(r){
   +(facts||sourceRefs?`<div class="grove-detail-meta">${facts?`<div class="grove-facts grove-detail-badges">${facts}</div>`:''}${sourceRefs}</div>`:'')
   +'</header><div class="grove-detail-body">'
   +groveTimelineHTML(r)
+  +workGapNote
   +(groveWhen[r.when]?`<p class="grove-when" data-grove-when="${esc(r.when)}">这一项${groveWhen[r.when]}，不算这一天要交的作业。</p>`:'')
   +`<section class="grove-card grove-steps"><h3>要做什么</h3>${standards}</section>`
   +negHTML

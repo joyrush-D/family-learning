@@ -535,6 +535,68 @@ extension DayItem {
         ranked.sort { $0.score == $1.score ? $0.index < $1.index : $0.score < $1.score }
         return ranked.prefix(max(1, limit)).map { pool[$0.index] }
     }
+
+    // MARK: 作业类型（Build 320）
+
+    /// 卡片上的类型 chip 文案：优先用服务端给的 label，缺了就按 kind 退回契约里的默认名；都没有就不挂 chip。
+    var workKindWord: String? {
+        guard let work else { return nil }
+        if let label = work.label, !label.isEmpty { return label }
+        switch work.kind ?? "" {
+        case "practice": return "做题"
+        case "dictation": return "听写"
+        case "read_aloud": return "朗读"
+        case "reading": return "阅读"
+        case "craft": return "手工"
+        case "errand": return "事务"
+        case "check": return "核对"
+        case "other": return "其他"
+        default: return nil
+        }
+    }
+
+    /// 契约里的 need_photo：只有明确 true 才算要照片；缺字段按旧行为（不提示待补）。
+    var workNeedsPhoto: Bool { work?.need_photo == true }
+
+    /// 已经交过带附件的反馈＝照片证据已到；没有就是「待补照片」。只看已保存的反馈记录，不联网、不猜。
+    var hasAttachmentFeedback: Bool {
+        records.contains { record in record.attachments.contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } }
+    }
+
+    /// 已取消的事不算要做的事（与清单同一条语义），不给它挂待补照片。
+    var workPhotoGap: Bool { workNeedsPhoto && !hasAttachmentFeedback && !dayIsCancelled(self) }
+
+    /// 详情底部主按钮的三种落点：都接到现有动作（标记完成 / 记一笔反馈 / 网页版拍照反馈），不新增网络调用。
+    enum DayWorkActionKind { case complete, feedback, photo }
+    var workActionKind: DayWorkActionKind {
+        switch work?.kind ?? "" {
+        case "practice", "check", "dictation", "craft": return .photo
+        case "read_aloud", "reading": return .feedback
+        case "errand": return workNeedsPhoto ? .photo : .complete
+        default: return .complete
+        }
+    }
+
+    /// 主按钮文案：按契约表；other / 没有 work 时返回 nil，沿用现有文案（标记完成 / 记一笔 / 拍照反馈）。
+    var workActionLabel: String? {
+        guard let kind = work?.kind else { return nil }
+        switch kind {
+        case "practice", "check": return "拍照核对"
+        case "dictation": return "拍照上传"
+        case "craft": return "拍照作品"
+        case "read_aloud": return "听读确认"
+        case "reading": return "登记读书"
+        case "errand": return workNeedsPhoto ? "拍照回执" : "确认已带到"
+        default: return nil
+        }
+    }
+
+    /// 详情里那行规矩说明：要照片却没交过带附件的反馈时出现；已取消的事不算要做的事，不提示。
+    var workGapNote: String? {
+        guard workPhotoGap, !dayIsCancelled(self) else { return nil }
+        return "这件属于『\(workKindWord ?? "作业")』，按规矩要一张作业照片；已经记完成的话，照片补上才算核对过。"
+    }
+
     /// 行内徽章只用短词（≤6 字），最多 4 个：家长扫一眼就知道要不要签字、要不要带、要不要上传；
     /// 完整句子留在详情页。日期类只在不是「当天到期」时出现（当天到期的截止不挂），用相对词。
     func rowBadges(day: String) -> (shown: [String], extra: Int) {
@@ -3118,6 +3180,22 @@ struct DayCard: View {
                         }
                         Spacer(minLength: 0)
                     }
+                    // 作业类型（Build 320）：科目行后挂浅色小 chip；要照片却没交过附件反馈时再挂橙色「待补照片」。
+                    // 服务端没给 work 的两个都不挂，卡片回到 319 的样子。
+                    if item.workKindWord != nil || item.workPhotoGap {
+                        HStack(spacing: 5) {
+                            if let label = item.workKindWord {
+                                DayTag(text: label, tone: Palette.leaf50, ink: Palette.leafInk, border: Palette.leaf100)
+                                    .probe("work-chip-\(item.id)", text: label)
+                            }
+                            if item.workPhotoGap {
+                                DayTag(text: "待补照片", tone: Palette.coral, ink: Palette.coralInk, border: Palette.coral400)
+                                    .probe("work-gap-\(item.id)", text: "待补照片")
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.top, 3)
+                    }
                     Text(item.title)
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(done || isCancelled ? Palette.ink2 : Palette.ink)
@@ -3432,6 +3510,17 @@ struct DayDetail: View {
                     .probe("detail-when", text: item.whenLabel)
             }
             factsRow.padding(.top, 10)
+            // 作业类型（Build 320）：要照片却没交过带附件的反馈时，说明为什么主按钮是拍照。
+            if let gap = item.workGapNote {
+                Text(gap)
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.coralInk)
+                    .lineSpacing(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+                    .probe("work-gap-note-\(item.id)", text: gap)
+            }
         }
         .padding(.horizontal, 18)
         .padding(.top, 12)
@@ -4007,30 +4096,29 @@ struct DayDetail: View {
         }
     }
 
+    /// 详情底部动作区（Build 320）：主按钮随作业类型换文案与落点，但都接现有动作——
+    /// 拍照类 → 现有网页版拍照反馈（check-web）；朗读/阅读 → 现有记一笔反馈（feedback-new）；
+    /// 事务/其他 → 现有标记完成（complete-task）。三个旧入口一个不少，非主按钮降为次要样式。
     private var actions: some View {
         HStack(spacing: 7) {
-            if canComplete {
-                Button { markComplete() } label: {
-                    Text(completing ? "正在标记…" : "标记完成").font(.system(size: 12))
-                }
-                .buttonStyle(GroveButtonStyle(kind: .primary))
-                .disabled(completing)
-                .help("按清单确认这件事已完成（家长勾选）")
-                .probe("complete-task")
+            if canComplete, workActionKind == .complete {
+                withWorkAction(completeButton(primary: true), text: item.workActionLabel ?? "标记完成")
             }
-            Button { store.sheetDirty = false; store.sheet = .feedback(item) } label: {
-                Text("记一笔").font(.system(size: 12))
+            if workActionKind == .feedback {
+                withWorkAction(feedbackButton(primary: true, title: item.workActionLabel ?? "记一笔"),
+                               text: item.workActionLabel ?? "记一笔")
+            } else {
+                feedbackButton(primary: false, title: "记一笔")
             }
-            .buttonStyle(GroveButtonStyle())
-            .help("写文字反馈，可以加照片")
-            .probe("feedback-new")
-            Button { store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "check") } label: {
-                Text("拍照反馈").font(.system(size: 12))
+            if workActionKind == .photo {
+                withWorkAction(photoButton(primary: true, title: item.workActionLabel ?? "拍照反馈"),
+                               text: item.workActionLabel ?? "拍照反馈")
+            } else {
+                photoButton(primary: false, title: "拍照反馈")
             }
-            .buttonStyle(GroveButtonStyle())
-            .disabled(item.task_id.isEmpty)
-            .help("在网页版同一份作业里交作答照片检查")
-            .probe("check-web")
+            if canComplete, workActionKind != .complete {
+                completeButton(primary: false)
+            }
             Spacer(minLength: 4)
             Button { store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "") } label: {
                 Text(canComplete ? "在网页版完成" : "在网页版看")
@@ -4047,6 +4135,43 @@ struct DayDetail: View {
         .padding(.vertical, 11)
         .background(Palette.paper2)
         .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+    }
+
+    private var workActionKind: DayItem.DayWorkActionKind { item.workActionKind }
+
+    private func completeButton(primary: Bool) -> some View {
+        Button { markComplete() } label: {
+            Text(completing ? "正在标记…" : (item.workActionLabel ?? "标记完成")).font(.system(size: 12))
+        }
+        .buttonStyle(GroveButtonStyle(kind: primary ? .primary : .secondary))
+        .disabled(completing)
+        .help("按清单确认这件事已完成（家长勾选）")
+        .probe("complete-task")
+    }
+
+    private func feedbackButton(primary: Bool, title: String) -> some View {
+        Button { store.sheetDirty = false; store.sheet = .feedback(item) } label: {
+            Text(title).font(.system(size: 12))
+        }
+        .buttonStyle(GroveButtonStyle(kind: primary ? .primary : .secondary))
+        .help("写文字反馈，可以加照片")
+        .probe("feedback-new")
+    }
+
+    private func photoButton(primary: Bool, title: String) -> some View {
+        Button { store.openWebTools(item.task_id.isEmpty ? item.webID : item.task_id, "check") } label: {
+            Text(title).font(.system(size: 12))
+        }
+        .buttonStyle(GroveButtonStyle(kind: primary ? .primary : .secondary))
+        .disabled(item.task_id.isEmpty)
+        .help("在网页版同一份作业里交作答照片检查")
+        .probe("check-web")
+    }
+
+    /// 只给主按钮再登记一个 work-action 锚点（验收用只读几何），旧的 probe 标识保持原样。
+    @ViewBuilder
+    private func withWorkAction<V: View>(_ view: V, text: String) -> some View {
+        view.probeAlias("work-action-\(item.id)", text: text)
     }
 }
 
@@ -4932,6 +5057,10 @@ extension View {
     @ViewBuilder func probe(_ id: String, text: String = "") -> some View {
         if TestTargets.enabled { self.accessibilityIdentifier(id).background(ProbeAnchorView(id: id, text: text)) }
         else { self.accessibilityIdentifier(id) }
+    }
+    /// 只在原生验收里：给同一个控件再加一个只读几何锚点（不改辅助功能标识，旧 probe 照旧可定位）。
+    @ViewBuilder func probeAlias(_ id: String, text: String = "") -> some View {
+        if TestTargets.enabled { self.background(ProbeAnchorView(id: id, text: text)) } else { self }
     }
 }
 

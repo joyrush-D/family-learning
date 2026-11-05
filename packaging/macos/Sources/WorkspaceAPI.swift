@@ -55,6 +55,15 @@ struct SameAffair: Decodable, Hashable { let state: String; let task_ids: [Strin
 /// 同一份作业已保存的进展，与网页 /api/state 的 task_progress 同一份：反馈、错题、知识点线索（不等于掌握）、独立再试、历史诊断。
 struct TaskProgress: Decodable, Hashable { let feedback: Int; let wrong: Int; let wrong_ids: [Int]?; let clues: Int; let retries: Int; let history: Int }
 
+/// 一件事的作业类型（Build 320）：服务端 /api/day 每项的 work，用来给卡片挂类型 chip、给详情底部换主按钮。
+/// 字段全部可选：较旧后台没有 work 键时为 nil，界面退回现有行为，不当作解码失败、不猜类型。
+struct DayWork: Decodable, Hashable {
+    let kind: String?
+    let label: String?
+    let evidence: String?
+    let need_photo: Bool?
+}
+
 struct DayItem: Decodable, Hashable, Identifiable {
     let id: String
     let kind: String
@@ -88,6 +97,8 @@ struct DayItem: Decodable, Hashable, Identifiable {
     let times: [PlanTime]?
     /// 同一原事项的老师后发通知（服务端 day_view 同一投影）：latest 已显示最新要求与简短变化；review 保旧要求待核。
     let version: ItemVersion?
+    /// 作业类型（Build 320，服务端 projection 新加）；较早后台没有这个键时为 nil，不当作解码失败。
+    let work: DayWork?
 }
 
 struct ItemVersion: Decodable, Hashable { let state: String; let change: String?; let note: String? }
