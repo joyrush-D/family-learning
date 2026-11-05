@@ -132,6 +132,11 @@ final class WorkspaceStore: ObservableObject {
     var sheetDirty = false
     /// 家庭复习卡片的改期草稿与这次提交（按安排编号）：收起、换日/换孩子、列表复用都不丢；只是界面状态，不另存安排。
     var reviewDrafts: [String: ReviewDraft] = [:]
+    /// 按 (孩子|日期) 记住最近读回的这一天：换日先把这份顶上（看板与常显详情不塌、不闪风格），随后仍由 load() 后台刷新。
+    /// 数据被写入后整组清空（invalidateDayCache）；相邻日由 load() 成功后预取，预取超过 20 秒就重取。
+    private var dayCache: [String: (view: DayView, at: Date)] = [:]
+    /// 缓存代数：写入（保存、补录、记错题等）时自增，进行中的相邻日预取回来发现代数变了就丢弃，不把写入前的旧数据塞回缓存。
+    private var dayCacheGeneration = 0
     let client: WorkspaceClient
     var openDocument: (URL, String) -> Void = { _, _ in }
     /// 次级网页：同一份原作业，带明确意图（print-original / print-reference / check / original / history），由网页原流程接着做。
@@ -224,6 +229,8 @@ final class WorkspaceStore: ObservableObject {
                 else { notice = "原作业不在这一天的清单里；原错题和订正仍在错题本。" }
             }
             if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
+            dayCache[cacheKey(fresh.child_id, fresh.day)] = (fresh, Date())
+            prefetchNeighbourDays(of: fresh)
             if let item = selected, !item.task_id.isEmpty { await loadMaterials(item) }
         } catch {
             guard mine == sequence else { return }
@@ -233,6 +240,44 @@ final class WorkspaceStore: ObservableObject {
         }
         loading = false
         onLoaded()
+    }
+
+    /// 数据被写入（完成、反馈、口头补录、记错题/订正、照片纳入原错题）后整组失效：下一次换日重新读，不拿旧快照顶。
+    func invalidateDayCache() {
+        dayCacheGeneration += 1
+        dayCache.removeAll()
+    }
+
+    private func cacheKey(_ child: String, _ day: String) -> String { child + "|" + day }
+
+    /// 命中缓存时先用它顶上这一天：看板、常驻详情与计数立刻是这一天的样子，随后 load() 仍去后台刷新保持新鲜。
+    private func applyCachedDay() {
+        guard let hit = dayCache[cacheKey(childID, day)] else { return }
+        let cached = hit.view
+        guard cached.child_id == childID, cached.day == day else { return }
+        view = cached
+        error = ""
+        if let id = selection, !allItems.contains(where: { $0.id == id }) { selection = nil }
+        if let id = record, !wrongItems.contains(where: { $0.id == id }) { record = nil }
+    }
+
+    /// 相邻日预取（不碰 view、失败静默）：前一天/后一天先读进内存，换日时直接顶上，不用每次等一次网络。
+    private func prefetchNeighbourDays(of fresh: DayView) {
+        guard let base = WorkspaceStore.date(fresh.day) else { return }
+        let cal = Calendar(identifier: .gregorian)
+        for delta in [-1, 1] {
+            guard let target = cal.date(byAdding: .day, value: delta, to: base) else { continue }
+            let neighbour = WorkspaceStore.text(target)
+            let key = cacheKey(fresh.child_id, neighbour)
+            if let hit = dayCache[key], Date().timeIntervalSince(hit.at) <= 20 { continue }
+            let child = fresh.child_id
+            let generation = dayCacheGeneration
+            Task { [weak self] in
+                guard let self, let loaded = try? await self.client.day(child: child, day: neighbour) else { return }
+                guard generation == self.dayCacheGeneration else { return }
+                self.dayCache[key] = (loaded, Date())
+            }
+        }
     }
 
     func loadMaterials(_ item: DayItem) async {
@@ -314,6 +359,8 @@ final class WorkspaceStore: ObservableObject {
         sheet = nil; sheetDirty = false; notice = ""
         if let child, child != childID { childID = child; selection = nil; lastOpened = nil; materials = [:]; record = nil; pendingTask = nil }
         if let newDay { day = newDay; selection = selection }
+        // 先顶上前一次读回的这一天，再去后台刷新：换日时看板与常驻详情不塌，也不会闪成另一种风格。
+        applyCachedDay()
         Task { await load() }
     }
 
@@ -470,6 +517,23 @@ extension DayItem {
     var rowPoints: (shown: [String], rest: Int) {
         let all = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         return (Array(all.prefix(2)), max(0, all.count - 2))
+    }
+    /// 单列卡片的摘要行：优先挑「会让人跑一趟」的要求（签字 / 交回 / 带什么 / 上传 / 回复家长…），
+    /// 其余按原文顺序补位；只挑行，不改写、不拼接。Build 318：卡面只放一条，完整要求仍在详情。
+    func cardPoints(limit: Int = 1) -> [String] {
+        let trimmed = lines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !trimmed.isEmpty else { return [] }
+        let positive = trimmed.filter { !isNegativeLine($0) }
+        let pool = positive.isEmpty ? trimmed : positive
+        let keys = ["家长签字", "家长签名", "签字", "签名", "交回", "交给", "带来", "带到", "带去",
+                    "上传", "回复", "家长", "确认", "勾选", "装进", "放进", "带"]
+        var ranked: [(score: Int, index: Int)] = []
+        for (index, line) in pool.enumerated() {
+            let score = keys.firstIndex(where: { line.contains($0) }) ?? keys.count
+            ranked.append((score, index))
+        }
+        ranked.sort { $0.score == $1.score ? $0.index < $1.index : $0.score < $1.score }
+        return ranked.prefix(max(1, limit)).map { pool[$0.index] }
     }
     /// 行内徽章只用短词（≤6 字），最多 4 个：家长扫一眼就知道要不要签字、要不要带、要不要上传；
     /// 完整句子留在详情页。日期类只在不是「当天到期」时出现（当天到期的截止不挂），用相对词。
@@ -861,6 +925,35 @@ func factWords(_ f: DayFact) -> String {
     if f.role == "submit", f.today == true { return "今天先提交" }
     if f.role == "check", f.today == true { return "今天先检查" }
     return f.known ? f.label + " " + f.value : f.label + "时间未明确"
+}
+
+/// 详情「截止 / 完成 / 交回」的主值：今天 / 明天 / 后天 / 本周X / 下周X；过期给「已过期 N 天」。
+/// 绝对日期由数据格放在下面一行灰色小字（Build 318 D）。解析不了返回 nil，退回 factWords。
+@MainActor
+func dayRelativeWord(_ f: DayFact, day: String) -> String? {
+    guard f.known, let value = WorkspaceStore.date(f.value) else { return nil }
+    let base = WorkspaceStore.date(day) ?? Date()
+    let cal = Calendar(identifier: .gregorian)
+    let diff = cal.dateComponents([.day], from: base, to: value).day ?? 0
+    if f.state == "overdue" || diff < 0 {
+        let late = max(0, -diff)
+        return late > 0 ? "已过期 \(late) 天" : "已过期"
+    }
+    if diff == 0 { return "今天" }
+    if diff == 1 { return "明天" }
+    if diff == 2 { return "后天" }
+    let names = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+    let weekday = names[max(0, min(6, cal.component(.weekday, from: value) - 1))]
+    if let week = cal.dateInterval(of: .weekOfYear, for: base), week.contains(value) {
+        return "本周" + weekday
+    }
+    if let week = cal.dateInterval(of: .weekOfYear, for: base),
+       let nextStart = cal.date(byAdding: .weekOfYear, value: 1, to: week.start),
+       let nextWeek = cal.dateInterval(of: .weekOfYear, for: nextStart),
+       nextWeek.contains(value) {
+        return "下周" + weekday
+    }
+    return weekday
 }
 
 struct SubjectList: View {
@@ -2082,14 +2175,35 @@ extension WorkspaceStore {
         dayOpenItems.filter { $0.subject == subject }.count
     }
 
+    /// 过期天数：已知日期的 facts 与当天比，取最负的那个；服务端标了 overdue 的至少算 1 天。
+    /// 卡片用它显示「已过期 N 天」，详情「截止」格也用它（Build 318 D）。
+    func dayOverdueDays(_ item: DayItem) -> Int {
+        guard !item.closed else { return 0 }
+        let base = WorkspaceStore.date(day) ?? Date()
+        var late = 0
+        for fact in item.facts where fact.known {
+            guard let value = WorkspaceStore.date(fact.value) else { continue }
+            let diff = Calendar(identifier: .gregorian)
+                .dateComponents([.day], from: base, to: value).day ?? 0
+            if diff < 0 { late = max(late, -diff) }
+        }
+        if item.facts.contains(where: { $0.state == "overdue" }) { late = max(late, 1) }
+        return late
+    }
+
+    /// 「今天要做」列当前真正渲染出来的卡片。服务端 counts.today 只数 today==true 的项，
+    /// 而清单还会渲染 today:false 的补做/过期项；标题、列头、进度分母一律以这里为准，
+    /// 保证「今天 N 件 / 已完成 M / 总数」和屏幕上的卡片数对得上（Build 318）。
+    var dayTodayCards: [DayItem] { dayOpenItems }
+
     var dayProgress: (total: Int, done: Int) {
-        (dayOpenItems.count + dayClosedItems.count, dayCompletedItems.count)
+        (dayTodayCards.count + dayClosedItems.count, dayCompletedItems.count)
     }
 
     /// 顶栏不再依赖旧 doneSwitch 的 showDone/showUndated 开关，自己算一行摘要。
     /// 末尾保留「即将/待补 N」，与旧清单摘要同一句文案（原生验收按这句断言明后天的条数）。
     var daySummaryLine: String {
-        var text = "共 \(dayProgress.total) 项 · 今天要做 \(dayOpenItems.count) · 已完成 \(dayProgress.done)"
+        var text = "共 \(dayProgress.total) 项 · 今天要做 \(dayTodayCards.count) · 已完成 \(dayProgress.done)"
         let later = dayUpcomingCards.count
         if later > 0 { text += " · 即将/待补 \(later)" }
         return text
@@ -2118,13 +2232,16 @@ extension WorkspaceStore {
 struct DayProgressBar: View {
     let done: Int
     let total: Int
+    var showsText = true
 
     var body: some View {
         HStack(spacing: 9) {
-            Text("\(total) 件 · 已完成 \(done)")
-                .font(.system(size: 12))
-                .foregroundStyle(Palette.ink2)
-                .lineLimit(1)
+            if showsText {
+                Text("\(total) 件 · 已完成 \(done)")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Palette.ink2)
+                    .lineLimit(1)
+            }
             ZStack(alignment: .leading) {
                 Capsule().fill(Palette.line).frame(width: 104, height: 5)
                 Capsule().fill(Palette.leaf)
@@ -2146,120 +2263,86 @@ struct DayTag: View {
             .foregroundStyle(ink)
             .lineLimit(1)
             .fixedSize()
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(tone))
             .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous).strokeBorder(border, lineWidth: 1))
     }
 }
 
-// MARK: 工作台外壳与三档布局
+// MARK: 工作台（单列卡片 + 浮层详情，Build 318）
 
-struct DayWorkbench: View {
-    @ObservedObject var store: WorkspaceStore
-    let width: CGFloat
-    let height: CGFloat
+/// 列表筛选：一列卡片，用左侧状态圆点和颜色区分做没做完，不再分栏、不再因为选中而重排。
+enum DayFilter: String, CaseIterable, Identifiable {
+    case all, open, overdue, done, cancelled, undated
 
-    @State private var scope: DayScope = .today
-    @State private var subject: String?
+    var id: String { rawValue }
 
-    static let wideWidth: CGFloat = 1200
-    static let midWidth: CGFloat = 900
-
-    var body: some View {
-        VStack(spacing: 0) {
-            DayTopBar(store: store, compact: width < 1180)
-                .geoProbe("context-header", text: "width=\(Int(width))")
-            if !store.notice.isEmpty {
-                HStack(spacing: 8) {
-                    Text(store.notice)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.coralInk)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .probe("workspace-notice", text: store.notice)
-                    Spacer(minLength: 8)
-                    Button("知道了") { store.notice = "" }
-                        .buttonStyle(GroveButtonStyle(kind: .quiet))
-                        .probe("notice-dismiss")
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 5)
-                .background(Palette.coral)
-            }
-            DayNotices(store: store)
-            if width >= Self.wideWidth {
-                wideBody
-            } else if width >= Self.midWidth {
-                midBody
-            } else {
-                narrowBody
-            }
-        }
-        .background(Palette.paper)
-        .geoProbe("workspace-body", text: "width=\(Int(width)) layout=day")
-        .geoProbe("selected-context", text: [
-            store.childID, store.day, scope.rawValue, subject ?? "", store.selection ?? "",
-        ].joined(separator: "|"))
-    }
-
-    private var wideBody: some View {
-        HStack(spacing: 0) {
-            DayRail(store: store, scope: $scope, subject: $subject)
-                .frame(width: 212)
-                .geoProbe("master-pane", text: "layout=rail")
-            Rectangle().fill(Palette.line).frame(width: 1)
-            DayBoard(store: store, scope: scope, subject: subject, columns: 3, width: width)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if let item = store.selected {
-                Rectangle().fill(Palette.line).frame(width: 1)
-                DayDetail(store: store, item: item, page: false)
-                    .frame(width: 424)
-                    .geoProbe("detail-pane", text: "layout=split")
-            }
+    var title: String {
+        switch self {
+        case .all: return "全部"
+        case .open: return "未完成"
+        case .overdue: return "已过期"
+        case .done: return "已完成"
+        case .cancelled: return "已取消"
+        case .undated: return "日期未定"
         }
     }
 
-    private var midBody: some View {
-        ZStack(alignment: .trailing) {
-            VStack(spacing: 0) {
-                DayChips(store: store, scope: $scope, subject: $subject)
-                DayBoard(store: store, scope: scope, subject: subject, columns: 2, width: width)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            if let item = store.selected {
-                HStack(spacing: 0) {
-                    Color.black.opacity(0.10)
-                        .contentShape(Rectangle())
-                        .onTapGesture { store.closeDetail() }
-                    DayDetail(store: store, item: item, page: true)
-                        .frame(width: min(424, max(320, width - 160)))
-                        .background(Palette.card)
-                        .shadow(color: Color.black.opacity(0.16), radius: 18, x: -6, y: 0)
-                        .geoProbe("detail-pane", text: "layout=drawer")
-                }
-            }
+    var empty: String {
+        switch self {
+        case .all: return "今天没有要做的事了。"
+        case .open: return "今天没有未完成的事了。"
+        case .overdue: return "没有已过期还没做的事。"
+        case .done: return "今天还没有已完成的卡片。"
+        case .cancelled: return "没有已取消的卡片。"
+        case .undated: return "没有日期未定的卡片。"
         }
-        .animation(.easeOut(duration: 0.18), value: store.selection)
-    }
-
-    private var narrowBody: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                DayChips(store: store, scope: $scope, subject: $subject)
-                DayBoard(store: store, scope: scope, subject: subject, columns: 1, width: width)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            if let item = store.selected {
-                DaySheet(store: store, item: item, height: max(300, height * 0.55))
-                    .geoProbe("detail-pane", text: "layout=sheet")
-            }
-        }
-        .animation(.easeOut(duration: 0.18), value: store.selection)
     }
 }
 
-// MARK: 顶栏：孩子 / 日期 / 模式 / 补录 / 网页版
+/// 卡片状态：未完成 / 已完成 / 已过期 / 已取消。图标 + 颜色是唯一的区分方式。
+enum DayCardState {
+    case open, done, overdue, cancelled
+}
+
+/// 18pt（图例里 11pt）圆形状态点：空心=未完成，实心绿+✓=已完成，橙色描边=已过期，灰实心=已取消。
+struct DayStateDot: View {
+    let state: DayCardState
+    var size: CGFloat = 18
+
+    private var stroke: Color {
+        switch state {
+        case .open: return Color(hex: 0xA9B3A8)
+        case .done: return Palette.leaf
+        case .overdue: return Palette.coralInk
+        case .cancelled: return Color(hex: 0xB9B3A4)
+        }
+    }
+
+    private var fill: Color {
+        switch state {
+        case .done: return Palette.leaf
+        case .cancelled: return Color(hex: 0xB9B3A4)
+        default: return Color.clear
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(fill)
+            Circle().strokeBorder(stroke, lineWidth: size >= 18 ? 1.6 : 1.4)
+            if state == .done {
+                Image(systemName: "checkmark")
+                    .font(.system(size: size * 0.56, weight: .bold))
+                    .foregroundStyle(Color.white)
+            }
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+// MARK: 顶栏：孩子 / 模式 / 网页版（日期导航与补录在下面的页头里）
 
 struct DayTopBar: View {
     @ObservedObject var store: WorkspaceStore
@@ -2267,6 +2350,18 @@ struct DayTopBar: View {
 
     var body: some View {
         HStack(spacing: compact ? 6 : 10) {
+            HStack(spacing: 6) {
+                Image(systemName: "leaf.fill")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Palette.leafInk)
+                if !compact {
+                    Text("一起成长")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Palette.leafInk)
+                        .lineLimit(1)
+                }
+            }
+
             HStack(spacing: 3) {
                 ForEach(Array((store.view?.children ?? []).enumerated()), id: \.element.id) { index, child in
                     let on = child.id == store.childID
@@ -2291,66 +2386,10 @@ struct DayTopBar: View {
             .background(Capsule().fill(Palette.paper2))
             .overlay(Capsule().strokeBorder(Palette.line, lineWidth: 1))
 
-            Spacer(minLength: 4)
-
-            Button { store.shift(-1) } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 30, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Palette.ink)
-            .accessibilityLabel("前一天")
-            .probe("day-prev")
-
-            VStack(spacing: 1) {
-                Text(store.dayTitle)
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
-                Text(store.daySub)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
-            }
-            .frame(minWidth: compact ? 108 : 140)
-            .accessibilityElement(children: .combine)
-            .probe("day-title", text: store.day + " " + store.daySub)
-
-            Button { store.shift(1) } label: {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 30, height: 32)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Palette.ink)
-            .accessibilityLabel("后一天")
-            .probe("day-next")
-
-            Button(compact ? "今天" : "回到今天") { store.change(day: store.view?.today ?? "") }
-                .buttonStyle(GroveButtonStyle(kind: .quiet))
-                .disabled(store.view == nil || store.day == store.view?.today)
-                .help("回到今天 ⌘T")
-                .probe("day-today")
-
-            Spacer(minLength: 4)
+            Spacer(minLength: 6)
 
             DayModeSwitch(store: store, compact: compact)
                 .geoProbe("mode-strip", text: "mode=" + store.mode.id)
-
-            Button {
-                store.sheetDirty = false
-                store.sheet = .oral
-            } label: {
-                Label(compact ? "补录" : "补录口头作业", systemImage: "plus")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(GroveButtonStyle(kind: .primary))
-            .disabled(store.current == nil)
-            .help("补录孩子口头转述的作业 ⌘N")
-            .probe("oral-new")
 
             Button { store.openWebTools("", "") } label: {
                 Label(compact ? "网页版" : "网页版工具", systemImage: "square.grid.2x2")
@@ -2360,10 +2399,10 @@ struct DayTopBar: View {
             .help("在浏览器里打开网页版工具 ⌘E")
             .probe("web-tools")
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 16)
         .padding(.top, 8)
-        .padding(.bottom, 9)
-        .background(Palette.paper2)
+        .padding(.bottom, 8)
+        .background(Palette.paper)
         .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
     }
 }
@@ -2410,552 +2449,333 @@ struct DayModeSwitch: View {
     }
 }
 
-// MARK: 左栏集合（≥1200）
+// MARK: 单列看板 + 浮层详情
 
-struct DayRail: View {
+struct DayWorkbench: View {
     @ObservedObject var store: WorkspaceStore
-    @Binding var scope: DayScope
-    @Binding var subject: String?
+    let width: CGFloat
+    let height: CGFloat
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            who
-            railTitle("清单")
-            row(.today, count: store.dayOpenItems.count, dot: nil) {
-                scope = .today
-                subject = nil
-            }
-            ForEach(store.daySubjects, id: \.self) { item in
-                subjectRow(item)
-            }
-            railTitle("其它")
-            row(.upcoming, count: store.dayUpcomingCards.count, dot: nil) {
-                scope = .upcoming
-                subject = nil
-            }
-            if !store.dayUndatedItems.isEmpty {
-                row(.undated, count: store.dayUndatedItems.count, dot: nil) {
-                    scope = .undated
-                    subject = nil
-                }
-            }
-            row(.cancelled, count: store.dayCancelledItems.count, dot: Palette.muted) {
-                scope = .cancelled
-                subject = nil
-            }
-            row(.closed, count: store.dayCompletedItems.count, dot: Palette.leaf) {
-                scope = .closed
-                subject = nil
-            }
-            Spacer(minLength: 8)
-            Rectangle().fill(Palette.line).frame(height: 1)
-            Text("只读清单：打开不会重新生成，也不会改任务状态。")
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 9)
-            Text("完成、交回与反馈在右侧详情里看与记。")
-                .font(.system(size: 11))
-                .foregroundStyle(Palette.muted)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 4)
+    @State private var filter: DayFilter = .all
+
+    static let contentWidth: CGFloat = 900
+    /// 宽档用右侧浮动面板；窄档（<900）用底部 sheet。原生窗口最小 900，实际只会走浮动面板。
+    static let floatWidth: CGFloat = 430
+
+    private var wideLayout: Bool { width >= 900 }
+
+    // 所有卡片都以「实际渲染出来的卡片」为准，不再用服务端的 counts.today（Build 318 A）。
+    private var openCards: [DayItem] { store.dayTodayCards }
+    private var doneCards: [DayItem] { store.dayCompletedItems }
+    private var cancelledCards: [DayItem] { store.dayCancelledItems }
+    /// 日期未定（when == unknown）的项不属于「今天要做」，但也不能凭空消失；
+    /// 有这类项时才多一个筛选胶囊，避免它们只在网页版可见。
+    private var undatedCards: [DayItem] { store.dayUndatedItems }
+    private var overdueCards: [DayItem] { openCards.filter { store.dayOverdueDays($0) > 0 } }
+    private var allCards: [DayItem] { openCards + doneCards }
+
+    private var cards: [DayItem] {
+        switch filter {
+        case .all: return allCards
+        case .open: return openCards
+        case .overdue: return overdueCards
+        case .done: return doneCards
+        case .cancelled: return cancelledCards
+        case .undated: return undatedCards
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-        .padding(.bottom, 12)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Palette.paper2)
-        .overlay(alignment: .trailing) { Rectangle().fill(Palette.line).frame(width: 1) }
-        .probe("day-rail", text: "rail")
     }
 
-    private var who: some View {
-        HStack(spacing: 8) {
-            Text(String(store.childName.prefix(1)))
-                .font(.system(size: 11.5, weight: .semibold))
-                .foregroundStyle(Palette.leafInk)
-                .frame(width: 27, height: 27)
-                .background(Circle().fill(Palette.leaf50))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(store.childName.isEmpty ? "这个孩子" : store.childName)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(1)
-                Text("已完成 \(store.dayCompletedItems.count) 件")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
+    private func count(_ filter: DayFilter) -> Int {
+        switch filter {
+        case .all: return allCards.count
+        case .open: return openCards.count
+        case .overdue: return overdueCards.count
+        case .done: return doneCards.count
+        case .cancelled: return cancelledCards.count
+        case .undated: return undatedCards.count
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(spacing: 0) {
+                DayTopBar(store: store, compact: width < 1180)
+                    .geoProbe("context-header", text: "width=\(Int(width))")
+                noticeStrip
+                DayNotices(store: store)
+                if store.current == nil {
+                    DayPlaceholder(store: store)
+                } else {
+                    head
+                    filterBar
+                    groupLabel
+                    list
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(Palette.paper)
+
+            if let item = store.selected {
+                detailOverlay(item)
+            }
+        }
+        .geoProbe("workspace-body", text: "width=\(Int(width)) layout=list")
+        .geoProbe("selected-context", text: [
+            store.childID, store.day, store.mode.id, store.selection ?? "",
+        ].joined(separator: "|"))
+    }
+
+    /// 只让内容本身保持一条竖列、最宽 900 居中（加两侧 40 留白≈980，对齐 v3 稿）；打开浮层不会改变这里的任何尺寸。
+    private func centered<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            content()
+                .frame(maxWidth: Self.contentWidth, alignment: .leading)
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 6)
-        .padding(.top, 2)
-        .padding(.bottom, 10)
+        .padding(.horizontal, 40)
     }
 
-    private func railTitle(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 10, weight: .semibold))
-            .kerning(1.2)
-            .foregroundStyle(Palette.muted)
-            .padding(.leading, 8)
-            .padding(.top, 12)
-            .padding(.bottom, 5)
-    }
-
-    private func row(_ target: DayScope, count: Int, dot: Color?, action: @escaping () -> Void) -> some View {
-        let on = scope == target && subject == nil
-        return Button(action: action) {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(dot ?? Color.clear)
-                    .frame(width: 7, height: 7)
-                Text(target.title)
-                    .font(.system(size: 13, weight: on ? .semibold : .regular))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text("\(count)")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Palette.muted)
-            }
-            .foregroundStyle(on ? Palette.ink : Palette.ink2)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Palette.card : Color.clear))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .probe("rail-" + target.rawValue, text: target.title + " \(count)")
-    }
-
-    private func subjectRow(_ item: String) -> some View {
-        let on = scope == .today && subject == item
-        let count = store.dayCount(item)
-        return Button {
-            scope = .today
-            subject = item
-        } label: {
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Palette.subjectDot(item))
-                    .frame(width: 7, height: 7)
-                Text(daySubjectWords(item))
-                    .font(.system(size: 13, weight: on ? .semibold : .regular))
-                    .lineLimit(1)
-                Spacer(minLength: 4)
-                Text("\(count)")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(Palette.muted)
-            }
-            .foregroundStyle(on ? Palette.ink : Palette.ink2)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(on ? Palette.card : Color.clear))
-            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .probe("rail-subject-" + item, text: daySubjectWords(item) + " \(count)")
-    }
-}
-
-// MARK: 顶部胶囊行（900–1199 / <900）
-
-struct DayChips: View {
-    @ObservedObject var store: WorkspaceStore
-    @Binding var scope: DayScope
-    @Binding var subject: String?
-
-    var body: some View {
-        ScrollView(.horizontal) {
-            HStack(spacing: 6) {
-                chip("今天 \(store.dayOpenItems.count)", key: "today", on: scope == .today && subject == nil) {
-                    scope = .today
-                    subject = nil
+    private var noticeStrip: some View {
+        Group {
+            if !store.notice.isEmpty {
+                HStack(spacing: 8) {
+                    Text(store.notice)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Palette.coralInk)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .probe("workspace-notice", text: store.notice)
+                    Spacer(minLength: 8)
+                    Button("知道了") { store.notice = "" }
+                        .buttonStyle(GroveButtonStyle(kind: .quiet))
+                        .probe("notice-dismiss")
                 }
-                ForEach(store.daySubjects, id: \.self) { item in
-                    chip("\(daySubjectWords(item)) \(store.dayCount(item))", key: "subject-" + item,
-                         on: scope == .today && subject == item) {
-                        scope = .today
-                        subject = item
-                    }
-                }
-                chip("明后天 \(store.dayUpcomingCards.count)", key: "upcoming",
-                     on: scope == .upcoming) {
-                    scope = .upcoming
-                    subject = nil
-                }
-                if !store.dayUndatedItems.isEmpty {
-                    chip("日期未定 \(store.dayUndatedItems.count)", key: "undated", on: scope == .undated) {
-                        scope = .undated
-                        subject = nil
-                    }
-                }
-                chip("已取消 \(store.dayCancelledItems.count)", key: "cancelled", on: scope == .cancelled) {
-                    scope = .cancelled
-                    subject = nil
-                }
-                chip("已完成 \(store.dayCompletedItems.count)", key: "closed", on: scope == .closed) {
-                    scope = .closed
-                    subject = nil
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-        }
-        .background(Palette.card)
-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
-    }
-
-    private func chip(_ text: String, key: String, on: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(text)
-                .font(.system(size: 12, weight: on ? .semibold : .regular))
-                .lineLimit(1)
-                .fixedSize()
-                .padding(.horizontal, 10)
-                .frame(minHeight: 30)
-                .contentShape(Capsule())
-                .foregroundStyle(on ? Color.white : Palette.ink2)
-                .background(Capsule().fill(on ? Palette.leaf : Palette.paper2))
-                .overlay(Capsule().strokeBorder(on ? Color.clear : Palette.line, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .probe("chip-" + key, text: text)
-    }
-}
-
-// MARK: 中栏看板
-
-struct DayBoard: View {
-    @ObservedObject var store: WorkspaceStore
-    let scope: DayScope
-    let subject: String?
-    let columns: Int
-    let width: CGFloat
-
-    var body: some View {
-        VStack(spacing: 0) {
-            if store.current != nil && width >= DayWorkbench.midWidth {
-                WeekStrip(store: store)
-                    .padding(.horizontal, 18)
-                    .padding(.top, 10)
-                    .padding(.bottom, 2)
-                    .geoProbe("week-strip", text: "weekday=\(store.weekDays.count) day=\(store.day)")
-            }
-            DayBoardBar(store: store, scope: scope, subject: subject)
-            if store.current == nil {
-                DayPlaceholder(store: store)
-            } else if scope == .today && columns >= 3 {
-                threeColumns
-            } else if scope == .today {
-                twoColumns
-            } else {
-                singleColumn
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    // 当前集合 / 科目筛选后的卡片集合
-    private var openCards: [DayItem] { filterSubject(store.dayOpenItems) }
-    private var cancelledCards: [DayItem] { filterSubject(store.dayCancelledItems) }
-    private var closedCards: [DayItem] { filterSubject(store.dayCompletedItems) }
-    private var undatedCards: [DayItem] { filterSubject(store.dayUndatedItems) }
-    private var upcomingCards: [UpcomingCardModel] {
-        guard let subject = subject else { return store.dayUpcomingCards }
-        return store.dayUpcomingCards.filter { daySubjectWords($0.subject) == daySubjectWords(subject) }
-    }
-
-    /// 「明后天」列标题下一行小字；顶栏那行仍保留完整清单（原生验收按它核对每条标题）。
-    private var upcomingHint: String { "即将/待补：\(upcomingCards.count) 项" }
-    private var upcomingHintProbe: String { store.dayUpcomingLine ?? upcomingHint }
-
-    private func filterSubject(_ list: [DayItem]) -> [DayItem] {
-        guard let subject = subject else { return list }
-        return list.filter { daySubjectWords($0.subject) == daySubjectWords(subject) }
-    }
-
-    private var threeColumns: some View {
-        GeometryReader { geo in
-            let gap: CGFloat = 12
-            let pad: CGFloat = 18
-            let usable = max(300, geo.size.width - pad * 2 - gap * 2)
-            let unit = usable / 2.75
-            HStack(alignment: .top, spacing: gap) {
-                DayColumn("今天要做", count: openCards.count, width: unit * 1.05, empty: DayScope.today.empty) {
-                    ForEach(openCards) { item in
-                        DayCard(store: store, item: item)
-                    }
-                }
-                DayColumn("明后天", count: upcomingCards.count, width: unit * 0.9,
-                          empty: DayScope.upcoming.empty,
-                          hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
-                    ForEach(upcomingCards) { card in
-                        UpcomingDayCard(store: store, card: card)
-                    }
-                }
-                DayColumn("已完成", count: closedCards.count, width: unit * 0.8, empty: DayScope.closed.empty) {
-                    ForEach(closedCards) { item in
-                        DayCard(store: store, item: item)
-                    }
-                }
-            }
-            .padding(.horizontal, pad)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-        }
-    }
-
-    private var twoColumns: some View {
-        GeometryReader { geo in
-            let gap: CGFloat = 12
-            let pad: CGFloat = 18
-            let width = max(200, (geo.size.width - pad * 2 - gap) / 2)
-            HStack(alignment: .top, spacing: gap) {
-                DayColumn("今天要做", count: openCards.count, width: width, empty: DayScope.today.empty) {
-                    ForEach(openCards) { item in
-                        DayCard(store: store, item: item)
-                    }
-                }
-                DayColumn("明后天", count: upcomingCards.count, width: width,
-                          empty: DayScope.upcoming.empty,
-                          hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
-                    ForEach(upcomingCards) { card in
-                        UpcomingDayCard(store: store, card: card)
-                    }
-                }
-            }
-            .padding(.horizontal, pad)
-            .padding(.top, 12)
-            .padding(.bottom, 14)
-        }
-    }
-
-    private var singleColumn: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 10) {
-                if scope == .today {
-                    singleSection("今天要做", count: openCards.count, empty: DayScope.today.empty) {
-                        ForEach(openCards) { item in
-                            DayCard(store: store, item: item)
-                        }
-                    }
-                    singleSection("明后天", count: upcomingCards.count,
-                                  empty: DayScope.upcoming.empty,
-                                  hint: upcomingHint, hintID: "board-upcoming-count", hintProbe: upcomingHintProbe) {
-                        ForEach(upcomingCards) { card in
-                            UpcomingDayCard(store: store, card: card)
-                        }
-                    }
-                    singleSection("已完成", count: closedCards.count, empty: DayScope.closed.empty) {
-                        ForEach(closedCards) { item in
-                            DayCard(store: store, item: item)
-                        }
-                    }
-                } else if scope == .upcoming {
-                    ForEach(upcomingCards) { card in
-                        UpcomingDayCard(store: store, card: card)
-                    }
-                    if upcomingCards.isEmpty {
-                        emptyBox(DayScope.upcoming.empty)
-                    }
-                } else {
-                    let items = scope == .cancelled ? cancelledCards : (scope == .closed ? closedCards : undatedCards)
-                    if items.isEmpty {
-                        emptyBox(scope.empty)
-                    } else {
-                        ForEach(items) { item in
-                            DayCard(store: store, item: item, cancelled: scope == .cancelled || store.isCancelledItem(item))
-                        }
-                    }
-                }
-            }
-            .padding(14)
-        }
-    }
-
-    private func singleSection<Content: View>(_ title: String, count: Int, empty: String,
-                                              hint: String = "", hintID: String = "", hintProbe: String = "",
-                                              @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Palette.ink2)
-                Text("\(count)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                Spacer(minLength: 0)
-            }
-            if !hint.isEmpty {
-                Text(hint)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
-                    .probe(hintID, text: hintProbe.isEmpty ? hint : hintProbe)
-            }
-            if count == 0 {
-                emptyBox(empty)
-            } else {
-                content()
+                .padding(.horizontal, 16)
+                .padding(.vertical, 5)
+                .background(Palette.coral)
             }
         }
     }
 
-    private func emptyBox(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 12))
-            .foregroundStyle(Palette.muted)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
-    }
-}
+    private var isToday: Bool { store.day == store.view?.today }
 
-struct DayBoardBar: View {
-    @ObservedObject var store: WorkspaceStore
-    let scope: DayScope
-    let subject: String?
+    private var headWord: String { isToday ? "今天" : store.dayTitle }
 
-    private var title: String {
-        guard scope == .today, let subject = subject else { return scope.title }
-        return daySubjectWords(subject)
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Palette.ink)
-                        .lineLimit(1)
-                        .probe("board-title", text: title)
+    private var head: some View {
+        centered {
+            HStack(alignment: .bottom, spacing: 16) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(headWord)
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(Palette.ink)
+                            .lineLimit(1)
+                            .probe("board-title", text: headWord)
+                        Text("\(allCards.count)")
+                            .font(.system(size: 30, weight: .bold))
+                            .foregroundStyle(Palette.ink)
+                        Text("件事")
+                            .font(.system(size: 26, weight: .semibold))
+                            .foregroundStyle(Palette.ink)
+                    }
                     HStack(spacing: 6) {
+                        dayStep(-1, icon: "chevron.left", id: "day-prev")
                         Text(store.dayTitle)
-                            .font(.system(size: 12))
+                            .font(.system(size: 13))
                             .foregroundStyle(Palette.muted)
                             .lineLimit(1)
-                        Text(store.daySummaryLine)
-                            .font(.system(size: 12))
+                            .fixedSize()
+                            .probe("day-title", text: store.day + " " + store.daySub)
+                        dayStep(1, icon: "chevron.right", id: "day-next")
+                        Text("·")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Palette.muted)
+                        Text("已完成 \(store.dayProgress.done) / \(store.dayProgress.total)")
+                            .font(.system(size: 13))
                             .foregroundStyle(Palette.muted)
                             .lineLimit(1)
                             .probe("list-summary", text: store.daySummaryLine)
+                        if !isToday {
+                            Button("回到今天") { store.change(day: store.view?.today ?? "") }
+                                .buttonStyle(.plain)
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundStyle(Palette.leafInk)
+                                .help("回到今天 ⌘T")
+                                .probe("day-today")
+                        }
+                        if store.loading && !store.day.isEmpty {
+                            Text("正在读取…")
+                                .font(.system(size: 10))
+                                .foregroundStyle(Palette.muted)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .probe("day-loading", text: "正在读取…")
+                        }
                     }
+                }
+
+                Spacer(minLength: 8)
+
+                HStack(spacing: 10) {
+                    DayProgressBar(done: store.dayProgress.done, total: store.dayProgress.total, showsText: false)
+                    if !store.dayUpcomingCards.isEmpty {
+                        Text("明后天 \(store.dayUpcomingCards.count) 件")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Palette.muted)
+                            .lineLimit(1)
+                            .fixedSize()
+                            .probe("board-upcoming-count", text: "即将/待补：\(store.dayUpcomingCards.count) 项")
+                    }
+                    Button("看明天") { store.shift(1) }
+                        .buttonStyle(GroveButtonStyle())
+                        .help("切到明天，看明后天要带什么")
+                    Button {
+                        store.sheetDirty = false
+                        store.sheet = .oral
+                    } label: {
+                        Label("补录", systemImage: "plus")
+                            .font(.system(size: 12))
+                    }
+                    .buttonStyle(GroveButtonStyle(kind: .primary))
+                    .disabled(store.current == nil)
+                    .help("补录孩子口头转述的作业 ⌘N")
+                    .probe("oral-new")
+                }
+                .probe("upcoming", text: store.dayUpcomingLine ?? "")
+            }
+            .padding(.top, 16)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func dayStep(_ delta: Int, icon: String, id: String) -> some View {
+        Button { store.shift(delta) } label: {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .semibold))
+                .frame(width: 22, height: 22)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(Palette.ink2)
+        .accessibilityLabel(delta < 0 ? "前一天" : "后一天")
+        .probe(id)
+    }
+
+    private var filterBar: some View {
+        centered {
+            HStack(spacing: 8) {
+                ForEach(DayFilter.allCases.filter { $0 != .undated || !undatedCards.isEmpty }) { item in
+                    let on = filter == item
+                    Button { filter = item } label: {
+                        HStack(spacing: 4) {
+                            Text(item.title)
+                            Text("\(count(item))")
+                                .fontWeight(.semibold)
+                        }
+                        .font(.system(size: 12.5))
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 11)
+                        .frame(minHeight: 30)
+                        .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(on ? Palette.leafInk : Palette.ink2)
+                    .background(Capsule().fill(on ? Palette.leaf50 : Color.clear))
+                    .overlay(Capsule().strokeBorder(on ? Palette.leaf100 : Palette.line2, lineWidth: 1))
+                    .accessibilityAddTraits(on ? .isSelected : [])
+                    .probe("chip-" + item.id, text: item.title + " \(count(item))")
                 }
                 Spacer(minLength: 8)
-                DayProgressBar(done: store.dayProgress.done, total: store.dayProgress.total)
-            }
-            if let line = store.dayUpcomingLine {
-                Text(line)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
-                    .help(line)
-                    .probe("upcoming", text: line)
-            }
-            if let line = store.dayMaterialsLine {
-                HStack(spacing: 8) {
-                    Text(line)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.muted)
-                        .lineLimit(1)
-                        .help(line)
-                        .probe("materials", text: line)
-                    Button("去网页版") { store.openWebTools("", "school") }
-                        .buttonStyle(.plain)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.leafInk)
-                        .probe("materials-open")
+                HStack(spacing: 10) {
+                    legendItem(.open, "未完成")
+                    legendItem(.done, "已完成")
+                    legendItem(.overdue, "过期")
+                    legendItem(.cancelled, "取消")
                 }
+                .help("卡片左侧圆点：空心未完成、绿勾已完成、橙圈过期、灰实心取消")
             }
+            .padding(.top, 4)
+            .padding(.bottom, 8)
         }
-        .padding(.horizontal, 18)
-        .padding(.top, 11)
-        .padding(.bottom, 9)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Palette.card)
-        .overlay(alignment: .bottom) { Rectangle().fill(Palette.line).frame(height: 1) }
-    }
-}
-
-struct DayColumn<Content: View>: View {
-    let title: String
-    let count: Int
-    let width: CGFloat
-    let empty: String
-    let hint: String
-    let hintID: String
-    let hintProbe: String
-    let content: Content
-
-    init(_ title: String, count: Int, width: CGFloat, empty: String,
-         hint: String = "", hintID: String = "", hintProbe: String = "",
-         @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.count = count
-        self.width = width
-        self.empty = empty
-        self.hint = hint
-        self.hintID = hintID
-        self.hintProbe = hintProbe
-        self.content = content()
     }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                Text(title)
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(Palette.ink2)
-                Text("\(count)")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.muted)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 5)
-            .padding(.bottom, hint.isEmpty ? 8 : 3)
-            if !hint.isEmpty {
-                Text(hint)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
-                    .padding(.horizontal, 5)
-                    .padding(.bottom, 7)
-                    .probe(hintID, text: hintProbe.isEmpty ? hint : hintProbe)
-            }
-            ScrollView {
-                VStack(spacing: 8) {
-                    if count == 0 {
-                        emptyView
-                    } else {
-                        content
-                    }
-                }
+    private func legendItem(_ state: DayCardState, _ text: String) -> some View {
+        HStack(spacing: 4) {
+            DayStateDot(state: state, size: 11)
+            Text(text)
+                .font(.system(size: 11.5))
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
+        }
+        .fixedSize()
+    }
+
+    private var groupLabel: some View {
+        centered {
+            Text("\(filter == .all ? "今天要做" : filter.title) · \(cards.count)")
+                .font(.system(size: 12))
+                .kerning(0.4)
+                .foregroundStyle(Palette.muted)
+                .lineLimit(1)
                 .padding(.bottom, 6)
-            }
         }
-        .padding(9)
-        .frame(width: width)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.paper2))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
-        .probe("board-col-" + title, text: title + " \(count)")
     }
 
-    private var emptyView: some View {
-        Text(empty)
-            .font(.system(size: 12))
-            .foregroundStyle(Palette.muted)
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+    private var list: some View {
+        ScrollView {
+            centered {
+                LazyVStack(alignment: .leading, spacing: 8) {
+                    ForEach(cards) { item in
+                        DayCard(store: store, item: item)
+                    }
+                    if cards.isEmpty {
+                        Text(filter.empty)
+                            .font(.system(size: 12))
+                            .foregroundStyle(Palette.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(14)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .strokeBorder(Palette.line2, style: StrokeStyle(lineWidth: 1, dash: [4, 4])))
+                    }
+                    Color.clear.frame(height: 28)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func detailOverlay(_ item: DayItem) -> some View {
+        ZStack(alignment: wideLayout ? .topTrailing : .bottom) {
+            Color.black.opacity(0.18)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { store.closeDetail() }
+
+            if wideLayout {
+                DayDetail(store: store, item: item, page: false)
+                    .frame(width: Self.floatWidth, height: max(420, height - 52))
+                    .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Palette.card))
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Palette.line2, lineWidth: 1))
+                    .shadow(color: Color.black.opacity(0.22), radius: 26, x: 0, y: 12)
+                    .padding(.trailing, 26)
+                    .padding(.vertical, 26)
+                    .geoProbe("detail-pane", text: "layout=overlay")
+            } else {
+                DayDetail(store: store, item: item, page: false)
+                    .frame(width: width, height: max(320, height * 0.64))
+                    .background(Palette.card)
+                    .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                    .shadow(color: Color.black.opacity(0.20), radius: 20, x: 0, y: -6)
+                    .geoProbe("detail-pane", text: "layout=sheet")
+            }
+        }
+        .transition(.opacity)
+        .animation(.easeOut(duration: 0.16), value: store.selection)
     }
 }
 
@@ -2966,10 +2786,18 @@ struct DayCard: View {
     let item: DayItem
     var cancelled = false
 
-    private var selected: Bool { store.selection == item.id }
-    private var done: Bool { item.closed }
-    /// 一句要点：优先取第一条正面要求（跳过「不用…」这类否定句，它们进详情的「不做什么」），没有就退回第一条。
-    private var line: String? { item.lines.first { !isNegativeLine($0) } ?? item.lines.first }
+    @State private var hovering = false
+
+    private var isCancelled: Bool { cancelled || store.isCancelledItem(item) }
+    private var done: Bool { item.closed && !isCancelled }
+
+    private var state: DayCardState {
+        if isCancelled { return .cancelled }
+        if item.closed { return .done }
+        if store.dayOverdueDays(item) > 0 { return .overdue }
+        return .open
+    }
+
     /// 与网页端同一枚家里安排徽章：家里的安排里有时刻就写「家里 18:30」，没有就写「家里安排」。
     private var planBadge: String? {
         guard !item.planLines.isEmpty else { return nil }
@@ -2992,126 +2820,116 @@ struct DayCard: View {
         var parts: [String] = [daySubjectWords(item.subject)]
         if let publisher = item.publisher, !publisher.isEmpty { parts.append(publisher) }
         if !item.publishedTime.isEmpty { parts.append(item.publishedTime) }
-        if cancelled { parts.append("已取消") }
         return parts.joined(separator: " · ")
     }
 
+    /// 卡片摘要：优先给「会让人跑一趟」的那条要求（签字/交回/带/上传…），只挑行，不改写。
+    private var keyLine: String? {
+        item.cardPoints(limit: 1).first
+    }
+
+    /// 状态小标签：过期显示「已过期 N 天」，today:false 的补做项显示「待补」。
+    private var stateNote: String? {
+        switch state {
+        case .overdue:
+            let days = store.dayOverdueDays(item)
+            return days > 0 ? "已过期 \(days) 天" : "已过期"
+        case .open:
+            return item.today ? nil : "待补"
+        default:
+            return nil
+        }
+    }
+
+    private var selected: Bool { store.selection == item.id }
+
     var body: some View {
         Button { store.select(item.id) } label: {
-            VStack(alignment: .leading, spacing: 0) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(cancelled ? Palette.muted : Palette.subjectDot(item.subject))
-                        .frame(width: 7, height: 7)
-                    Text(metaLine)
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.muted)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if item.pending_review {
-                        Text("待核对")
-                            .font(.system(size: 10))
-                            .foregroundStyle(Palette.coralInk)
+            HStack(alignment: .top, spacing: 12) {
+                DayStateDot(state: state)
+                    .padding(.top, 3)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(isCancelled ? Palette.muted : Palette.subjectDot(item.subject))
+                            .frame(width: 7, height: 7)
+                        Text(metaLine)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(Palette.muted)
+                            .lineLimit(1)
+                        if let note = stateNote {
+                            Text(note)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(Palette.coralInk)
+                                .lineLimit(1)
+                                .fixedSize()
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(Palette.coral))
+                                .overlay(RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .strokeBorder(Palette.coral400, lineWidth: 1))
+                        }
+                        Spacer(minLength: 0)
                     }
-                }
-                .padding(.bottom, 4)
-                Text(item.title)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(done ? Palette.ink2 : Palette.ink)
-                    .strikethrough(done, color: Palette.muted)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 3)
-                if let line = line {
-                    Text(line)
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.ink2)
+                    Text(item.title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(done || isCancelled ? Palette.ink2 : Palette.ink)
+                        .strikethrough(isCancelled, color: Palette.muted)
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.bottom, 7)
-                }
-                if !badges.isEmpty {
-                    FlowRow(spacing: 4, lineSpacing: 4) {
-                        ForEach(badges, id: \.self) { text in
-                            DayTag(text: text)
+                    if let key = keyLine {
+                        Text(key)
+                            .font(.system(size: 12.8))
+                            .foregroundStyle(Palette.ink2)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 1)
+                    }
+                    if !badges.isEmpty {
+                        FlowRow(spacing: 6, lineSpacing: 4) {
+                            ForEach(badges, id: \.self) { text in
+                                badgeTag(text)
+                            }
                         }
+                        .padding(.top, 4)
                     }
                 }
-                if !item.followUps.isEmpty {
-                    Text("后续通知 \(item.followUps.count) ›")
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.planInk)
-                        .padding(.top, 5)
-                }
+
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Color(hex: 0xC2BBAA))
+                    .padding(.top, 5)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 11)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.card))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.card))
+            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(selected ? Palette.line2 : Palette.line, lineWidth: 1))
-            .shadow(color: Palette.cardShadow, radius: selected ? 6 : 2, x: 0, y: selected ? 3 : 1)
-            .opacity(done || cancelled ? 0.62 : 1)
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .shadow(color: Color(hex: 0x3C321E).opacity(hovering || selected ? 0.10 : 0.04),
+                    radius: hovering || selected ? 10 : 2, x: 0, y: hovering || selected ? 3 : 1)
+            .opacity(done || isCancelled ? 0.62 : 1)
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
         .buttonStyle(.plain)
+        .onHover { hovering = $0 }
         .probe("row-" + item.id, text: item.title)
     }
-}
 
-struct UpcomingDayCard: View {
-    @ObservedObject var store: WorkspaceStore
-    let card: UpcomingCardModel
-
-    var body: some View {
-        Button { store.change(day: card.day) } label: {
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(card.cancelled ? Palette.muted : Palette.subjectDot(card.subject))
-                        .frame(width: 7, height: 7)
-                    Text(daySubjectWords(card.subject))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.muted)
-                        .lineLimit(1)
-                    Text(rowRelative(card.day, day: store.day))
-                        .font(.system(size: 11))
-                        .foregroundStyle(Palette.muted)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    if card.cancelled {
-                        DayTag(text: "已取消", tone: Palette.paper2, ink: Palette.muted)
-                    } else if card.pending {
-                        DayTag(text: "待补", tone: Palette.coral, ink: Palette.coralInk, border: Palette.coral400)
-                    }
-                }
-                Text(card.title)
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(Palette.ink)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Text(card.change.isEmpty ? "点开去这一天" : card.change)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Palette.muted)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 9)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Palette.card))
-            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Palette.line, lineWidth: 1))
-            .shadow(color: Palette.cardShadow, radius: 2, x: 0, y: 1)
-            .opacity(card.cancelled ? 0.62 : 1)
-            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-        }
-        .buttonStyle(.plain)
-        .probe("row-upcoming-" + card.id, text: card.title)
+    /// 徽章：签字类给提醒色（会让人跑一趟），其余用浅绿；都是原文短词，不改写。
+    private func badgeTag(_ text: String) -> some View {
+        let warn = text.contains("签字") || text.contains("签名")
+        return DayTag(
+            text: text,
+            tone: warn ? Palette.coral : Palette.leaf50,
+            ink: warn ? Palette.coralInk : Palette.leafInk,
+            border: warn ? Palette.coral400 : Palette.leaf100
+        )
     }
 }
 
@@ -3157,6 +2975,7 @@ struct DayDetail: View {
             switch outcome {
             case .saved:
                 completeDone = true
+                store.invalidateDayCache()
                 await store.load(keepSelection: true)
             case .refused(_, let message, _):
                 completeError = message
@@ -3318,26 +3137,42 @@ struct DayDetail: View {
         }
     }
 
+    /// 「截止 / 完成 / 交回」只读数据格：主值用相对词（今天/明天/本周五/已过期 N 天），
+    /// 绝对日期降级成下面一行灰色小字；probe 文案保持事实原句，原生验收仍按它断言。
     private func factCell(_ fact: DayFact) -> some View {
-        let urgent = fact.state == "next_morning" || fact.state == "overdue"
-        return VStack(alignment: .leading, spacing: 2) {
+        let urgent = fact.state == "next_morning" || fact.state == "overdue" || dayOverdueDays(fact) > 0
+        let relative = dayRelativeWord(fact, day: store.day)
+        return VStack(alignment: .leading, spacing: 1) {
             Text(fact.label)
-                .font(.system(size: 10, weight: .medium))
-                .kerning(0.7)
+                .font(.system(size: 10.5, weight: .medium))
+                .kerning(0.5)
                 .foregroundStyle(Palette.muted)
                 .lineLimit(1)
-            Text(factWords(fact))
-                .font(.system(size: 13.5, weight: .semibold))
+            Text(relative ?? factWords(fact))
+                .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(urgent ? Palette.coralInk : Palette.ink)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
+            if relative != nil {
+                Text(fact.value)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Palette.muted)
+                    .lineLimit(1)
+            }
         }
         .padding(EdgeInsets(top: 7, leading: 9, bottom: 8, trailing: 9))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.paper2))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Palette.paper2))
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
             .strokeBorder(urgent ? Palette.coral400 : Palette.line, lineWidth: 1))
         .probe("fact-" + fact.role, text: factWords(fact))
+    }
+
+    private func dayOverdueDays(_ fact: DayFact) -> Int {
+        guard fact.known, let value = WorkspaceStore.date(fact.value),
+              let base = WorkspaceStore.date(store.day) else { return 0 }
+        let diff = Calendar(identifier: .gregorian).dateComponents([.day], from: base, to: value).day ?? 0
+        return max(0, -diff)
     }
 
     private func block<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
@@ -3780,6 +3615,27 @@ struct DayDetail: View {
         .padding(.vertical, 11)
         .background(Palette.paper2)
         .overlay(alignment: .top) { Rectangle().fill(Palette.line).frame(height: 1) }
+    }
+}
+
+// ≥1200 三栏：右栏常显。没有选中时给占位（与网页 groveDetailHTML(null) 同一句），
+// 这里不放 detail-title / detail-line-* / fact-* 探针，免得旧冒烟断言误命中。
+struct DayDetailEmpty: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "sidebar.right")
+                .font(.system(size: 20, weight: .light))
+                .foregroundStyle(Palette.muted.opacity(0.7))
+            Text("从清单里选一项，看要做什么、资料和反馈。")
+                .font(.system(size: 12))
+                .foregroundStyle(Palette.muted)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 28)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.card)
+        .probe("detail-empty", text: "detail-empty")
     }
 }
 
@@ -4237,6 +4093,7 @@ extension WorkspaceStore {
             sheetDirty = false; sheet = nil; notice = done
             // 记下的错题：错题本选中回执里的同一条记录编号（不按标题或第一条猜）；回执没有编号时不改选中。
             if let id = ((object["saved"] as? [[String: Any]])?.first?["id"] as? NSNumber)?.intValue { record = id }
+            invalidateDayCache()
             await load()
         case .unknown(let text):
             save.unknown = true; save.login = false; save.message = text
@@ -4738,6 +4595,7 @@ extension WorkspaceStore {
         let fresh = prints.allSatisfy { photoSyncedPrints[$0.key] == $0.value }
         if !force { guard photoProblems["day"] == nil, missing || (mismatch && !fresh) else { return } }
         if reviewLocked { photoProblems["day"] = "错题已保存，原错题清单暂未更新（有一条家庭复习保存待确认）；确认后点“重新读取”。"; return }
+        invalidateDayCache()
         await load()
         guard child == childID else { return }
         if current != nil && error.isEmpty { photoSyncedRecords.formUnion(saved); photoSyncedPrints.merge(prints) { $1 }; photoProblems["day"] = nil }
@@ -4861,6 +4719,7 @@ extension WorkspaceStore {
         let outcome = await client.post("/api/photo-batch/include", ["batch_id": batch.id, "version": batch.version, "question_key": question.key])
         guard context == photoContext, batch.child_id == childID else { return }
         applyPhotoOutcome(outcome, done: "已纳入练习，记在原错题里（署名AI判断）。")
+        invalidateDayCache()
         await load()
     }
 

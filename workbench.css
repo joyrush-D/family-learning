@@ -1081,3 +1081,174 @@ body.grove-wide[data-page="home"] aside nav.grove-tabs button:hover{
  .grove3,.grove3 .grove-board,.grove3 .grove-board-scroll,.grove3 .grove-list-head{max-width:100%;min-width:0;overflow-x:clip}
  .grove3 .grove-tabs,.grove3 .grove-tabs button,.grove3 .grove-col{min-width:0}
 }
+
+/* ———— Build 317（用户意见）：日视图不再单开「明后天」一列，改成看板上方一行预告条；今天/已完成两列。 ———— */
+@media (min-width:900px){
+ .grove3 .grove-cols{grid-template-columns:0.6fr 0.4fr}
+ .grove3 .grove-col.is-today,.grove3 .grove-col.is-done{grid-column:auto;grid-row:auto}
+}
+.grove3 .grove-upcoming-strip{display:flex;align-items:center;gap:8px;box-sizing:border-box;width:100%;height:38px;margin:0 0 10px;padding:0 10px;background:var(--g-surface);border:1px solid var(--g-line);border-radius:10px;font-size:12px;line-height:1.3;color:var(--g-ink2);overflow:hidden}
+.grove3 .grove-upcoming-label{flex:0 0 auto;font-weight:600;color:var(--g-ink);white-space:nowrap}
+.grove3 .grove-upcoming-sum{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--g-muted)}
+.grove3 .grove-upcoming-more{flex:0 0 auto;margin-left:auto;min-height:30px;padding:0 6px;border:0;background:transparent;color:var(--g-accent);font:600 12px var(--round);white-space:nowrap;cursor:pointer}
+.grove3 .grove-upcoming-more:hover,.grove3 .grove-upcoming-more:focus-visible{text-decoration:underline}
+.grove3 .grove-later-panel{margin:10px 0 0;padding:8px;background:var(--g-surface2);border:1px solid var(--g-line);border-radius:12px}
+.grove3 .grove-later-panel[hidden]{display:none}
+.grove3 .grove-later-panel .grove-col-body{display:flex;flex-direction:column;gap:8px}
+
+/* Build 318：单列卡片流 + 浮层详情（不再分栏；打开浮层不改变列表尺寸/滚动） */
+.grove3{display:block!important}
+.grove3 .grove-board{width:100%}
+.grove3 .grove-board-scroll{max-width:940px;margin:0 auto;width:100%;padding:0 2px}
+.grove3 .grove-cols{display:none!important}
+.grove3 .grove-stack{display:flex;flex-direction:column;gap:12px}
+.grove3 .grove-subject{margin:0}
+.grove3 .grove-subject>.grove-tag{display:flex;align-items:center;gap:8px;margin:0 0 6px}
+.grove3 .grove-later-list{border-top:1px solid var(--g-line);padding-top:10px}
+.grove3 .grove-later-list>.grove-tag{display:flex;align-items:center;gap:8px;margin:0 0 6px}
+.grove3 .grove-later-list.is-cancelled-list{opacity:.9}
+.grove3 .grove-row{position:relative;padding-left:44px}
+.grove3 .grove-state{position:absolute;left:14px;top:16px;width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:transparent}
+.grove3 .grove-state i{width:14px;height:14px;border-radius:50%;border:1.5px solid #9aa89f;background:transparent;display:block}
+.grove3 .grove-row.is-state-done{opacity:.62}
+.grove3 .grove-row.is-state-done .grove-state i{background:var(--g-accent);border-color:var(--g-accent);position:relative}
+.grove3 .grove-row.is-state-done .grove-state i::after{content:"✓";position:absolute;inset:0;display:grid;place-items:center;font-size:10px;line-height:1;color:#fff;font-weight:700}
+.grove3 .grove-row.is-state-overdue .grove-state i{border-color:#b4701f}
+.grove3 .grove-row.is-state-cancelled .grove-state i{background:#9aa0a6;border-color:#9aa0a6}
+.grove3 .grove-row.is-state-cancelled .grove-title{text-decoration:line-through;color:var(--g-muted)}
+.grove-legend{display:flex;align-items:center;gap:10px;font-size:11px;color:var(--g-muted);white-space:nowrap;flex-wrap:wrap}
+.grove-legend>span{display:inline-flex;align-items:center;gap:4px}
+.grove-legend-dot{width:10px;height:10px;border-radius:50%;border:1.5px solid #9aa89f;display:inline-block}
+.grove-legend-dot.is-open{background:transparent}
+.grove-legend-dot.is-done{background:var(--g-accent);border-color:var(--g-accent)}
+.grove-legend-dot.is-overdue{border-color:#b4701f}
+.grove-legend-dot.is-cancelled{background:#9aa0a6;border-color:#9aa0a6}
+.grove-count-line{margin:6px 0 0;font-size:12px;color:var(--g-muted)}
+.grove-count-line b{font-size:13px;color:var(--g-ink)}
+.grove-detail-close{position:absolute;right:12px;top:10px;z-index:2;width:36px;height:36px;min-height:36px;border:1px solid var(--g-line);background:var(--g-surface);border-radius:50%;font-size:14px;line-height:1;color:var(--g-ink-2);cursor:pointer}
+.grove-detail{position:fixed!important;z-index:70;right:18px;top:18px;bottom:18px;width:430px;max-width:none;max-height:none;background:var(--g-surface);border:1px solid var(--g-line);border-radius:16px;box-shadow:0 18px 60px rgba(30,24,12,.28);transform:translateX(calc(100% + 40px));opacity:0;pointer-events:none;transition:transform .18s ease,opacity .18s ease;overflow:auto;margin:0;display:flex;flex-direction:column}
+.grove3.is-detail .grove-detail{transform:none;opacity:1;pointer-events:auto}
+.grove3 .grove-detail .grove-back{display:none}
+.grove3 .grove-detail .grove-detail-hd{position:relative;padding-right:44px}
+.grove-detail-backdrop{position:fixed;inset:0;z-index:65;background:rgba(20,16,8,.18);border:0;padding:0;margin:0}
+.grove-detail-backdrop[hidden]{display:none}
+.grove3 .grove-detail .grove-detail-bar{position:sticky;bottom:0;background:var(--g-surface);border-top:1px solid var(--g-line);padding:10px 16px;margin-top:auto;z-index:2}
+.grove3 .grove-detail .grove-fact{flex-wrap:nowrap;gap:4px}
+.grove3 .grove-detail .grove-fact-rel{order:-1;font-style:normal;font-weight:600;font-size:13.5px;color:var(--g-ink);white-space:nowrap}
+.grove3 .grove-detail .grove-fact strong{font-size:11px;font-weight:400;color:var(--g-muted)}
+.grove-rail-empty{margin:4px 0 0;font-size:12px;color:var(--g-muted)}
+.grove-rail-empty>summary{min-height:32px;display:flex;align-items:center;gap:6px;cursor:pointer}
+.grove-rail-empty-body{margin:4px 0 0}
+.grove-rail-empty-body button{min-height:32px;padding:4px 8px;font-size:12px}
+.grove-bar-later{border:1px solid var(--g-line);background:var(--g-surface);border-radius:999px;padding:0 10px;height:36px;min-height:36px;font-size:12px;color:var(--g-ink-2);position:relative}
+.grove-bar-later::after{content:"";position:absolute;inset:-4px;border-radius:999px}
+@media (max-width:899px){
+ .grove3{grid-template-columns:minmax(0,1fr)!important}
+ .grove3 .grove-board-scroll{max-width:none;padding:0}
+ .grove3 .grove-legend{font-size:10.5px;gap:8px}
+ .grove3 .grove-count-line{margin:2px 0 0}
+ .grove3 .grove-state{left:10px;top:14px}
+ .grove3 .grove-row{padding-left:38px}
+ .grove3 .grove-detail{left:0;right:0;top:auto;bottom:calc(64px + env(safe-area-inset-bottom));width:auto;border-radius:16px 16px 0 0;transform:translateY(105%);max-height:62vh;box-shadow:0 -10px 40px rgba(30,24,12,.24)}
+ .grove3.is-detail .grove-detail{transform:none}
+ .grove3 .grove-detail .grove-back{display:flex;margin:0 0 6px}
+ .grove-detail-close{display:none}
+}
+@media (min-width:900px){.grove3 .grove-detail-close{display:block}}
+
+/* Build 318 修正 A：单列列表 + 浮层细节（手机高度 / 首卡 / 抽屉） */
+@media (max-width:899px){
+ body[data-page="home"] .grove3 .grove-bar{margin-bottom:8px!important}
+ body[data-page="home"] .grove3 .grove-chips-row{margin:0!important}
+ body[data-page="home"] .grove3 .grove-cal-top{margin:4px 0 0!important}
+ body[data-page="home"] .grove3 .grove-stack{margin-top:6px!important}
+ body[data-page="home"] .grove3.is-detail .grove-detail,
+ body[data-page="home"] .grove3[data-view="detail"] .grove-detail{height:62vh!important;max-height:62vh!important;min-height:56vh!important;display:flex!important}
+}
+.grove3 .grove-legend{display:inline-flex;align-items:center;gap:10px;font-size:11px;color:var(--g-muted);white-space:nowrap}
+.grove3 .grove-legend span{display:inline-flex;align-items:center;gap:4px}
+.grove3 .grove-legend-dot{width:11px;height:11px;border-radius:50%;display:inline-block;box-sizing:border-box}
+.grove3 .grove-legend-dot.is-open{border:2px solid #8ea79a;background:transparent}
+.grove3 .grove-legend-dot.is-done{background:#3f7a4f}
+.grove3 .grove-legend-dot.is-overdue{border:2px solid #c2762a;background:transparent}
+.grove3 .grove-legend-dot.is-cancelled{background:#9aa0a6}
+/* 单列卡片流：940 上限居中；旧两列布局全部失效 */
+.grove3 .grove-cols{display:block!important}
+.grove3 .grove-stack{max-width:940px;margin:6px auto 0;display:flex;flex-direction:column;gap:6px}
+.grove3 .grove-stack #task-groups{display:block}
+.grove3 .grove-later-list{margin:10px 0 0}
+.grove3 .grove-later-list>h2{margin:0 0 4px}
+/* 状态点 18px */
+.grove3 .grove-row{position:relative;padding-left:38px!important}
+.grove3 .grove-state{position:absolute;left:14px;top:16px;width:18px;height:18px;display:grid;place-items:center}
+.grove3 .grove-state i{width:18px;height:18px;border-radius:50%;box-sizing:border-box;display:grid;place-items:center;font-style:normal}
+.grove3 .grove-row.is-state-open .grove-state i{border:2px solid #93aaa0;background:transparent}
+.grove3 .grove-row.is-state-done .grove-state i{background:#3f7a4f;border:2px solid #3f7a4f}
+.grove3 .grove-row.is-state-done .grove-state i::after{content:"✓";color:#fff;font-size:11px;line-height:1}
+.grove3 .grove-row.is-state-overdue .grove-state i{border:2px solid #c2762a;background:transparent}
+.grove3 .grove-row.is-state-cancelled .grove-state i{background:#9aa0a6;border:2px solid #9aa0a6}
+.grove3 .grove-row.is-state-done.active,.grove3 .grove-row.is-state-done{opacity:.62}
+.grove3 .grove-row.is-state-cancelled .grove-title{text-decoration:line-through}
+/* 浮层详情：桌面右侧 430 fixed；列表不重排 */
+.grove3{position:relative}
+.grove3 .grove-detail{position:fixed!important;top:18px;right:18px;bottom:18px;width:430px;max-width:calc(100vw - 36px);z-index:40;border-radius:16px;box-shadow:0 18px 48px rgba(20,16,8,.28);transform:translateX(calc(100% + 24px));transition:transform .16s ease;display:flex!important;flex-direction:column;overflow:hidden;max-height:none}
+.grove3.is-detail .grove-detail,.grove3[data-view="detail"] .grove-detail{transform:none}
+.grove3 .grove-detail-backdrop{position:fixed;inset:0;background:rgba(20,16,8,.18);z-index:39;display:none}
+.grove3.is-detail .grove-detail-backdrop,.grove3[data-view="detail"] .grove-detail-backdrop{display:block}
+.grove3 .grove-detail-close{position:absolute;top:8px;right:10px;z-index:2;width:32px;height:32px;min-height:0;border-radius:50%;border:1px solid var(--g-line);background:var(--g-surface);color:var(--g-ink);font-size:14px}
+@media (max-width:899px){
+ .grove3 .grove-detail{left:0;right:0;top:auto;bottom:0;width:auto;max-width:none;border-radius:16px 16px 0 0;box-shadow:0 -10px 34px rgba(20,16,8,.22);transform:translateY(calc(100% + 12px))}
+ .grove3.is-detail .grove-detail,.grove3[data-view="detail"] .grove-detail{transform:none}
+}
+
+/* Build 318 修正 B：手机「明天 N」热区补到 44（视觉仍 36） */
+@media (max-width:899px){
+ .grove3 .grove-bar-later{position:relative}
+ .grove3 .grove-bar-later::after{content:"";position:absolute;left:0;right:0;top:50%;height:44px;transform:translateY(-50%)}
+}
+
+/* Build 318 修正 C：已取消卡也用同一状态点，保持单列观感一致 */
+.grove3 .grove-later{position:relative;padding-left:38px}
+.grove3 .grove-later .grove-state{left:14px;top:14px}
+
+/* Build 318 修正 D：遮罩不吞点击（点空白/✕关闭；点卡片直接切换，列表与导航保持可点） */
+.grove3 .grove-detail-backdrop{pointer-events:none!important}
+
+/* Build 318 修正 E：浮层正文独立滚动（详情变长时可滚到「更多操作」） */
+.grove3 .grove-detail-body{overflow-y:auto;overscroll-behavior:contain;min-height:0}
+
+/* Build 318 修正 F：浮层关闭时内容不可见（避免离屏内容仍被判定 visible），打开态由 is-detail / data-view 控制 */
+.grove3 .grove-detail{visibility:hidden}
+.grove3.is-detail .grove-detail,
+.grove3[data-view="detail"] .grove-detail{visibility:visible}
+
+/* Build 318 修正 G：手机浮层底部让出「主导航」高度，保证 nav 可点、列表尾部不被遮 */
+@media (max-width:899px){
+ .grove3 .grove-detail{bottom:calc(64px + env(safe-area-inset-bottom))!important;max-height:62vh}
+ .grove3 .grove-detail-bar{padding-bottom:10px} 
+}
+
+/* Build 318 修正 H：左栏页脚装饰线与导航不再叠字；「今天」高亮只留导航一处 */
+body.grove-wide[data-page="home"] aside .sidefoot{display:none!important}
+body.grove-wide[data-page="home"] aside nav[aria-label="主导航"]{padding-bottom:4px}
+body.grove-wide[data-page="home"] aside nav[aria-label="主导航"] button[data-page="home"]{display:none}
+
+
+/* Build 318 P0-1：一张卡只有一个 18px 圆点（状态点 + 勾选控件合体） */
+.grove3 .grove-check{position:absolute;left:14px;top:16px;width:18px;height:18px;min-height:0;margin:0;padding:0;display:grid;place-items:center;background:transparent;border:0;box-shadow:none}
+.grove3 .grove-check::after{content:"";position:absolute;inset:-13px;border-radius:50%}
+.grove3 .grove-check input{position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:pointer;z-index:2}
+.grove3 .grove-check.is-static{cursor:default}
+.grove3 .grove-check .grove-state{position:static;left:auto;top:auto;width:18px;height:18px}
+.grove3 .grove-check .grove-state i{display:grid;place-items:center;width:16px;height:16px;border-radius:50%;border:1.6px solid #9aa89f;background:transparent;color:#fff;font-size:10px;line-height:1;font-weight:700}
+.grove3 .grove-row.is-state-done .grove-check .grove-state i{background:var(--g-accent);border-color:var(--g-accent)}
+.grove3 .grove-row.is-state-overdue .grove-check .grove-state i{border-color:#b4701f}
+.grove3 .grove-row.is-state-cancelled .grove-check .grove-state i{background:#9aa0a6;border-color:#9aa0a6}
+.grove3 .grove-check input:focus-visible+.grove-state{outline:2px solid var(--g-accent);outline-offset:3px;border-radius:50%}
+/* P0-2：事实相对词不再进徽章行（.grove-chips.is-facts 仅保留给读屏与既有测试，视觉隐藏但不影响 innerText） */
+/* P1-3：看板顶部小导航（宽屏把左栏主导航移到这里；手机仍用底部固定导航） */
+.grove-topnav{display:flex;justify-content:flex-end;margin:2px 0 0}
+.grove-topnav nav[aria-label="主导航"]{display:flex!important;flex-direction:row!important;gap:2px!important;margin:0!important;padding:0!important;width:auto!important;grid-auto-flow:row!important}
+.grove-topnav nav button{width:auto!important;min-height:26px!important;height:26px;padding:0 8px!important;border:0!important;background:transparent!important;box-shadow:none!important;font-size:11.5px!important;color:var(--g-muted)!important;text-align:center!important;letter-spacing:0!important}
+.grove-topnav nav button.active{color:var(--g-accent)!important;font-weight:600!important;text-decoration:underline;text-underline-offset:3px}
+@media (max-width:899px){.grove3 .grove-check{left:10px;top:14px}.grove-topnav{display:none}}
