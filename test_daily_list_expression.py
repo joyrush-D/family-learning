@@ -663,5 +663,28 @@ class ReviewerCheckupTests(unittest.TestCase):
                 self.assertEqual((work['kind'], work['evidence']), (kind, evidence))
 
 
+class ReviewerFollowupTests(unittest.TestCase):
+    """Build 323: three non-blocking regex tightenings from the reviewer's A-class recheck."""
+
+    def test_watching_a_cartoon_is_not_craft(self):
+        # 裸「画」只在作品语境才算：看动画片 / 动画 / 漫画 不是手工。
+        self.assertEqual(family_agenda.work_kind('看动画片', []),
+                         {'kind': 'other', 'label': '其他', 'evidence': 'confirm', 'need_photo': False})
+
+    def test_reading_page_three_is_not_practice(self):
+        # 裸「页」只在做题语境才算：读/看/翻第N页不是做题。
+        for line in ('读第3页', '看第3页', '翻第3页'):
+            with self.subTest(line=line):
+                self.assertEqual(family_agenda.work_kind(line, [])['kind'], 'other')
+
+    def test_correcting_wrong_answers_is_practice(self):
+        self.assertEqual(family_agenda.work_kind('数学：订正错题', []),
+                         {'kind': 'practice', 'label': '做题', 'evidence': 'photo', 'need_photo': True})
+
+    def test_a_finished_correction_is_not_a_new_practice_task(self):
+        # 「已订正完成」是状态，不是类型，保持 other/confirm。
+        self.assertEqual(family_agenda.work_kind('数学：已订正完成', [])['kind'], 'other')
+
+
 if __name__ == '__main__':
     unittest.main()
