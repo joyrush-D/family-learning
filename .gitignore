@@ -423,4 +423,8 @@
 /designs/family-grove/assets/*
 !/designs/family-grove/assets/original-sprout.png
 
+!/docs/
+/docs/*
+!/docs/顾问意见-节奏与P1b退出.md
+
 !/test_native_context_ui.cjs
