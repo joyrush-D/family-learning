@@ -257,7 +257,11 @@ class WholeDayTests(unittest.TestCase):
         self.assertEqual(bodies['英语：跟读Unit 7第3至10个单词'], '今晚听音频跟读Unit 7第3至10个单词。\n每词3遍。\n不用抄写。')
         self.assertEqual(plans['英语：明天英语课听写']['school_task']['state'], 'ready', 'no extra parent confirmation')
         self.assertEqual(plans['英语：明天英语课听写']['school_task']['advice'], ACTUAL_REPLY['proposals'][3]['task_advice'], 'advice stays advice')
-        self.assertEqual(sorted(p['school_task']['state'] for p in plans.values()), ['ready'] * 6 + ['reference'], '506 alone is reference')
+        # A model reference that names no requirement builds no card (plan §1); the original stays in the message view.
+        self.assertEqual(sorted(p['school_task']['state'] for p in plans.values()), ['ready'] * 6, '506 is not a requirement')
+        view = self.store.school_messages(dict(child_id='child-1', day=DAY), self.app.upload_info)
+        seen = {m['source_id'] + ':' + m['message_id'] for g in view['groups'] for m in g['messages']}
+        self.assertIn('synthetic-group:506', seen, 'the reference message itself stays in the message view')
         self.assertTrue(any('听写' in t and '听写本' not in t for t in visible) and len(mine) == 7)
         agent.Store(self.app.connect, self.app.profiles, self.app.DATA, app=self.app)
         replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
@@ -301,7 +305,11 @@ class WholeDayTests(unittest.TestCase):
         self.assertEqual(items['英语：跟读Unit 7第3–10个单词']['body'], '今晚听音频跟读Unit 7第3至10个单词。\n每词3遍。\n不用抄写。')
         self.assertEqual(plans[dictation['title']]['school_task']['state'], 'ready', 'no extra parent confirmation')
         self.assertEqual(plans[dictation['title']]['school_task']['advice'], ACTUAL_TITLE_REPLY['proposals'][3]['task_advice'], 'advice stays advice')
-        self.assertEqual(sorted(p['school_task']['state'] for p in plans.values()), ['ready'] * 6 + ['reference'], '506 alone is reference')
+        # A model reference that names no requirement builds no card (plan §1).
+        self.assertEqual(sorted(p['school_task']['state'] for p in plans.values()), ['ready'] * 6, '506 is not a requirement')
+        view = self.store.school_messages(dict(child_id='child-1', day=DAY), self.app.upload_info)
+        seen = {m['source_id'] + ':' + m['message_id'] for g in view['groups'] for m in g['messages']}
+        self.assertIn('synthetic-group:506', seen, 'the reference message itself stays in the message view')
         self.assertIn(dictation['title'], visible, 'the future classroom dictation is listed')
         agent.Store(self.app.connect, self.app.profiles, self.app.DATA, app=self.app)
         replay = agent.run_once(self.app, self.now + dt.timedelta(minutes=7))

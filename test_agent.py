@@ -266,7 +266,8 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=proposals)):
             items=agent._select('school',json.loads(json.dumps(evidence)),school_goals=[],as_of='2026-10-19')
         tasks=[i['plan']['school_task'] for i in items]
-        self.assertEqual([(t['state'],i['due']) for t,i in zip(tasks,items)],[('ready','2026-10-20')]*5+[('reference','')],
+        # A reference that names no requirement is chat, not a row (plan §1).
+        self.assertEqual([(t['state'],i['due']) for t,i in zip(tasks,items)],[('ready','2026-10-20')]*5,
                          [t['reason'] for t in tasks])
         # Each card keeps its own completion and handback or check roles in its own words; the bottle has only its own day.
         self.assertIn('今晚完成，明天早上交。',items[0]['body']);self.assertIn('今晚完成，明天早上交。',items[1]['body'])
@@ -1704,7 +1705,11 @@ class AgentTests(unittest.TestCase):
         with patch.object(agent.family_llm,'_chat_json',return_value=dict(proposals=[proposal,remaining,other])):
             separate=agent._select('school',evidence,school_goals=[],as_of=self.now.date().isoformat())
         self.assertEqual([e['ref'] for e in separate[0]['evidence']], [evidence[0]['ref'],evidence[2]['ref']])
-        self.assertEqual([e['ref'] for e in separate[-1]['evidence']],[evidence[-1]['ref']])
+        # The other publisher's blank reference names no requirement and builds no row (plan §1); the remaining
+        # supplement keeps its own citations.
+        self.assertEqual(len(separate),2)
+        self.assertEqual([e['ref'] for e in separate[1]['evidence']],
+                         [e['ref'] for e in evidence if e['ref'] not in {evidence[0]['ref'],evidence[2]['ref'],evidence[-1]['ref']}])
 
     def test_school_batch_does_not_split_body_and_pending_attachment_before_bytes_arrive(self):
         messages=[dict(id=str(i),time=(self.now+dt.timedelta(seconds=i)).isoformat(),kind='text',sender='示例老师',
@@ -3144,7 +3149,10 @@ class AgentTests(unittest.TestCase):
         self.assertNotIn('school_learning',json.loads(rows[ids['legend']]['plan']))
         import family_agenda
         inbox=family_agenda.snapshot(self.app,'2026-02-10','2026-02-10')['inbox']
-        self.assertNotIn(ids['legend'],[r['id'] for r in inbox]);self.assertIn(ids['legend'],[r['id'] for r in self.store.snapshot()['items']])
+        self.assertNotIn(ids['legend'],[r['id'] for r in inbox])
+        self.assertNotIn(ids['legend'],[r['id'] for r in self.store.snapshot()['items']])
+        with self.app.connect() as c:
+            self.assertEqual(c.execute('SELECT state FROM agent_items WHERE id=?',(ids['legend'],)).fetchone()[0],'pending')
 
     def test_new_school_notice_uses_one_selection_and_reference_creates_no_learning_goal(self):
         self.store.ingest(self.payload())
@@ -4111,7 +4119,9 @@ class AgentTests(unittest.TestCase):
             self.assertEqual(model.call_count, 2)
             agent.run_once(self.app, self.now + dt.timedelta(minutes=7))
             self.assertEqual(model.call_count, 2)
-            items = self.store.snapshot()['items']; school = next(row for row in items if row['kind'] == 'school')
+            with self.app.connect() as c:
+                school = dict(c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending'").fetchone())
+            self.assertNotIn(school['id'], [row['id'] for row in self.store.snapshot()['items']])
             accepted = self.store.act(dict(id=school['id'], action='accept', title='家长核对后的准备', due='2026-02-12', body='按核对后的材料准备'))
             replay = self.store.act(dict(id=school['id'], action='accept', title='迟到的不同内容'))
             self.assertEqual(accepted, replay)
@@ -4372,8 +4382,10 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                            title='待核对：[image：内容未读取，仅保留消息说明]',
                            body=agent.FOCUS['school'], evidence=evidence, due='')
         self.store._save('placeholder-school', fp, [placeholder], self.now)
-        item = self.store.snapshot()['items'][0]
-        self.assertTrue(item['needs_task_details'])
+        with self.app.connect() as c:
+            item = dict(c.execute("SELECT * FROM agent_items WHERE title LIKE '待核对：%' AND state='pending'").fetchone())
+        self.assertTrue(agent._needs_task_details(item['title']))
+        self.assertNotIn(item['id'], [row['id'] for row in self.store.snapshot()['items']])
         with self.assertRaises(agent.AgentError):
             self.store.act(dict(id=item['id'], action='accept'))
         with self.assertRaises(agent.AgentError):
@@ -4423,14 +4435,23 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
                                          evidence=[dict(ref=ref, quote=quote)])]}
             with patch.object(agent.family_llm, '_chat_json', return_value=result):
                 selected = agent._select('school', [dict(ref=ref, text=source_text)], as_of='2026-02-10')
+            if agent._school_noise(dict(ref=ref, text=source_text)):
+                # A withdrawn message (even alongside an unread placeholder) is chat: no card, no retry;
+                # only the read holding it is accounted in the batch.
+                self.assertEqual(selected, [])
+                continue
             self.assertEqual(selected[0]['title'], '待核对：[资料]')
             self.assertEqual(selected[0]['body'], agent.FOCUS['school'])
+            kept = selected
 
         fp = self.store._job('qq-placeholder', 'qq-placeholder', self.now)
         self.store._save('qq-placeholder', fp, [dict(child_id='child-1', kind='school',
-                           title=selected[0]['title'], body=selected[0]['body'],
-                           evidence=selected[0]['evidence'], due='')], self.now)
-        item = next(row for row in self.store.snapshot()['items'] if row['title'] == '待核对：[资料]')
+                           title=kept[0]['title'], body=kept[0]['body'],
+                           evidence=kept[0]['evidence'], due='')], self.now)
+        with self.app.connect() as c:
+            item = dict(c.execute("SELECT * FROM agent_items WHERE title='待核对：[资料]' AND state='pending'").fetchone())
+        # Plan §4: a hold card (unread original) is hidden from the pending list but stays actionable by id.
+        self.assertNotIn(item['id'], [row['id'] for row in self.store.snapshot()['items']])
         with self.assertRaises(agent.AgentError):
             self.store.act(dict(id=item['id'], action='accept'))
         accepted = self.store.act(dict(id=item['id'], action='accept',
@@ -4501,7 +4522,10 @@ family_agent.run_once(app, dt.datetime(2026, 2, 10, 8, tzinfo=family_agent.TZ))
             self.assertEqual(c.execute('SELECT cursor FROM agent_sources').fetchone()[0], '15')
             self.assertEqual([dict(row) for row in c.execute("SELECT * FROM agent_items WHERE job_id='prior-school' ORDER BY id")], before_items)
             self.assertEqual([dict(row) for row in c.execute('SELECT * FROM manual_tasks ORDER BY id')], before_tasks)
-        pending = self.store.snapshot()['items']
+        self.assertEqual([row['id'] for row in self.store.snapshot()['items'] if row['state'] == 'pending'], [])
+        with self.app.connect() as c:
+            pending = [dict(r) for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY id")]
+        for row in pending: row['plan'] = __import__('json').loads(row['plan'] or '{}')
         titles = [row['title'] for row in pending if row['state'] == 'pending']
         self.assertEqual(set(titles), {'待核对：' + row[1] for row in cases})
         expired=next(row for row in pending if row['title']=='待核对：'+cases[0][1])

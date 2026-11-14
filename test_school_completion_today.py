@@ -884,10 +884,17 @@ class OrdinaryOwnedTimeTests(unittest.TestCase):
         actionable = [r for r in items.values() if json.loads(r['plan'])['school_task']['state'] != 'reference']
         self.assertEqual(sorted(r['state'] for r in actionable), ['accepted'] * 6)
         self.assertFalse(any('未采用模型日期' in json.loads(r['plan'])['school_task']['reason'] for r in items.values()))
-        # The science introduction stays reference material only: kept, cited, no todo.
+        # The science introduction names no requirement: the model's blank reference builds no card (plan §1).
         reference = [r for r in items.values() if json.loads(r['plan'])['school_task']['state'] == 'reference']
-        self.assertEqual([(r['state'], r['task_id'], [e['ref'] for e in json.loads(r['evidence'])]) for r in reference],
-                         [('pending', '', [refs[5]])])
+        self.assertEqual(reference, [])
+        source_id, message_id = refs[5][8:].rsplit(':', 1)
+        view = self.store.school_messages(dict(child_id=self.source['child_id']), self.app.upload_info)
+        seen = {(m['source_id'], m['message_id']) for g in view['groups'] for m in g['messages']}
+        for day in view['days']:
+            if (source_id, message_id) in seen: break
+            more = self.store.school_messages(dict(child_id=self.source['child_id'], day=day), self.app.upload_info)
+            seen |= {(m['source_id'], m['message_id']) for g in more['groups'] for m in g['messages']}
+        self.assertIn((source_id, message_id), seen, 'the reference message itself stays visible in the message view')
         self.assertFalse(any('种植园' in t['title'] + t['action'] + t['due'] for t in tasks.values()))
 
         def check(listed):

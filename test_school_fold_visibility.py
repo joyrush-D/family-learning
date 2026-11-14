@@ -444,5 +444,37 @@ class DocumentOriginalWaitTest(unittest.TestCase):
         self.assertEqual([f['upload_id'] for f in files], [self.upload_id])
 
 
+class TierTests(unittest.TestCase):
+    """Plan §4 as a table: first match wins, so one row lands in exactly one bucket."""
+
+    def row(self, title='数学：完成《每日练习》第26页', **brief):
+        value = dict(state='review', title='数学：完成《每日练习》第26页', goal='完成第26页1—3题。',
+                     change='new', target_id='', purpose='learning', policy=0)
+        value.update(brief)
+        return dict(title=title), dict(school_task=value)
+
+    def test_the_seven_rows_of_the_tier_table(self):
+        cases = [
+            ('a model reference is material', self.row(state='reference'), 'ref'),
+            ('a placeholder waits for its original', self.row(title='待整理：学校资料'), 'hold'),
+            ('a card without a title waits', self.row(title='数学：完成《每日练习》第26页', title_='', goal=''), 'hold'),
+            ('an unknown purpose waits', self.row(purpose='unknown'), 'hold'),
+            ('optional material is reference', self.row(purpose='optional'), 'ref'),
+            ('a ready new notice is a todo', self.row(state='ready', policy=agent.SCHOOL_TASK_POLICY), 'todo'),
+            ('a same reminder with a target is confirm', self.row(change='same', target_id='AGENT-1'), 'confirm'),
+            ('any other review is confirm', self.row(), 'confirm'),
+        ]
+        for name, (row, plan), expected in cases:
+            if name.startswith('a card without a title'):
+                plan['school_task']['title'] = ''
+            with self.subTest(name=name):
+                self.assertEqual(agent.school_tier(row, plan), expected)
+
+    def test_legacy_rows_without_a_brief_default_to_confirm(self):
+        # A row written before tiering has no school_task; excluding it would hide old pending notices.
+        self.assertEqual(agent.school_tier(dict(title='待核对：[资料]'), {}), 'hold')
+        self.assertEqual(agent.school_tier(dict(title='语文：完成《识字小卡》练习'), {}), 'confirm')
+
+
 if __name__ == '__main__':
     unittest.main()

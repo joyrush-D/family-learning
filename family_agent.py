@@ -5,7 +5,7 @@ Collectors only ingest configured sources; model selections never write growth f
 """
 import argparse
 import copy
-from collections import deque
+from collections import deque, OrderedDict
 from contextlib import contextmanager, nullcontext
 import datetime as dt
 import hashlib
@@ -26,6 +26,16 @@ import family_teacher_public
 
 TZ = family_review.TIMEZONE
 MAX_ATTEMPTS = 3
+_CONFIG_CACHE = OrderedDict()
+_CONFIG_CACHE_MAX = 32
+
+def _stat_signature(path):
+    """Identity of one file's bytes; a changed mtime/size/symlink is a different key."""
+    try:
+        st = path.stat()
+        return (st.st_mtime_ns, st.st_size, path.is_symlink())
+    except OSError:
+        return None
 # A school-message batch that keeps failing because the model never finished its answer is not dropped for good after
 # the three immediate attempts: it is retried at these delays (minutes from the failure), first after 70 minutes so the
 # shorter observation windows of the saved jobs are untouched, then every 6 hours, then once a day. Five consecutive
@@ -33,6 +43,8 @@ MAX_ATTEMPTS = 3
 # limit and the next_try='' hand-over to the explicit retry, exactly as before.
 SCHOOL_RETRY_MINUTES = (70, 360, 1440)
 SCHOOL_READ_GAP_PREFIX = '消息整理有缺口，清单可能缺项：'
+# Hours a card may wait before it is parked as expired (plan §2). A folded later notice resets the clock.
+SCHOOL_PENDING_TTL = {'hold': 24, 'ref': 24, 'confirm': 48}
 FOCUS = {
     'school': '请核对这条通知是否适用于本孩子，以及要准备什么、何时完成；确认后可加入待办。',
     'explain': '可以请孩子用自己的话说说这一步怎么想的、在哪里需要帮助，再记录一次实际尝试。',
@@ -1042,6 +1054,29 @@ def _school_reference_title(quote):
     return '参考资料：'+(line[:60]+'…' if len(line)>60 else line) if line else '参考资料'
 
 
+def school_tier(row, plan):
+    """Plan §4: the one bucket a pending school card belongs to, first match wins. A `todo` is auto-added, a
+    `confirm` must be checked against its original, a `hold` waits for an unread original, a `ref` is material.
+
+    Legacy fallback (not a rule for new rows): a row written before tiering has no `school_task` in its
+    plan and defaults to `confirm`, so old pending notices stay actionable.  A collector placeholder title
+    is `hold` either way."""
+    brief = (plan or {}).get('school_task') or {}
+    title = str(row['title'] or '') if 'title' in row.keys() else ''
+    placeholder = _needs_task_details(title) or title.strip() in ('待整理：学校资料', '待整理:学校资料')
+    if brief.get('state') == 'reference': return 'ref'
+    if not brief:
+        # A row saved before the candidate carried a brief: its title/body are the whole requirement, never a
+        # generated placeholder, so it stays a parent decision instead of disappearing with the legacy plan.
+        return 'hold' if placeholder else 'confirm'
+    if (placeholder or not str(brief.get('title') or '').strip() or not str(brief.get('goal') or '').strip()
+            or brief.get('purpose') == 'unknown'): return 'hold'
+    if brief.get('purpose') == 'optional': return 'ref'
+    if (brief.get('state') == 'ready' and brief.get('policy') == SCHOOL_TASK_POLICY
+            and brief.get('change', 'new') == 'new' and not brief.get('target_id')): return 'todo'
+    return 'confirm'
+
+
 def _school_unsummarized(row, brief):
     """A generated candidate still without the model's own summary: the review placeholder or its reference wording."""
     return row['body'] in (FOCUS['school'],SCHOOL_REFERENCE_NOTE) and not brief.get('title') and not brief.get('goal')
@@ -1642,6 +1677,12 @@ class Store:
                     care_id TEXT NOT NULL DEFAULT '', record_id INTEGER, state TEXT NOT NULL DEFAULT 'pending',
                     created TEXT NOT NULL, updated TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT '',
                     plan TEXT NOT NULL DEFAULT '{}');
+                CREATE TABLE IF NOT EXISTS agent_item_events (
+                    id INTEGER PRIMARY KEY, item_id TEXT NOT NULL, at TEXT NOT NULL,
+                    kind TEXT NOT NULL, actor TEXT NOT NULL, before TEXT NOT NULL DEFAULT '',
+                    after TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '');
+                CREATE INDEX IF NOT EXISTS agent_item_events_item ON agent_item_events(item_id,id);
+                CREATE INDEX IF NOT EXISTS agent_items_kind_state ON agent_items(kind,state,child_id);
                 CREATE TABLE IF NOT EXISTS agent_runtime (
                     id INTEGER PRIMARY KEY CHECK(id=1), state TEXT NOT NULL, last_run TEXT NOT NULL,
                     last_error TEXT NOT NULL);
@@ -1667,6 +1708,13 @@ class Store:
                     c.execute('ALTER TABLE agent_jobs ADD COLUMN retries INTEGER NOT NULL DEFAULT 0')
                 if 'retry_at' not in job_columns:
                     c.execute("ALTER TABLE agent_jobs ADD COLUMN retry_at TEXT NOT NULL DEFAULT ''")
+            source_columns = {row['name'] for row in c.execute('PRAGMA table_info(agent_sources)')}
+            if 'error_code' not in source_columns or 'fail_count' not in source_columns:
+                c.execute('BEGIN IMMEDIATE')
+                if 'error_code' not in source_columns:
+                    c.execute("ALTER TABLE agent_sources ADD COLUMN error_code TEXT NOT NULL DEFAULT ''")
+                if 'fail_count' not in source_columns:
+                    c.execute('ALTER TABLE agent_sources ADD COLUMN fail_count INTEGER NOT NULL DEFAULT 0')
 
     @contextmanager
     def _db(self):
@@ -1679,6 +1727,12 @@ class Store:
 
     def _config(self, connection=None):
         path = self.data / 'agent.json'
+        key = (str(self.data), _stat_signature(path), _stat_signature(self.data / '家庭运行规则.md'),
+               _stat_signature(self.data / 'family.sqlite3'))
+        cached = _CONFIG_CACHE.get(key)
+        if cached is not None:
+            _CONFIG_CACHE.move_to_end(key)
+            return copy.deepcopy(cached)
         if not path.exists(): return {'enabled': False, 'sources': []}
         try:
             if path.is_symlink() or path.stat().st_size > 32768: raise ValueError()
@@ -1698,6 +1752,10 @@ class Store:
                 if row['platform'] not in {'wechat', 'qq'} or row['child_id'] not in children or type(row['enabled']) is not bool:
                     raise ValueError()
                 seen.add(row['id'])
+            _CONFIG_CACHE[key] = copy.deepcopy(obj)
+            _CONFIG_CACHE.move_to_end(key)
+            while len(_CONFIG_CACHE) > _CONFIG_CACHE_MAX:
+                _CONFIG_CACHE.popitem(last=False)
             return obj
         except (OSError, ValueError, KeyError, TypeError):
             raise AgentError('Agent配置无法核对，请检查已授权来源和孩子归属', 409, 'agent_config') from None
@@ -2115,7 +2173,7 @@ class Store:
     def snapshot(self):
         try: config = self._config()
         except AgentError as error:
-            return dict(enabled=False, state='error', last_run='', last_error=str(error), pending_count=0, items=[], sources=[], linked_upload_ids=[])
+            return dict(enabled=False, state='error', last_run='', last_error=str(error), pending_count=0, hidden_count=0, items=[], sources=[], linked_upload_ids=[])
         try:
             from family_qq_inbox import status as inbox_status
             from family_collect import CollectError
@@ -2130,6 +2188,15 @@ class Store:
                 row['needs_task_details'] = row['kind'] == 'school' and _needs_task_details(row['title'])
                 row['goal_id'] = row['plan'].get('parent_goal_id') or row['plan'].get('school_goal_id') or (row['id'] if row['kind']=='care' and row['state']=='accepted' else '')
             items = [r for r in items if not (r['state']=='accepted' and r['plan'].get('parent_goal_id'))]
+            # Plan §4: the pending list shows what a parent can act on. hold/ref stay out of it; the archive below keeps
+            # the recently expired ones so a parent can restore what was parked.
+            hidden = sum(1 for r in items if r['state'] == 'pending' and r['kind'] == 'school'
+                         and school_tier(r, r['plan']) in ('hold', 'ref'))
+            items = [r for r in items if r['state'] != 'pending' or r['kind'] != 'school' or school_tier(r, r['plan']) in ('todo', 'confirm')]
+            expired = [dict(row) for row in c.execute("SELECT * FROM agent_items WHERE state='expired' ORDER BY updated DESC,id LIMIT 50")]
+            for row in expired:
+                row['evidence'] = json.loads(row['evidence']); row['plan'] = json.loads(row['plan']); row.pop('job_id')
+                row['tier'] = school_tier(row, row['plan'])
             sources = []; linked_upload_ids = set(); file_messages = []
             for source in config['sources']:
                 saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
@@ -2172,12 +2239,14 @@ class Store:
                                 child_id=source['child_id'], source=source['name'], name=row['name'], mime=row['mime'],
                                 time=json.loads(row['payload'])['time']))
             failed = c.execute('SELECT COUNT(*) FROM agent_jobs WHERE done=0 AND attempts>=?', (MAX_ATTEMPTS,)).fetchone()[0]
-            pending = c.execute("SELECT COUNT(*) FROM agent_items WHERE state='pending'").fetchone()[0]
+            pending = sum(1 for r in items if r['state'] == 'pending')
+            expired_count = c.execute("SELECT COUNT(*) FROM agent_items WHERE state='expired'").fetchone()[0]
         state = runtime['state'] if runtime else 'waiting'
         if state == 'running' and runtime['last_run'] < (_now() - dt.timedelta(minutes=10)).isoformat(): state = 'interrupted'
         return dict(enabled=config['enabled'], state=state if config['enabled'] else 'disabled',
                     last_run=runtime['last_run'] if runtime else '', last_error=runtime['last_error'] if runtime else '',
-                    failed_jobs=failed, pending_count=pending, items=items, sources=sources,
+                    failed_jobs=failed, pending_count=pending, hidden_count=hidden, items=items, sources=sources,
+                    expired_count=expired_count, expired=expired,
                     file_messages=file_messages,
                     collection_interval_minutes=collection_interval_minutes(),
                     linked_upload_ids=sorted(linked_upload_ids))
@@ -2299,7 +2368,15 @@ class Store:
             ident = _text(obj, 'id', 80, True)
             row = c.execute('SELECT * FROM agent_items WHERE id=?', (ident,)).fetchone()
             if row is None: raise AgentError('建议不存在，请刷新', 404)
-            if action not in {'accept', 'dismiss', 'defer'}: raise AgentError('操作不正确')
+            if action not in {'accept', 'dismiss', 'defer', 'restore'}: raise AgentError('操作不正确')
+            if action == 'restore':
+                if row['kind'] != 'school' or row['state'] != 'expired':
+                    raise AgentError('只有已过期收起的学校事项可以恢复', 409, 'school_restore_state')
+                plan = json.loads(row['plan'] or '{}')
+                plan['school_keep'] = True
+                c.execute("UPDATE agent_items SET state='pending',plan=?,updated=? WHERE id=?", (_json(plan), _now().isoformat(), ident))
+                self._event(c, ident, 'restore', 'parent', 'expired', 'pending', '')
+                return {'ok': True, 'state': 'pending'}
             if action == 'accept' and row['state'] in ('accepted', 'dismissed') and json.loads(row['plan']).get('school_duplicate_of'):
                 return dict(ok=True, state=row['state'], task_id=row['task_id'], deduplicated=True)
             if row['state'] == 'accepted' and action == 'accept': return {'ok': True, 'state': 'accepted', 'task_id': row['task_id']}
@@ -2398,11 +2475,17 @@ class Store:
                 c.execute('UPDATE agent_items SET plan=? WHERE id=?',(_json(plan),ident))
             else:
                 c.execute('UPDATE agent_items SET state=?,task_id=?,updated=? WHERE id=?', values)
+            self._event(c, ident, action, 'auto' if school_auto else 'parent', row['state'], state, row['kind'])
         return {'ok': True, 'state': state, 'task_id': task_id}
 
     def _runtime(self, state, now, error=''):
         with self._db() as c:
             c.execute('INSERT OR REPLACE INTO agent_runtime(id,state,last_run,last_error) VALUES(1,?,?,?)', (state, now.isoformat(), error))
+
+    def _event(self, c, item_id, kind, actor, before='', after='', note=''):
+        """One decision point on one row (plan §5); the only record of why something exists or did not."""
+        c.execute('INSERT INTO agent_item_events(item_id,at,kind,actor,before,after,note) VALUES(?,?,?,?,?,?,?)',
+                  (item_id, _now().isoformat(), kind, actor, before or '', after or '', note or ''))
 
     def _job(self, key, value, now, *, model=False, keep_budget=False, claim=True):
         # claim=False makes the same decision: a refusal keeps its own writes, an allowed claim is only reported, not taken.
@@ -6475,7 +6558,8 @@ def _history_reuse(store,c,row,*,allow_uncertain=False):
         ref,quote=next(iter(anchor.items()))
         previous=next(k for k in known if quote in k['action_anchor'].get(ref,''))
         old=c.execute('SELECT * FROM agent_items WHERE id=?',(previous['id'],)).fetchone()
-        if old['state'] not in ('accepted','dismissed'): raise AgentError('同一原要求已有待处理记录，请沿原记录核对',409,'school_history_duplicate')
+        # An expired row no longer occupies the requirement: the teacher's resend must be able to become the live item.
+        if old['state'] not in ('accepted','dismissed','expired'): raise AgentError('同一原要求已有待处理记录，请沿原记录核对',409,'school_history_duplicate')
         plan['school_duplicate_of']=old['id']
         for field in ('school_learning','school_goal_id'): plan.pop(field,None)
         c.execute('UPDATE agent_items SET state=?,task_id=?,plan=? WHERE id=?',(old['state'],old['task_id'],_json(plan),row['id']))
@@ -6655,6 +6739,35 @@ def _recover_school_pending_relations(app,store,config,now,budget):
 def _school_acknowledgement(entry):
     acknowledgement=r'(?:是的|好的|收到|已上传|已提交|明白了|谢谢(?:老师)?)'
     return bool(re.fullmatch(acknowledgement+r'(?:[。！!，,\s]+'+acknowledgement+r')*[。！!，,\s]*',entry['text'].strip()))
+
+_SCHOOL_EMOTE=re.compile(r'\[[^\[\]\n]{1,6}\]|[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F\u200d]')
+_SCHOOL_ACK=r'(?:是的|好的?|收到|已上传|已提交|明白了?|知道了|谢谢(?:老师)?|(?:老师)?辛苦了?|OK|ok)'
+# 微信表情/系统消息的实际 kind 仍待查库补齐；先只认已经确认的撤回。
+_SCHOOL_NOISE_KINDS=frozenset({'recalled'})
+# A short parent line that changes or withdraws an arrangement is still an instruction, never chatter.
+_SCHOOL_NOISE_ACTION=re.compile(r'(?:取消|撤回|作废|撤销|恢复|重新|补做|再做|改[为到至成]|推迟|延后|提前|暂停|继续|停止|不用|不需要|免去|照旧|仍然)')
+
+
+def _school_noise(entry, teacher=False):
+    """Return a reason code for a message that provably is not a requirement; '' when in doubt.
+
+    A collector placeholder ([图片]/[文件]/…), an unread body or any attachment stays in: each is the anchor the hold
+    tier and the original reader wait for, so only a pure withdrawal is dropped here. Teacher-like display names are
+    exempt from the short-chatter rule because a one-line instruction is normal for them.
+    """
+    text=str(entry.get('text') or '').strip()
+    if entry.get('attachments'): return ''
+    if entry.get('kind') in _SCHOOL_NOISE_KINDS: return 'kind'
+    if _COLLECTOR_PLACEHOLDER.search(text):   # [图片]/[文件] 是未读内容，放行；只有纯撤回算噪声
+        return 'recalled' if '已撤回' in text and not _COLLECTOR_PLACEHOLDER.sub('',text).strip() else ''
+    if entry.get('content_incomplete',entry.get('unread',False)): return ''
+    bare=_SCHOOL_EMOTE.sub('',text)
+    if not re.sub(r'[\W_]+','',bare): return 'emote'
+    if re.fullmatch(_SCHOOL_ACK+r'(?:[\W_]*'+_SCHOOL_ACK+r')*[\W_]*',bare): return 'ack'
+    if (not teacher and len(bare)<=20 and not _SCHOOL_SPLIT_REQUIREMENT.search(bare)
+            and not _SCHOOL_NOISE_ACTION.search(bare)
+            and not _SCHOOL_DATE_MENTION.search(bare) and not re.search(r'[0-9？?《]',bare)): return 'chatter'
+    return ''
 
 
 def _school_ack_original(entry):
@@ -8337,7 +8450,12 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
     original_pointers=[]
     if mode == 'school':
         original_pointers=[item for e in evidence if (item:=_school_ack_original(e))]
-        evidence=[e for e in evidence if not _school_acknowledgement(e)]
+        dropped={e['ref'] for e in evidence
+                 if _school_noise(e, teacher=bool(_SCHOOL_TEACHER_NAME.search(_sender_name(e))))}
+        evidence=[e for e in evidence if not _school_acknowledgement(e) and e['ref'] not in dropped]
+        for entry in evidence:  # a dropped ref must never stay as a possible citation
+            if isinstance(entry.get('related_messages'),list):
+                entry['related_messages']=[ref for ref in entry['related_messages'] if ref not in dropped]
         if not evidence:return original_pointers
     as_of = dt.date.fromisoformat(as_of).isoformat() if as_of is not None else _now().date().isoformat()
     routing = mode == 'school' and school_goals is not None
@@ -8703,6 +8821,8 @@ def _select(mode, evidence, profile=None, *, as_of=None, data_path=None, school_
                 brief['goal']=_school_quote_lead(dated_quote,cited_evidence[0]['text'],brief['goal'])
             if brief['title'] and brief['goal']: item.update(title=brief['title'],body=brief['goal'])
             elif brief['state']=='reference' and title!='[资料]':
+                # A reference that names nothing at all is chat, not a card: the message is accounted in this batch and never retried.
+                if not brief['title'] and not brief['goal']: continue
                 # Same classification, same wording everywhere: material is not a todo waiting for its details.
                 item.update(title=brief['title'] or _school_reference_title(title),body=brief['goal'] or SCHOOL_REFERENCE_NOTE)
             if not _keeps_learning(brief): item.get('plan',{}).pop('school_learning',None)
@@ -10711,6 +10831,26 @@ def _photo_batches(app, now, budget):
         return {'used': 0, 'failed': 1, 'saves': 0}
 
 
+def _expire_school_pending(store, now):
+    """Plan §2: park stale pending cards as expired (never dismissed: a teacher's resend must not inherit that)."""
+    today = now.date().isoformat()
+    cutoff = (now - dt.timedelta(hours=24)).isoformat()
+    with store._db() as c:
+        c.execute('BEGIN IMMEDIATE')
+        for r in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' AND created<?", (cutoff,)).fetchall():
+            plan = json.loads(r['plan'] or '{}')
+            if r['task_id'] or r['record_id'] is not None or r['care_id'] or plan.get('school_keep'): continue
+            tier = school_tier(r, plan)
+            if tier == 'todo': continue
+            if tier == 'confirm' and r['due'] and r['due'] >= today: continue
+            last = max([r['created']] + [f.get('at', '') for f in plan.get('school_folded') or []])
+            try: last_at = dt.datetime.fromisoformat(last)
+            except (TypeError, ValueError): last_at = now - dt.timedelta(hours=SCHOOL_PENDING_TTL[tier])
+            if now - last_at < dt.timedelta(hours=SCHOOL_PENDING_TTL[tier]): continue
+            c.execute("UPDATE agent_items SET state='expired',updated=? WHERE id=? AND state='pending'", (now.isoformat(), r['id']))
+            store._event(c, r['id'], 'expire', 'system', 'pending', 'expired', tier)
+
+
 def _school_read_gap_reconcile(store, config, now):
     """Record, refresh or clear one visible read-gap line per source whose message batch ran out of automatic attempts.
 
@@ -10875,8 +11015,28 @@ def run_once(app, now=None):
                 with store._db() as c:
                     saved = c.execute('SELECT * FROM agent_sources WHERE id=?', (source['id'],)).fetchone()
                     store._binding(source, saved)
+                with store._db() as c:
+                    attached = {link['message_id'] for link in c.execute(
+                        'SELECT message_id FROM agent_message_attachments WHERE source_id=?', (source['id'],))}
                 for values in _school_pending_batches(store, source['id'], now):
                     key = 'messages:' + _hash([source['id'], [row['id'] for row in values]])[:40]
+                    if all(_school_noise(dict(row, attachments=row['id'] in attached),
+                                         teacher=bool(_SCHOOL_TEACHER_NAME.search(_sender_name(row)))) for row in values):
+                        # A batch of chat only must not block teacher messages behind the per-source turn or spend a model
+                        # call: save the empty decision, mark the originals read and leave attempts at zero.
+                        fp = store._job(key, {'school_learning_policy': 8, 'messages': values}, now)
+                        if fp:
+                            with store._db() as c:
+                                if not store._school_selection_current(c, key, fp, source, values):
+                                    _discard_job(c, key, fp); continue
+                            store._save(key, fp, [], now, [(source['id'], row['id']) for row in values], school_context=(source, values))
+                            processed += len(values)
+                            with store._db() as c:
+                                for row in values:
+                                    why = _school_noise(dict(row, attachments=row['id'] in attached),
+                                                        teacher=bool(_SCHOOL_TEACHER_NAME.search(_sender_name(row))))
+                                    store._event(c, 'message:' + source['id'] + ':' + row['id'], 'prescreen', 'auto', '', 'skipped', why)
+                        continue
                     fp = store._job(key, {'school_learning_policy': 8, 'messages': values}, now, model=True)
                     if not fp: continue
                     with store._db() as c:
@@ -10936,6 +11096,7 @@ def run_once(app, now=None):
                 records = [dict(row) for row in c.execute('SELECT * FROM records ORDER BY id DESC')]
                 by_id = {row['id']: row for row in records}
             history=_recheck_school_history(app,store,now,history_reserve,history_scopes);budget-=history['used'];processed+=history['used'];failed+=history['failed'];created+=history['created']
+            _expire_school_pending(store, now)  # plan §2: stale pending cards leave the list before refresh/same
             _fold_school_follows(app,store,now)
             school=_refresh_school(app,store,now,min(1,max(0,budget-1)));budget-=school['used'];processed+=school['used'];failed+=school['failed'];created+=school['created']
             if _school_document_late(store,now): created+=0  # late original requirements join their accepted task, no new card
