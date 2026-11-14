@@ -119,6 +119,15 @@ def _clear_projection_cache():
     with _PROJ_CACHE_LOCK:
         _PROJ_CACHE.clear()
         _PROJ_GENERATION += 1
+    # Rebuild off the request path, so the very next read (which a write usually triggers) hits again.
+    threading.Thread(target=_warm_state, daemon=True).start()
+
+
+def _warm_state():
+    try:
+        _cached_projection('state', None, None, snapshot, serialize=True)
+    except Exception:
+        traceback.print_exc()
 
 
 def _projection_stats():

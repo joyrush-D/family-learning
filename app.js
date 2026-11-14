@@ -93,7 +93,7 @@ $('#parentLogoutDialog').addEventListener('cancel',event=>{if(parentLogoutBusy)e
 document.addEventListener('click',event=>{if(event.target.closest('[data-parent-logout]')&&parentLogoutAvailable){$('#parentLogoutStatus').textContent='';$('#parentLogoutDialog').showModal()}});
 let stateLoadSequence=0;
 async function load(paint=true){
- const seq=++stateLoadSequence,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),12000);
+ const seq=++stateLoadSequence,controller=new AbortController(),timer=setTimeout(()=>controller.abort(),60000);
  try{
   const r=await apiFetch('/api/state',{signal:controller.signal});
   if(!r.ok)throw Error(r.status===401?'请先重新登录，再重试读取。':r.status===403?'当前入口没有访问权限，请核对家庭入口。':'家庭记录暂时无法读取，请重试。');
