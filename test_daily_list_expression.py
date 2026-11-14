@@ -14,9 +14,15 @@ not exactly (or particle-)equal is never a repeat, so 明天/后天, 练习册/�
 swallow a line that adds one.
 """
 import copy
+import json
+import sqlite3
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import family_agenda
+import family_agent
 
 
 DAY = '2026-11-04'
@@ -686,5 +692,107 @@ class ReviewerFollowupTests(unittest.TestCase):
         self.assertEqual(family_agenda.work_kind('数学：已订正完成', [])['kind'], 'other')
 
 
+
+class PendingTierTests(unittest.TestCase):
+    """Only a confirm-tier pending school row reads as a card; hold/ref/expired stay off the list and out of its counts.
+
+    The store is a throwaway sqlite file. The tier comes from family_agent.school_tier when it lands; this test pins the
+    same-contract fallback so a later reader cannot quietly show every pending row again.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / 'family.sqlite3'
+        c = sqlite3.connect(self.db)
+        c.executescript("""
+            CREATE TABLE agent_items (
+              id TEXT PRIMARY KEY, job_id TEXT NOT NULL, child_id TEXT NOT NULL, kind TEXT NOT NULL,
+              title TEXT NOT NULL, body TEXT NOT NULL, evidence TEXT NOT NULL, due TEXT NOT NULL,
+              care_id TEXT NOT NULL DEFAULT '', record_id INTEGER, state TEXT NOT NULL DEFAULT 'pending',
+              created TEXT NOT NULL, updated TEXT NOT NULL, task_id TEXT NOT NULL DEFAULT '',
+              plan TEXT NOT NULL DEFAULT '{}');
+            CREATE TABLE agent_messages (source_id TEXT NOT NULL, id TEXT NOT NULL, payload TEXT NOT NULL,
+              processed INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(source_id,id));
+            CREATE TABLE agent_message_attachments (source_id TEXT NOT NULL, message_id TEXT NOT NULL,
+              upload_id TEXT NOT NULL, PRIMARY KEY(source_id,message_id,upload_id));
+            CREATE TABLE task_updates (id TEXT PRIMARY KEY, status TEXT, updated TEXT);
+            CREATE TABLE manual_tasks (id TEXT PRIMARY KEY);
+        """)
+        rows = [
+            ('confirm', '带水彩笔', 'pending', {'state': 'review', 'title': '带水彩笔', 'goal': '明天带水彩笔',
+                                                'change': 'new', 'purpose': 'admin'}),
+            ('hold', '待核对：[图片]', 'pending', {'state': 'review', 'title': '待核对：[图片]', 'goal': '',
+                                                   'change': 'new', 'purpose': 'admin'}),
+            ('ref', '成绩说明', 'pending', {'state': 'reference', 'title': '成绩说明', 'goal': '看成绩',
+                                             'change': 'new', 'purpose': 'admin'}),
+            ('expired', '旧提醒', 'expired', {'state': 'review', 'title': '旧提醒', 'goal': '旧要求',
+                                               'change': 'new', 'purpose': 'admin'}),
+        ]
+        for ident, title, state, brief in rows:
+            ref = 'message:src-1:' + ident
+            c.execute('INSERT INTO agent_items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                      (ident, 'job-1', 'child-id', 'school', title, 'body', json.dumps([{'ref': ref}]),
+                       '', '', None, state, '2026-11-04T10:00:00+08:00', '2026-11-04T10:00:00+08:00',
+                       '', json.dumps({'school_task': brief})))
+            c.execute('INSERT INTO agent_messages(source_id,id,payload) VALUES (?,?,?)',
+                      ('src-1', ident, json.dumps(dict(id=ident, kind='text', text=title, sender='林老师',
+                                                       time='2026-11-04T09:00:00+08:00', unread=False))))
+        c.commit()
+        c.close()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _view(self):
+        db, data = str(self.db), self.tmp.name
+
+        class App:
+            DATA = data
+
+            def connect(self):
+                c = sqlite3.connect(db)
+                c.row_factory = sqlite3.Row
+                return c
+
+            def profiles(self, c):
+                return [{'id': 'child-id', 'name': '小禾'}]
+
+            def tasks(self, c):
+                return []
+
+            def task_status(self, task, update):
+                return '待跟进'
+
+        def metadata(app, c, child_id, title, due, refs=(), focus=None, purpose=None, **kwargs):
+            return dict(category='homework', published_on='2026-11-04', due_on='2026-11-04',
+                        scheduled_on='2026-11-04', box='inbox')
+
+        with patch.object(family_agenda, 'metadata', metadata), \
+                patch.object(family_agent, 'school_original_requirements', lambda *a, **k: ()):
+            snapshot = family_agenda.snapshot(App(), '2026-11-04', '2026-11-04')
+        return snapshot, family_agenda.day_view(snapshot['inbox'], [], [], {'id': 'child-id', 'name': '小禾'},
+                                                '2026-11-04', '2026-11-04', 'wrong')
+
+    def test_only_confirm_pending_rows_reach_the_day_list(self):
+        snapshot, view = self._view()
+        self.assertEqual([row['id'] for row in snapshot['inbox']], ['confirm'])
+        self.assertEqual([[row['id'] for row in group['items']] for group in view['groups']], [['confirm']])
+        self.assertEqual(view['counts']['open'], 1)
+        self.assertEqual(view['counts']['today'], 1)
+        self.assertEqual(view['counts']['material'], 0)
+        self.assertEqual(view['counts']['undated'], 0)
+        self.assertNotIn('expired', [row['id'] for row in view['groups'][0]['items']])
+
+    def test_the_fallback_tier_keeps_the_four_readings(self):
+        self.assertEqual(family_agenda._school_tier({'title': '成绩说明'},
+            {'school_task': {'state': 'reference', 'title': '成绩说明', 'goal': '看成绩'}}), 'ref')
+        self.assertEqual(family_agenda._school_tier({'title': '待核对：[图片]'},
+            {'school_task': {'state': 'review', 'title': '待核对：[图片]', 'goal': ''}}), 'hold')
+        self.assertEqual(family_agenda._school_tier({'title': '带水彩笔'},
+            {'school_task': {'state': 'review', 'title': '带水彩笔', 'goal': '明天带水彩笔'}}), 'confirm')
+
+
 if __name__ == '__main__':
+    unittest.main()
+
     unittest.main()
