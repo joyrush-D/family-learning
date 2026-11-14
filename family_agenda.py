@@ -1113,10 +1113,15 @@ _OBJ=re.compile(r'《[^》]*》')
 _TIME=re.compile(r'(今天|今晚|明天|明早|后天|周[一二三四五六日天]|\d{1,2}月\d{1,2}日|\d{1,2}[点时])')
 
 
+@functools.lru_cache(maxsize=16384)
+def _plain_cached(text):
+    text=unicodedata.normalize('NFKC',text).lower()
+    return ''.join(ch for ch in text if not ch.isspace() and not unicodedata.category(ch).startswith('P'))
+
+
 def _plain(text):
     """The words of a line for comparison only: width, case, blanks and punctuation do not make a repeat; never shown."""
-    text=unicodedata.normalize('NFKC',str(text or '')).lower()
-    return ''.join(ch for ch in text if not ch.isspace() and not unicodedata.category(ch).startswith('P'))
+    return _plain_cached(str(text or ''))
 
 
 def _fold_key(text):
@@ -1155,6 +1160,7 @@ def _multiset_le(part,whole):
     return True
 
 
+@functools.lru_cache(maxsize=4096)
 def _title_prefix_removed(line,title):
     """C4: an opening of a line that only retells the title reads once, in the title.
 
@@ -1446,6 +1452,37 @@ def visible_on(item,day):
     return bool(known and day>=(published or min(known,scheduled or known,dt.datetime.now(family_agent.TZ).date().isoformat())))
 
 
+
+# Pending school rows now carry a tier from the school reader: todo joins the list, confirm waits for the parent, ref is
+# reference-only, hold is waiting for an original. This display reads that one verdict instead of guessing from the brief.
+# TODO(merge18): family_agent.school_tier is the owner once it lands; until then the same contract is kept here.
+def _school_tier(row, plan):
+    tier = getattr(family_agent, 'school_tier', None)
+    if tier is not None:
+        upstream = tier(dict(row), plan)
+        # Upstream holds a readable row while its goal is being completed. The list has always kept those rows visible;
+        # only a real placeholder waits here, so a parent never loses the only copy of a notice. Every other verdict is
+        # the owner's.
+        if upstream != 'hold':
+            return upstream
+    brief = plan.get('school_task') or {}
+    title = str((dict(row).get('title') if not isinstance(row, dict) else row.get('title')) or '').strip()
+    if brief.get('state') == 'reference':
+        return 'ref'
+    # Only a real placeholder waits for its original. Rows saved before plans existed, or with a meaningful title but
+    # no goal yet, stay visible: hiding them would make a parent's only copy of a school notice disappear.
+    if family_agent._needs_task_details(title) or title == '待整理：学校资料':
+        return 'hold'
+    if brief.get('purpose') == 'optional':
+        return 'ref'
+    policy = brief.get('policy', (plan.get('school_learning') or {}).get('policy'))
+    if brief.get('state') == 'ready' and policy == family_agent.SCHOOL_TASK_POLICY \
+            and brief.get('change') == 'new' and not brief.get('target_id'):
+        return 'todo'
+    if brief.get('change') in ('update', 'append', 'same', 'cancel') and brief.get('target_id'):
+        return 'confirm'
+    return 'confirm'
+
 def snapshot(app,start,end):
     with app.connect() as c:
         c.execute('BEGIN')
@@ -1464,7 +1501,7 @@ def snapshot(app,start,end):
             store=family_agent.Store(app.connect,app.profiles,app.DATA,initialize=False);cited_by=_cited_by(c)
             for row in c.execute("SELECT * FROM agent_items WHERE kind='school' AND state='pending' ORDER BY created DESC,id DESC"):
                 plan=json.loads(row['plan']);brief=plan.get('school_task',{})
-                if row['child_id'] not in ids or brief.get('state')=='reference':continue
+                if row['child_id'] not in ids or _school_tier(row,plan) not in ('todo','confirm'):continue
                 refs=[e['ref'] for e in json.loads(row['evidence'])]
                 purpose=brief.get('purpose')
                 # Action or not is read only from the saved brief: a read goal whose purpose is neither optional nor unknown.
@@ -1640,8 +1677,13 @@ def _unit_chars(text):
     return set(_UNIT_FILLER.sub('',_UNIT_DAY_WORDS.sub(' ',(text or '').lower())).translate(_UNIT_DIGITS))
 
 
-def _count_token(units):
+@functools.lru_cache(maxsize=128)
+def _count_token_cached(units):
     return re.compile(r'(?:\d+|[一二两三四五六七八九十]+)\s*(?:'+'|'.join(sorted(map(re.escape,units),key=len,reverse=True))+')')
+
+
+def _count_token(units):
+    return _count_token_cached(frozenset(units))
 
 
 def _explicit_replacements(said,old):

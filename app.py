@@ -1,4 +1,5 @@
 """Local family dashboard. Run: python3 app.py; private data stays outside Git."""
+import copy
 import datetime as dt
 import json
 import io
@@ -9,6 +10,8 @@ import re
 import secrets
 import hashlib
 import gzip
+import time
+from collections import OrderedDict
 from functools import lru_cache
 import sqlite3
 import subprocess
@@ -82,6 +85,119 @@ DATA = Path(os.environ.get('FAMILY_DATA', ROOT / 'private'))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'family.sqlite3'
 TOKEN = secrets.token_urlsafe(32)
+
+# The projection endpoints are polled by every open page. A short read-through cache keyed by the database signature and
+# bounded by a clock keeps a poll from recomputing the same projection while still following any committed write. It is
+# read-only, in memory, per process, and never consulted by a POST.
+_PROJ_CACHE = OrderedDict()
+_PROJ_CACHE_LOCK = threading.Lock()
+_PROJ_CACHE_MAX = 8
+_PROJ_TTL = 60.0   # soft ceiling: a cache entry is served immediately; past it a background refresh runs
+_PROJ_STATS = {'hits': 0, 'misses': 0, 'stale': 0, 'refreshes': 0, 'refresh_ms_last': 0.0}
+_PROJ_REFRESHING = set()
+_PROJ_GENERATION = 0
+
+
+def _db_signature():
+    """(database mtime, WAL mtime, database size): any committed write changes at least one of them."""
+    try:
+        st = os.stat(DB)
+        db = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        db = (0, 0)
+    try:
+        wal = os.stat(str(DB) + '-wal').st_mtime_ns
+    except OSError:
+        wal = 0
+    return (db[0], wal, db[1])
+
+
+def _clear_projection_cache():
+    """A write must be readable at once: drop the cached projections, so the next read rebuilds them.
+    Stale-while-revalidate still covers the idle case, where only the TTL expires and no write happened."""
+    global _PROJ_GENERATION
+    with _PROJ_CACHE_LOCK:
+        _PROJ_CACHE.clear()
+        _PROJ_GENERATION += 1
+
+
+def _projection_stats():
+    with _PROJ_CACHE_LOCK:
+        stats = dict(_PROJ_STATS)
+        stats['entries'] = len(_PROJ_CACHE)
+        stats['refreshing'] = len(_PROJ_REFRESHING)
+    total = stats['hits'] + stats['stale'] + stats['misses']
+    stats['rate'] = round((stats['hits'] + stats['stale']) / total, 4) if total else 0.0
+    return stats
+
+
+def _store_projection(key, signature, payload):
+    with _PROJ_CACHE_LOCK:
+        _PROJ_CACHE[key] = (time.monotonic(), payload)
+        _PROJ_CACHE.move_to_end(key)
+        while len(_PROJ_CACHE) > _PROJ_CACHE_MAX:
+            _PROJ_CACHE.popitem(last=False)
+
+
+def _refresh_projection(prefix, signature, compute, serialize):
+    """Recompute one projection off the request path; a failure keeps the previous bytes."""
+    with _PROJ_CACHE_LOCK:
+        if prefix in _PROJ_REFRESHING:
+            return
+        _PROJ_REFRESHING.add(prefix)
+    started = time.monotonic()
+    try:
+        result = compute()
+        payload = json.dumps(result, ensure_ascii=False).encode() if serialize else copy.deepcopy(result)
+        # A write that raced this refresh owns the newer projection: do not store this older one.
+        if _db_signature() == signature:
+            _store_projection((*prefix, signature), signature, payload)
+            with _PROJ_CACHE_LOCK:
+                _PROJ_STATS['refreshes'] += 1
+                _PROJ_STATS['refresh_ms_last'] = round((time.monotonic() - started) * 1000, 1)
+    except Exception:
+        traceback.print_exc()
+    finally:
+        with _PROJ_CACHE_LOCK:
+            _PROJ_REFRESHING.discard(prefix)
+
+
+def _cached_projection(kind, child, day, compute, serialize=False):
+    """Stale-while-revalidate cache for one projection.
+
+    A read never waits for a rebuild: the newest bytes for this projection are returned at once, and when they are older
+    than _PROJ_TTL (or the database changed under them) one background refresh is started for the current database
+    signature. Only a read with no bytes at all for this projection computes synchronously. With serialize=True the value
+    is the exact response body bytes; otherwise a deep copy is returned so a caller cannot change what the next hit sees."""
+    child, day = child or '', day or ''
+    signature = _db_signature()
+    prefix = (kind, child, day)
+    key = (*prefix, signature)
+    stale = None
+    with _PROJ_CACHE_LOCK:
+        current = _PROJ_CACHE.get(key)
+        if current is not None:
+            _PROJ_CACHE.move_to_end(key)
+            if time.monotonic() - current[0] <= _PROJ_TTL:
+                _PROJ_STATS['hits'] += 1
+                value = current[1]
+                return value if serialize else copy.deepcopy(value)
+        for older in reversed(_PROJ_CACHE):
+            if older[:3] == prefix:
+                stale = _PROJ_CACHE[older][1]
+                break
+    if stale is not None:
+        _PROJ_STATS['stale'] += 1
+        threading.Thread(target=_refresh_projection, args=(prefix, signature, compute, serialize), daemon=True).start()
+        return stale if serialize else copy.deepcopy(stale)
+    _PROJ_STATS['misses'] += 1
+    result = compute()
+    payload = json.dumps(result, ensure_ascii=False).encode() if serialize else copy.deepcopy(result)
+    if _db_signature() == signature:
+        _store_projection(key, signature, payload)
+    return payload if serialize else result
+
+
 CA_ROUTE = '/family-ca.crt'
 CATEGORIES = ['学习进展', '课程进度', '成绩', '兴趣', '情绪', '家长观察']
 MAX_UPLOAD = 20 * 1024 * 1024
@@ -134,6 +250,10 @@ def accepts_gzip(value):
         accepted[coding.strip()] = 0 < quality <= 1
     return accepted.get('gzip', accepted.get('*', False))
 
+class _CachedConnection(sqlite3.Connection):
+    """A connection that may remember the profile tables it already read in this request."""
+    pass
+
 class ProfileError(ValueError):
     def __init__(self,message,status=400,code='invalid_profile'):
         super().__init__(message);self.status=status;self.code=code
@@ -148,7 +268,7 @@ class RecordError(ValueError):
         self.not_saved=False;self.request_known=False
 
 def connect():
-    c = sqlite3.connect(DB)
+    c = sqlite3.connect(DB, factory=_CachedConnection)
     c.row_factory = sqlite3.Row
     c.execute("CREATE TABLE IF NOT EXISTS records (id INTEGER PRIMARY KEY, child TEXT, day TEXT, category TEXT, subject TEXT, title TEXT, note TEXT, source TEXT, score REAL, total REAL, created TEXT, attachments TEXT NOT NULL DEFAULT '[]', related_record_id INTEGER, followup_kind TEXT NOT NULL DEFAULT '')")
     for name, declaration in [('attachments', "TEXT NOT NULL DEFAULT '[]'"), ('related_record_id', 'INTEGER'), ('followup_kind', "TEXT NOT NULL DEFAULT ''"), ('assistance', "TEXT NOT NULL DEFAULT ''"), ('practice_relation', "TEXT NOT NULL DEFAULT ''"), ('comparison_note', "TEXT NOT NULL DEFAULT ''"), ('care_choice', "TEXT NOT NULL DEFAULT ''"), ('care_review_on', "TEXT NOT NULL DEFAULT ''"), ('request_key', "TEXT NOT NULL DEFAULT ''"), ('request_hash', "TEXT NOT NULL DEFAULT ''"), ('transcript', "TEXT NOT NULL DEFAULT ''"), ('transcript_state', "TEXT NOT NULL DEFAULT ''"), ('linked_task_id', "TEXT NOT NULL DEFAULT ''"), ('linked_task_at', "TEXT NOT NULL DEFAULT ''")]:
@@ -181,13 +301,25 @@ def connect():
     c.execute('CREATE TABLE IF NOT EXISTS profile_history (child_id TEXT NOT NULL, version INTEGER NOT NULL, previous TEXT NOT NULL, current TEXT NOT NULL, reason TEXT NOT NULL, changed TEXT NOT NULL, PRIMARY KEY(child_id,version))')
     return c
 
+@lru_cache(maxsize=64)
+def _read_cached(path, mtime_ns, size):
+    # Same file bytes, same answer: the signature is what invalidates it, never a clock.
+    return Path(path).read_text()
+
 def read(name):
     p = ROOT / name
-    return p.read_text() if p.exists() else ''
+    try:
+        st = p.stat()
+    except OSError:
+        return ''
+    return _read_cached(str(p), st.st_mtime_ns, st.st_size)
 
 def profile_state(connection=None):
     if connection is None:
         with connect() as c: return profile_state(c)
+    cached = getattr(connection, '_profile_cache', None)
+    if cached is not None and cached[0] == connection.total_changes:
+        return cached[1]
     rows = []
     for line in read('家庭运行规则.md').splitlines():
         cells = [x.strip() for x in line.strip('|').split('|')]
@@ -215,7 +347,12 @@ def profile_state(connection=None):
         reserve(p['name'],p['id']);p['label']=p['name']+suffix
         p['history']=[dict(version=r['version'],previous=json.loads(r['previous']),current=json.loads(r['current']),reason=r['reason'],changed=r['changed'])
                       for r in connection.execute('SELECT * FROM profile_history WHERE child_id=? ORDER BY version DESC',(p['id'],))]
-    return rows,owners
+    result = (rows, owners)
+    try:
+        connection._profile_cache = (connection.total_changes, result)
+    except AttributeError:
+        pass
+    return result
 
 def profiles(connection=None):
     return profile_state(connection)[0]
@@ -268,6 +405,10 @@ def save_profile(obj):
             if owner==ident:
                 c.execute('UPDATE records SET child=? WHERE child=?',(name,alias))
                 c.execute('UPDATE manual_tasks SET child=? WHERE child=?',(name,alias))
+        try:
+            del c._profile_cache
+        except AttributeError:
+            pass
         return next(p for p in profiles(c) if p['id']==ident)
 
 def tasks(connection=None):
@@ -850,7 +991,7 @@ def homework_material_states(c,context):
 
 def connect_read_only():
     """The database file as it is, opened read-only: no table is created or migrated; an absent file or table is the caller's error, never a new file."""
-    c=sqlite3.connect(Path(DB).absolute().as_uri()+'?mode=ro',uri=True);c.row_factory=sqlite3.Row;return c
+    c=sqlite3.connect(Path(DB).absolute().as_uri()+'?mode=ro',uri=True,factory=_CachedConnection);c.row_factory=sqlite3.Row;return c
 
 def agent_store(read_only=False):
     # A pure read reuses the store's existing initialize=False over the read-only connection; every write path keeps the initialized store.
@@ -2785,7 +2926,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(404,{'error':'不存在'})
             if path=='/api/child-access': return self.reply(200,family_child.parent_action(SimpleNamespace(**globals()),'state',{}))
             if path=='/api/calendar/timetables': return self.reply(200,dict(timetables=family_calendar.Store(connect,profiles,DATA,initialize=False).saved_timetables()))
-            if path=='/api/state': return self.reply(200,snapshot())
+            if path=='/api/cache-stats': return self.reply(200,_projection_stats())
+            if path=='/api/state': return self.reply(200,_cached_projection('state',None,None,snapshot,serialize=True))
             if path in family_photo_batch.GET_ROUTES:
                 # Read only: opening or refreshing a batch never calls a model or advances its steps.
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
@@ -2796,7 +2938,8 @@ class Handler(BaseHTTPRequestHandler):
                 query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
                 if set(query)-{'child_id','day'} or any(len(v)!=1 or len(v[0])>100 for v in query.values()):
                     return self.reply(400,{'error':'请只选择一个孩子和一天','code':'day_query_invalid'})
-                try: return self.reply(200,day_view(query.get('child_id',[''])[0],query.get('day',[''])[0]))
+                child=query.get('child_id',[''])[0];day=query.get('day',[''])[0]
+                try: return self.reply(200,_cached_projection('day',child,day,lambda: day_view(child,day),serialize=True))
                 except TaskError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
             if path=='/api/agent/fragment/plan': return self.reply(200,agent_store().collector_plan(fragment=True))
@@ -2951,6 +3094,15 @@ class Handler(BaseHTTPRequestHandler):
         except (family_print.PrintError,family_reading.ReadingError,family_calendar.CalendarError,ProfileError,family_child.ChildError,family_agent.AgentError,family_study.StudyError,family_settings.SettingsError,family_teachers.TeacherError) as e: return self.reply(e.status,dict(error=str(e),code=e.code))
         except (OSError,sqlite3.Error,json.JSONDecodeError): return self.reply(500,{'error':'读取失败，记录未更改'})
     def do_POST(self):
+        # Every POST may write. Clear before and after so a concurrent poll can neither serve the pre-write projection nor
+        # leave a pre-write result behind when this one finishes.
+        _clear_projection_cache()
+        try:
+            return self._do_POST()
+        finally:
+            _clear_projection_cache()
+
+    def _do_POST(self):
         if not self.authorize_request(): return
         path=urlparse(self.path).path
         if family_child.dispatch_post(SimpleNamespace(**globals()),self,path): return
