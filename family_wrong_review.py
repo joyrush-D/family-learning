@@ -152,6 +152,9 @@ class Store:
         if len(attachments) != len(set(attachments)):
             raise WrongReviewError('同一张照片不要重复选择')
         subject_hint = _text(obj, 'subject_hint', fwq.LIMITS['subject'])
+        evidence = obj.get('evidence', False)
+        if type(evidence) is not bool:
+            raise WrongReviewError('读图证据选项不正确')
         child = _text(obj, 'child', 100)
         images = []
         metas = []
@@ -174,7 +177,7 @@ class Store:
                 metas.append(dict(id=row['id'], name=row['name'],
                                   url='/upload/' + row['id'], mime=row['mime']))
         draft = fwq.annotate_pages(images, subject_hint=subject_hint,
-                                   timeout=ANNOTATE_TIMEOUT)
+                                   timeout=ANNOTATE_TIMEOUT, evidence=evidence)
         if len(draft['pages']) != len(metas):
             raise WrongReviewError('标注页数与照片不一致，请重试')
         for page, meta in zip(draft['pages'], metas):

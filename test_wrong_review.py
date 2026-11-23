@@ -22,7 +22,7 @@ PNG = bytes.fromhex(
 JPEG = b'\xff\xd8\xff\xe0' + b'\x00' * 24
 
 
-def draft(images, subject_hint='', timeout=90, *, data_path=None):
+def draft(images, subject_hint='', timeout=90, *, data_path=None, evidence=False):
     return {'pages': [
         {'page': 1, 'regions': [
             {'kind': 'layout', 'box': {'x': 10, 'y': 5, 'w': 900, 'h': 70},
@@ -90,6 +90,23 @@ class WrongReviewHTTPTest(unittest.TestCase):
         status, out = self.request('/api/upload', raw={'body': data, 'headers': headers})
         self.assertEqual(status, 200, out)
         return out['attachment']['id']
+
+    def test_annotate_forwards_the_evidence_option(self):
+        first = self.upload('虚构卷1.png', PNG)
+        second = self.upload('虚构卷2.png', PNG)
+        seen = {}
+
+        def spy(images, subject_hint='', timeout=90, *, data_path=None, evidence=False):
+            seen.update(evidence=evidence)
+            return draft(images, subject_hint=subject_hint, timeout=timeout, evidence=evidence)
+
+        with patch.object(fwq, 'annotate_pages', side_effect=spy):
+            code, out = self.request('/api/wrong/annotate', {'attachments': [first, second], 'evidence': True})
+        self.assertEqual(code, 200, out)
+        self.assertIs(seen.get('evidence'), True)
+        code, out = self.request('/api/wrong/annotate', {'attachments': [first, second], 'evidence': 'yes'})
+        self.assertEqual(code, 400, out)
+        self.assertIn('读图证据', out.get('error', ''))
 
     def test_full_review_flow(self):
         id1 = self.upload('虚构卷1.png', PNG)
