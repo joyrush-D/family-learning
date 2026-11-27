@@ -240,6 +240,7 @@
 
 !/family_wrong_review.py
 !/test_wrong_review.py
+!/test_wrong_topics.py
 !/test_wrong_regions.py
 !/test_wrong_regions_ui.cjs
 !/wrong-review.js

@@ -5,6 +5,7 @@
 普通学习记录（category=学习进展、来源“错题照片核对”）；原作业反馈可手填并复用照片；没有已保存反馈时也可从同孩原作业直接手记（只挂原作业，不造反馈），
 不判知识点、错因或掌握程度，后续订正/复测沿用既有学习记录链。
 """
+import datetime as dt
 import functools
 import hashlib
 import json
@@ -184,6 +185,155 @@ class Store:
             page['attachment'] = meta
         draft['subject_hint'] = subject_hint
         return draft
+
+    def _window(self, days):
+        if isinstance(days, str) and days == 'all':
+            return None, dt.date.today()
+        try:
+            span = int(str(days))
+        except (TypeError, ValueError):
+            raise ValueError('时间窗口请用 7、30、90 或 all')
+        if not 1 <= span <= 3650:
+            raise ValueError('时间窗口请用 7、30、90 或 all')
+        today = dt.date.today()
+        return (today - dt.timedelta(days=span - 1)).isoformat(), today
+
+    def topic_items(self, name, days='30'):
+        """一道知识点下的错题清单（只读）。name 为保存时写入的知识点文本。"""
+        name = _text({'name': name}, 'name', 80, required=True, name='知识点')
+        start, today = self._window(days)
+        line = re.compile(r'知识点（家长核对）：' + re.escape(name) + r'\s*$', re.M)
+        with self.app.connect() as c:
+            c.row_factory = sqlite3.Row
+            sql = ("SELECT id,day,subject,title,note FROM records WHERE source='错题照片核对'"
+                   " AND day<=?" + (" AND day>=?" if start else "") + " ORDER BY day DESC,id DESC")
+            args = [today.isoformat()] + ([start] if start else [])
+            rows = [row for row in c.execute(sql, args) if line.search(row['note'] or '')]
+            fixed = {row['related_record_id'] for row in c.execute(
+                "SELECT DISTINCT related_record_id FROM records WHERE related_record_id IS NOT NULL "
+                "AND followup_kind IN ('订正','复测','独立复测')")}
+        items = []
+        for row in rows:
+            title = row['title'] or ''
+            label = title.split('：', 1)[1] if '：' in title else ''
+            text = ''
+            for step in (row['note'] or '').split('\n'):
+                if step.startswith('题面：'):
+                    text = step[3:]
+                    break
+            items.append(dict(id=row['id'], day=row['day'], subject=row['subject'], title=title,
+                              label=label, text=text, open=row['id'] not in fixed))
+        return dict(name=name, days=days, items=items,
+                    open=sum(1 for item in items if item['open']), count=len(items))
+
+    def followup(self, obj):
+        """家长记一条订正或复测：写成跟进记录，并让这条错题在汇总里变成已处理。"""
+        if not isinstance(obj, dict):
+            raise WrongReviewError('请求格式不正确')
+        ident = obj.get('record_id')
+        if type(ident) is not int or not 0 < ident <= 9223372036854775807:
+            raise WrongReviewError('记录编号不正确')
+        kind = obj.get('kind')
+        if kind not in ('correction', 'review'):
+            raise WrongReviewError('跟进类型不正确')
+        request_key = _text(obj, 'request_key', 128, required=True, name='提交标识')
+        with self.app.connect() as c:
+            c.row_factory = sqlite3.Row
+            row = c.execute("SELECT id,child,subject,day,title FROM records WHERE id=? AND source='错题照片核对'",
+                            (ident,)).fetchone()
+            if row is None:
+                raise WrongReviewError('找不到这条错题', 404, 'wrong_unknown')
+            known = self.app.profiles(c)
+            child = next((item['name'] for item in known if item['id'] == row['child']), '') or \
+                next((item['name'] for item in known if item['name'] == row['child']), '')
+            if not child:
+                raise WrongReviewError('请选择孩子')
+        day = _text(obj, 'day', 10) or dt.date.today().isoformat()
+        if not DAY.fullmatch(day):
+            raise WrongReviewError('日期格式不正确')
+        note = _text(obj, 'note', 1000, name='说明', multiline=True)
+        subject = (row['subject'] or '').strip()
+        label = (row['title'] or '').split('：', 1)[1] if '：' in (row['title'] or '') else ''
+        if kind == 'correction':
+            title = (subject + '订正' if subject else '订正') + ('：' + label if label else '')
+            source, follow = '错题订正', '订正'
+        else:
+            title = (subject + '复测' if subject else '复测') + ('：' + label if label else '')
+            source, follow = '错题复习', '复测'
+        body = dict(child=child, day=day, category='学习进展', subject=subject, title=title,
+                    note=note or ('家长记：这道题已订正。' if kind == 'correction' else '家长记：这道题复测过了。'),
+                    source=source, related_record_id=ident, followup_kind=follow,
+                    request_key=request_key)
+        result = self.app.save_record(body)
+        return dict(ok=True, record_id=(result or {}).get('id', ''), kind=kind, day=day)
+
+    def topics(self, days='30'):
+        """按知识点汇总错题（窗口内）：只读，不改任何数据。"""
+        if isinstance(days, str) and days == 'all':
+            window = None
+        else:
+            try:
+                span = int(str(days))
+            except (TypeError, ValueError):
+                raise ValueError('时间窗口请用 7、30、90 或 all')
+            if not 1 <= span <= 3650:
+                raise ValueError('时间窗口请用 7、30、90 或 all')
+            window = span
+        today = dt.date.today()
+        start = None if window is None else (today - dt.timedelta(days=window - 1)).isoformat()
+        topic_line = re.compile(r'知识点（家长核对）：([^\n]+)')
+        with self.app.connect() as c:
+            c.row_factory = sqlite3.Row
+            sql = ("SELECT id,day,subject,title,note,related_record_id,followup_kind FROM records "
+                   "WHERE source='错题照片核对' AND day<=?")
+            args = [today.isoformat()]
+            if start:
+                sql += " AND day>=?"
+                args.append(start)
+            rows = c.execute(sql + " ORDER BY day,id", args).fetchall()
+            fixed = {row['related_record_id'] for row in c.execute(
+                "SELECT DISTINCT related_record_id FROM records WHERE related_record_id IS NOT NULL "
+                "AND followup_kind IN ('订正','复测','独立复测')")}
+        buckets = {}
+        pending = 0
+        for row in rows:
+            match = topic_line.search(row['note'] or '')
+            name = match.group(1).strip() if match else ''
+            if not name:
+                pending += 1
+                continue
+            item = buckets.setdefault(name, {'name': name, 'items': 0, 'days': {}, 'open': 0})
+            item['items'] += 1
+            open_now = row['id'] not in fixed
+            item['days'].setdefault(row['day'], [0, 0])
+            item['days'][row['day']][0] += 1
+            item['days'][row['day']][1] += 1 if open_now else 0
+            if open_now:
+                item['open'] += 1
+        out = []
+        for name, item in buckets.items():
+            score = 0.0
+            for day, (count, open_count) in item['days'].items():
+                age = (today - dt.date.fromisoformat(day)).days
+                recent = 1.0 if age <= 7 else 0.7 if age <= 14 else 0.4 if age <= 30 else 0.2
+                strength = count if count < 1 else min(1 + 0.5 * (count - 1), 2)
+                state = (open_count * 1.0 + (count - open_count) * 0.7) / count
+                score += recent * strength * state
+            last_day = max(item['days'])
+            times = len(item['days'])
+            out.append(dict(name=name, items=item['items'], days=times, last_day=last_day,
+                            open=item['open'], score=round(score + 1e-9, 2),
+                            weak=times >= 2 or item['items'] >= 3))
+        out.sort(key=lambda t: (not t['weak'], -t['score'], t['last_day'], t['name']))
+        for topic in out:
+            topic['tier'] = '反复错' if (topic['days'] >= 3 or topic['score'] >= 3) else '要留意'
+            span_text = '全部' if window is None else '近 %d 天' % window
+            tail = '，还有 %d 题没订正' % topic['open'] if topic['open'] else '，都已订正'
+            topic['reason'] = '%s错了 %d 次（%d 题），最近一次 %s%s' % (
+                span_text, topic['days'], topic['items'], topic['last_day'][5:], tail)
+        return dict(days='all' if window is None else window,
+                    window=dict(start=start, today=today.isoformat()),
+                    topics=out, pending=dict(count=pending))
 
     def save(self, obj):
         """保存家长核对后的错题为学习记录；同一批请求重放幂等。"""

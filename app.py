@@ -2950,6 +2950,26 @@ class Handler(BaseHTTPRequestHandler):
                 child=query.get('child_id',[''])[0];day=query.get('day',[''])[0]
                 try: return self.reply(200,_cached_projection('day',child,day,lambda: day_view(child,day),serialize=True))
                 except TaskError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+            if path=='/api/wrong/topic':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)-{'name','days'} or any(len(v)!=1 for v in query.values()):
+                    return self.reply(400,{'error':'只支持 name 和 days 两个参数','code':'topic_query_invalid'})
+                try:
+                    return self.reply(200,wrong_review_store().topic_items(query.get('name',[''])[0],query.get('days',['30'])[0]))
+                except ValueError as e:
+                    return self.reply(400,{'error':str(e),'code':'topic_query_invalid'})
+                except family_wrong_review.WrongReviewError as e:
+                    return self.reply(e.status,dict(error=str(e),code=e.code))
+            if path=='/api/wrong/topics':
+                query=parse_qs(urlparse(self.path).query,keep_blank_values=True)
+                if set(query)-{'days'} or any(len(v)!=1 for v in query.values()):
+                    return self.reply(400,{'error':'只支持 days 一个参数','code':'topics_query_invalid'})
+                try:
+                    return self.reply(200,wrong_review_store().topics(query.get('days',['30'])[0]))
+                except ValueError as e:
+                    return self.reply(400,{'error':str(e),'code':'topics_query_invalid'})
+                except family_wrong_review.WrongReviewError as e:
+                    return self.reply(e.status,dict(error=str(e),code=e.code))
             if path=='/api/agent/collector': return self.reply(200,agent_store().collector_plan())
             if path=='/api/agent/fragment/plan': return self.reply(200,agent_store().collector_plan(fragment=True))
             if path=='/api/teachers': return self.reply(200,teacher_store().snapshot())
@@ -3283,6 +3303,10 @@ class Handler(BaseHTTPRequestHandler):
                 try: return self.reply(200,draft_from_material(obj))
                 except family_llm.LLMDraftError as e: return self.reply(503,dict(error=str(e)))
                 except ValueError as e: return self.reply(400,dict(error=str(e)))
+            if self.path=='/api/wrong/followup':
+                try: return self.reply(200,wrong_review_store().followup(obj))
+                except family_wrong_review.WrongReviewError as e: return self.reply(e.status,dict(error=str(e),code=e.code))
+                except (ValueError,TypeError) as e: return self.reply(400,{'error':str(e)})
             if self.path=='/api/wrong/annotate':
                 self.connection.settimeout(180)
                 try: return self.reply(200,wrong_review_store().annotate(obj))
